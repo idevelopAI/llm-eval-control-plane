@@ -1,5 +1,7 @@
 # LLM Eval Control Plane
 
+[![CI](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/ci.yml/badge.svg)](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/ci.yml)
+
 A deterministic-first control plane for evaluating AI applications, comparing
 candidate and baseline versions, and turning quality, safety, latency, and cost
 requirements into release gates.

@@ -11,7 +11,7 @@ tested behavior rather than placeholder infrastructure.
 - [x] Add CLI schema inspection and specification validation.
 - [x] Add contract tests with branch coverage enforcement.
 - [x] Document the architecture, domain vocabulary, security policy, and roadmap.
-- [ ] Publish the repository and enable continuous integration.
+- [x] Publish the repository and enable continuous integration.
 
 ### Definition of done
 
