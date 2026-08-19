@@ -8,6 +8,17 @@ requirements into release gates.
 > contracts and development workflow; evaluation execution is not implemented
 > yet.
 
+## Current capabilities
+
+- Immutable references for datasets, targets, prompts, evaluators, suites, and
+  gate policies
+- Versioned evaluation specifications with deterministic metric thresholds and
+  regression budgets
+- Strict validation that rejects unknown fields, invalid artifact roles,
+  duplicate gates, non-finite thresholds, and self-comparisons
+- JSON Schema inspection and local specification validation through `llm-eval`
+- Python 3.11–3.14 support target with locked dependencies and typed source
+
 ## Why this project exists
 
 AI application changes can improve an average score while quietly breaking a
@@ -45,11 +56,28 @@ Inspect the current evaluation-specification contract or validate a JSON file:
 
 ```bash
 uv run llm-eval schema
-uv run llm-eval validate path/to/spec.json
+uv run llm-eval validate examples/evaluation-spec.json
 ```
 
 The CLI deliberately does not execute evaluations yet. Execution, persistence,
 and comparison will be added as complete vertical slices in later milestones.
+
+## Architecture and roadmap
+
+- [Architecture](docs/architecture.md)
+- [Domain model](docs/domain-model.md)
+- [Project roadmap](docs/roadmap.md)
+- [Architecture decisions](docs/adr/)
+
+The project starts as a modular monolith. Its dependency direction is
+`entrypoints/adapters → application → domain`; the domain never imports web,
+database, queue, telemetry, or provider SDKs.
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and
+[SECURITY.md](SECURITY.md) for vulnerability reporting and the evaluation-data
+handling policy.
 
 ## License
 

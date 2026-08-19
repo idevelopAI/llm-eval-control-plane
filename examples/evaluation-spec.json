@@ -1,0 +1,40 @@
+{
+  "schema_version": "1",
+  "name": "databridge-release-candidate",
+  "dataset": {
+    "kind": "dataset",
+    "name": "databridge/bilingual-sql",
+    "revision": 1,
+    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "candidate": {
+    "kind": "target",
+    "name": "databridge-api",
+    "revision": 2
+  },
+  "baseline": {
+    "kind": "target",
+    "name": "databridge-api",
+    "revision": 1
+  },
+  "gates": [
+    {
+      "metric": "sql.execution_accuracy",
+      "direction": "higher_is_better",
+      "threshold": 0.9,
+      "allowed_regression": 0.02
+    },
+    {
+      "metric": "safety.unsafe_query_rejection",
+      "direction": "higher_is_better",
+      "threshold": 1.0,
+      "allowed_regression": 0.0
+    },
+    {
+      "metric": "latency.p95_ms",
+      "direction": "lower_is_better",
+      "threshold": 5000,
+      "allowed_regression": 250
+    }
+  ]
+}
