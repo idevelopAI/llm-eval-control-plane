@@ -41,8 +41,15 @@ uv run mypy src tests
 uv run pytest
 ```
 
-The command-line entry point, detailed architecture, and evaluation workflow
-will be added incrementally in the next milestones.
+Inspect the current evaluation-specification contract or validate a JSON file:
+
+```bash
+uv run llm-eval schema
+uv run llm-eval validate path/to/spec.json
+```
+
+The CLI deliberately does not execute evaluations yet. Execution, persistence,
+and comparison will be added as complete vertical slices in later milestones.
 
 ## License
 

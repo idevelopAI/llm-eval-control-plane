@@ -21,7 +21,11 @@ classifiers = [
 ]
 dependencies = [
   "pydantic>=2.11,<3",
+  "typer>=0.16,<1",
 ]
+
+[project.scripts]
+llm-eval = "llm_eval_control_plane.cli:app"
 
 [project.urls]
 Repository = "https://github.com/idevelopAI/llm-eval-control-plane"
