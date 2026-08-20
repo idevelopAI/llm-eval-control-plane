@@ -5,5 +5,15 @@ from llm_eval_control_plane.application.ports import (
     RunRepository,
     TargetPort,
 )
+from llm_eval_control_plane.application.runner import (
+    InProcessRunner,
+    RunnerConfigurationError,
+)
 
-__all__ = ["EvaluatorPort", "RunRepository", "TargetPort"]
+__all__ = [
+    "EvaluatorPort",
+    "InProcessRunner",
+    "RunRepository",
+    "RunnerConfigurationError",
+    "TargetPort",
+]
