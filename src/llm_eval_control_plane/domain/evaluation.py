@@ -10,6 +10,7 @@ from llm_eval_control_plane.domain.artifacts import (
     ArtifactName,
     ArtifactRef,
 )
+from llm_eval_control_plane.domain.datasets import SliceLabel
 from llm_eval_control_plane.domain.models import FrozenModel
 
 MetricName = Annotated[
@@ -33,6 +34,7 @@ class MetricGate(FrozenModel):
     """Deterministic acceptance rule for one aggregate metric."""
 
     metric: MetricName
+    slice: SliceLabel | None = None
     direction: MetricDirection
     threshold: FiniteFloat
     allowed_regression: NonNegativeFloat = 0.0
@@ -61,7 +63,7 @@ class EvaluationSpec(FrozenModel):
             if self.baseline.logical_key == self.candidate.logical_key:
                 raise ValueError("baseline and candidate must be different revisions")
 
-        metric_names = [gate.metric for gate in self.gates]
-        if len(metric_names) != len(set(metric_names)):
-            raise ValueError("gate metric names must be unique")
+        gate_keys = [(gate.metric, gate.slice) for gate in self.gates]
+        if len(gate_keys) != len(set(gate_keys)):
+            raise ValueError("gate metric and slice combinations must be unique")
         return self

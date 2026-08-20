@@ -16,9 +16,12 @@ def artifact(kind: ArtifactKind, revision: int = 1) -> ArtifactRef:
     return ArtifactRef(kind=kind, name=f"demo-{kind.value}", revision=revision)
 
 
-def gate(metric: str = "task.success_rate") -> MetricGate:
+def gate(
+    metric: str = "task.success_rate", *, slice_name: str | None = None
+) -> MetricGate:
     return MetricGate(
         metric=metric,
+        slice=slice_name,
         direction=MetricDirection.HIGHER_IS_BETTER,
         threshold=0.9,
     )
@@ -92,8 +95,16 @@ def test_evaluation_spec_compares_logical_revisions_not_digest_assertions() -> N
 
 
 def test_evaluation_spec_rejects_duplicate_metric_gates() -> None:
-    with raises(ValidationError, match="gate metric names must be unique"):
+    with raises(ValidationError, match="metric and slice combinations"):
         valid_spec(gates=(gate(), gate()))
+
+
+def test_evaluation_spec_allows_one_metric_at_global_and_slice_scope() -> None:
+    spec = valid_spec(
+        gates=(gate(), gate(slice_name="safety/refusal")),
+    )
+
+    assert [item.slice for item in spec.gates] == [None, "safety/refusal"]
 
 
 def test_evaluation_spec_requires_at_least_one_gate() -> None:
