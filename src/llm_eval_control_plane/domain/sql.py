@@ -130,9 +130,7 @@ class SqlExpectation(_StrictSqlModel):
 
     def to_canonical(self) -> CanonicalJson:
         """Return the minimal canonical JSON form used by dataset fixtures."""
-        return CanonicalJson.from_value(
-            self.model_dump(mode="json", exclude_none=True)
-        )
+        return CanonicalJson.from_value(self.model_dump(mode="json", exclude_none=True))
 
 
 class SqlTargetOutput(_StrictSqlModel):
@@ -168,9 +166,7 @@ class SqlTargetOutput(_StrictSqlModel):
 
     def to_canonical(self) -> CanonicalJson:
         """Return the minimal canonical JSON form persisted by adapters."""
-        return CanonicalJson.from_value(
-            self.model_dump(mode="json", exclude_none=True)
-        )
+        return CanonicalJson.from_value(self.model_dump(mode="json", exclude_none=True))
 
 
 class SqlReplayResult(_StrictSqlModel):

@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from pytest import mark
+from pytest import mark, raises
 
 from llm_eval_control_plane.adapters.sql_policy import (
     PostgresSqlPolicy,
@@ -20,7 +20,10 @@ from llm_eval_control_plane.adapters.sql_policy import (
         "FROM employees) SELECT n FROM ranked",
         "SELECT DATE '2026-01-01' AS start_date",
         "SELECT '--not a comment' AS marker FROM employees LIMIT 1",
+        "SELECT 'it''s /*not a comment*/' AS marker",
+        "SELECT $$--not a comment$$ AS marker",
         'SELECT "/*not_comment*/" FROM employees',
+        'SELECT "name" FROM "employees"',
     ],
 )
 def test_policy_allows_reviewed_postgres_queries(sql: str) -> None:
@@ -174,6 +177,11 @@ def test_policy_configuration_is_validated() -> None:
         assert str(error) == "SQL policy requires at least one allowed table"
     else:
         raise AssertionError("empty allowlist was accepted")
+
+    with raises(ValueError, match="byte limit"):
+        PostgresSqlPolicy(max_sql_bytes=0)
+    with raises(ValueError, match="identifiers"):
+        PostgresSqlPolicy(allowed_tables=frozenset({"not-valid"}))
 
 
 def test_pinned_adversarial_sql_is_rejected() -> None:

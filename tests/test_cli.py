@@ -1,4 +1,5 @@
 import json
+import runpy
 from pathlib import Path
 
 from pytest import MonkeyPatch
@@ -8,6 +9,18 @@ from llm_eval_control_plane import __version__
 from llm_eval_control_plane.cli import app
 
 runner = CliRunner()
+
+
+def test_python_module_invokes_cli(monkeypatch: MonkeyPatch) -> None:
+    calls: list[bool] = []
+    monkeypatch.setattr(
+        "llm_eval_control_plane.cli.app",
+        lambda: calls.append(True),
+    )
+
+    runpy.run_module("llm_eval_control_plane.__main__", run_name="__main__")
+
+    assert calls == [True]
 
 
 def valid_specification() -> dict[str, object]:
