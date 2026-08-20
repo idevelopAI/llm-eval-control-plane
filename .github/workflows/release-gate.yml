@@ -18,8 +18,6 @@ jobs:
     name: Offline Release Gate
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      EVAL_STORE: ${{ runner.temp }}/llm-eval-ci
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -46,7 +44,7 @@ jobs:
           --scorer exact_match
           --scorer refusal
           --scorer latency
-          --store "$EVAL_STORE"
+          --store "$RUNNER_TEMP/llm-eval-ci"
 
       - name: Run passing candidate evidence
         run: >-
@@ -58,7 +56,7 @@ jobs:
           --scorer exact_match
           --scorer refusal
           --scorer latency
-          --store "$EVAL_STORE"
+          --store "$RUNNER_TEMP/llm-eval-ci"
 
       - name: Enforce passing release policy
         run: >-
@@ -67,7 +65,7 @@ jobs:
           examples/release-gate-40.jsonl
           --baseline-run baseline-ci
           --candidate-run candidate-pass-ci
-          --store "$EVAL_STORE"
+          --store "$RUNNER_TEMP/llm-eval-ci"
           --format markdown
           >> "$GITHUB_STEP_SUMMARY"
 
@@ -82,7 +80,7 @@ jobs:
           --scorer exact_match
           --scorer refusal
           --scorer latency
-          --store "$EVAL_STORE"
+          --store "$RUNNER_TEMP/llm-eval-ci"
 
       - name: Prove the seeded regression is blocked
         shell: bash
@@ -93,7 +91,7 @@ jobs:
             examples/release-gate-40.jsonl \
             --baseline-run baseline-ci \
             --candidate-run candidate-regression-ci \
-            --store "$EVAL_STORE" \
+            --store "$RUNNER_TEMP/llm-eval-ci" \
             --format junit \
             --output "$RUNNER_TEMP/seeded-regression.xml"
           gate_exit=$?
