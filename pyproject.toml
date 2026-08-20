@@ -20,13 +20,17 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = [
+  "alembic>=1.16,<2",
+  "fastapi>=0.116,<1",
   "httpx>=0.28,<1",
   "jsonschema>=4.23,<5",
   "psycopg[binary]>=3.3,<4",
   "pydantic>=2.11,<3",
   "rfc8785>=0.1,<1",
+  "sqlalchemy>=2.0.41,<3",
   "sqlglot>=30.17,<30.18",
   "typer>=0.16,<1",
+  "uvicorn>=0.35,<1",
 ]
 
 [project.scripts]
