@@ -1,0 +1,149 @@
+name: DataBridge Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: databridge-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  databridge-offline-gate:
+    name: DataBridge Offline Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
+        env:
+          POSTGRES_DB: databridge_eval
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d databridge_eval"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABRIDGE_EVAL_DSN: postgresql://databridge_eval_reader@127.0.0.1:5432/databridge_eval
+      EVAL_STORE: ${{ runner.temp }}/databridge-evidence
+      FIXTURE_FINGERPRINT: sha256:e40acff961cc83377391195acb15d09fa2931b1cc9b3dd01ee03fcc043a21a09
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          python-version: "3.11"
+          enable-cache: true
+
+      - name: Install locked dependencies
+        run: uv sync --locked
+
+      - name: Seed disposable PostgreSQL fixture
+        shell: bash
+        run: |
+          docker cp \
+            examples/databridge/postgres-fixture-v1.sql \
+            "${{ job.services.postgres.id }}:/tmp/postgres-fixture-v1.sql"
+          docker exec "${{ job.services.postgres.id }}" \
+            psql -v ON_ERROR_STOP=1 -U postgres -d databridge_eval \
+            -f /tmp/postgres-fixture-v1.sql
+
+      - name: Create restricted replay role
+        shell: bash
+        run: |
+          docker exec "${{ job.services.postgres.id }}" \
+            psql -v ON_ERROR_STOP=1 -U postgres -d databridge_eval -c \
+            "CREATE ROLE databridge_eval_reader LOGIN;
+             REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+             REVOKE TEMPORARY ON DATABASE databridge_eval FROM PUBLIC;
+             GRANT CONNECT ON DATABASE databridge_eval TO databridge_eval_reader;
+             GRANT USAGE ON SCHEMA public TO databridge_eval_reader;
+             GRANT SELECT ON ALL TABLES IN SCHEMA public TO databridge_eval_reader;
+             ALTER ROLE databridge_eval_reader SET default_transaction_read_only = on;
+             ALTER ROLE databridge_eval_reader SET statement_timeout = '2s';"
+
+      - name: Prove PostgreSQL isolation and release behavior
+        run: >-
+          uv run pytest -q
+          tests/integration/test_databridge_postgres_workflow.py
+
+      - name: Run baseline evidence
+        run: >-
+          uv run llm-eval databridge run
+          examples/databridge/cases-v1.jsonl
+          --run-id databridge-baseline-ci
+          --fixture-sql examples/databridge/postgres-fixture-v1.sql
+          --expected-fixture-fingerprint "$FIXTURE_FINGERPRINT"
+          --responses examples/databridge/mock-responses-v1.json
+          --target-revision 1
+          --store "$EVAL_STORE"
+
+      - name: Run passing candidate evidence
+        run: >-
+          uv run llm-eval databridge run
+          examples/databridge/cases-v1.jsonl
+          --run-id databridge-candidate-pass-ci
+          --fixture-sql examples/databridge/postgres-fixture-v1.sql
+          --expected-fixture-fingerprint "$FIXTURE_FINGERPRINT"
+          --responses examples/databridge/mock-responses-v1.json
+          --target-revision 2
+          --store "$EVAL_STORE"
+
+      - name: Enforce passing DataBridge policy
+        run: >-
+          uv run llm-eval compare
+          examples/databridge/release-policy-v1.json
+          examples/databridge/cases-v1.jsonl
+          --baseline-run databridge-baseline-ci
+          --candidate-run databridge-candidate-pass-ci
+          --store "$EVAL_STORE"
+          --format json
+          --output "$RUNNER_TEMP/databridge-pass.json"
+
+      - name: Run seeded regression evidence
+        run: >-
+          uv run llm-eval databridge run
+          examples/databridge/cases-v1.jsonl
+          --run-id databridge-candidate-regression-ci
+          --fixture-sql examples/databridge/postgres-fixture-v1.sql
+          --expected-fixture-fingerprint "$FIXTURE_FINGERPRINT"
+          --responses examples/databridge/mock-responses-v1.json
+          --response-overrides examples/databridge/regression-overrides-v2.json
+          --target-revision 2
+          --store "$EVAL_STORE"
+
+      - name: Prove the seeded regressions are blocked
+        shell: bash
+        run: |
+          set +e
+          uv run llm-eval compare \
+            examples/databridge/release-policy-v1.json \
+            examples/databridge/cases-v1.jsonl \
+            --baseline-run databridge-baseline-ci \
+            --candidate-run databridge-candidate-regression-ci \
+            --store "$EVAL_STORE" \
+            --format json \
+            --output "$RUNNER_TEMP/databridge-regression.json"
+          gate_exit=$?
+          set -e
+          if [[ "$gate_exit" -ne 1 ]]; then
+            echo "Expected the seeded DataBridge regression to be blocked"
+            exit 1
+          fi
+          jq -e '
+            .status == "failed" and
+            ([.gates[] | select(.status == "failed")] | length == 6)
+          ' "$RUNNER_TEMP/databridge-regression.json"
