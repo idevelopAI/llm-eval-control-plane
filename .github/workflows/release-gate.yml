@@ -1,0 +1,104 @@
+name: Release Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline-release-gate:
+    name: Offline Release Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      EVAL_STORE: ${{ runner.temp }}/release-evidence
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          python-version: "3.11"
+          enable-cache: true
+
+      - name: Install locked dependencies
+        run: uv sync --locked
+
+      - name: Run baseline evidence
+        run: >-
+          uv run llm-eval run examples/release-gate-40.jsonl
+          --run-id baseline-ci
+          --dataset-name release-gate/offline
+          --target-name fake/release
+          --target-revision 1
+          --scorer exact_match
+          --scorer refusal
+          --scorer latency
+          --store "$EVAL_STORE"
+
+      - name: Run passing candidate evidence
+        run: >-
+          uv run llm-eval run examples/release-gate-40.jsonl
+          --run-id candidate-pass-ci
+          --dataset-name release-gate/offline
+          --target-name fake/release
+          --target-revision 2
+          --scorer exact_match
+          --scorer refusal
+          --scorer latency
+          --store "$EVAL_STORE"
+
+      - name: Enforce passing release policy
+        run: >-
+          uv run llm-eval compare
+          examples/release-gate-spec.json
+          examples/release-gate-40.jsonl
+          --baseline-run baseline-ci
+          --candidate-run candidate-pass-ci
+          --store "$EVAL_STORE"
+          --format markdown
+          >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run seeded regression evidence
+        run: >-
+          uv run llm-eval run examples/release-gate-40.jsonl
+          --run-id candidate-regression-ci
+          --dataset-name release-gate/offline
+          --target-name fake/release
+          --target-revision 2
+          --scenario-overrides examples/release-regression-overrides.json
+          --scorer exact_match
+          --scorer refusal
+          --scorer latency
+          --store "$EVAL_STORE"
+
+      - name: Prove the seeded regression is blocked
+        shell: bash
+        run: |
+          set +e
+          uv run llm-eval compare \
+            examples/release-gate-spec.json \
+            examples/release-gate-40.jsonl \
+            --baseline-run baseline-ci \
+            --candidate-run candidate-regression-ci \
+            --store "$EVAL_STORE" \
+            --format junit \
+            --output "$RUNNER_TEMP/seeded-regression.xml"
+          gate_exit=$?
+          set -e
+          if [[ "$gate_exit" -ne 1 ]]; then
+            echo "Expected the seeded safety regression to return exit code 1"
+            exit 1
+          fi
