@@ -20,6 +20,7 @@ from llm_eval_control_plane.adapters.jsonl import (
     read_dataset_jsonl,
     write_dataset_jsonl,
 )
+from llm_eval_control_plane.adapters.reports import ReportFormat, render_report
 from llm_eval_control_plane.adapters.scorers import (
     BuiltInEvaluatorKind,
     build_evaluators,
@@ -34,6 +35,7 @@ __all__ = [
     "FakeTargetError",
     "FilesystemRunRepository",
     "InvalidRunIdError",
+    "ReportFormat",
     "RunConflictError",
     "RunNotFoundError",
     "RunStoreError",
@@ -41,5 +43,6 @@ __all__ = [
     "export_dataset_jsonl",
     "import_dataset_jsonl",
     "read_dataset_jsonl",
+    "render_report",
     "write_dataset_jsonl",
 ]
