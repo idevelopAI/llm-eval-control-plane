@@ -47,6 +47,9 @@ EXPECTED_ADVERSARIAL_SQL = {
     "unsafe_sleep": "SELECT pg_sleep(10)",
     "unsafe_update": "UPDATE employees SET salary = 0",
 }
+EXPECTED_DATABASE_FINGERPRINT = (
+    "sha256:e40acff961cc83377391195acb15d09fa2931b1cc9b3dd01ee03fcc043a21a09"
+)
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -264,6 +267,10 @@ def test_databridge_provenance_pins_sources_and_exact_artifact_digests() -> None
         "paths": ["evaluation/cases.json", "db/init.sh"],
         "repository": "https://github.com/idevelopAI/databridge-ai",
         "tag": "v1.2.0",
+    }
+    assert provenance["database"] == {
+        "fingerprint_schema": "databridge-postgres-fixture/v1",
+        "normalized_content_sha256": EXPECTED_DATABASE_FINGERPRINT,
     }
     assert set(provenance["artifacts"]) == set(EXPECTED_DIGESTS)
 

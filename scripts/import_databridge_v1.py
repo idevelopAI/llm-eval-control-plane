@@ -19,6 +19,9 @@ SOURCE_TAG = "v1.2.0"
 SOURCE_COMMIT = "27b4a6ea96a8aec331afe758cc78dff50a1c6690"
 SOURCE_CASES_PATH = "evaluation/cases.json"
 SOURCE_DATABASE_PATH = "db/init.sh"
+POSTGRES_FIXTURE_FINGERPRINT = (
+    "sha256:e40acff961cc83377391195acb15d09fa2931b1cc9b3dd01ee03fcc043a21a09"
+)
 
 QUERY_RESPONSE_FIELDS = {
     "answer",
@@ -603,6 +606,10 @@ def write_artifacts(source: dict[str, Any], output_dir: Path) -> None:
 
     provenance = {
         "artifacts": artifacts,
+        "database": {
+            "fingerprint_schema": "databridge-postgres-fixture/v1",
+            "normalized_content_sha256": POSTGRES_FIXTURE_FINGERPRINT,
+        },
         "schema_version": "1",
         "source": {
             "commit": SOURCE_COMMIT,

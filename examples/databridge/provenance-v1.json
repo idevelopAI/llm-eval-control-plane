@@ -23,6 +23,10 @@
       "sha256": "sha256:28dc9584a6b4297f242473cb89c7c9014cd46ec7da68a589416f3b90d49a0939"
     }
   },
+  "database": {
+    "fingerprint_schema": "databridge-postgres-fixture/v1",
+    "normalized_content_sha256": "sha256:e40acff961cc83377391195acb15d09fa2931b1cc9b3dd01ee03fcc043a21a09"
+  },
   "schema_version": "1",
   "source": {
     "commit": "27b4a6ea96a8aec331afe758cc78dff50a1c6690",
