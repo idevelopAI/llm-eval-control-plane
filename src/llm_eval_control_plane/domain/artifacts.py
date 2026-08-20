@@ -36,3 +36,8 @@ class ArtifactRef(FrozenModel):
     name: ArtifactName
     revision: PositiveInt
     digest: Sha256Digest | None = None
+
+    @property
+    def logical_key(self) -> tuple[ArtifactKind, str, int]:
+        """Identify a revision independently from its optional digest assertion."""
+        return (self.kind, self.name, self.revision)
