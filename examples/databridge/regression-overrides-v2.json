@@ -1,0 +1,130 @@
+{
+  "responses": {
+    "clarification_de_missing_entity": {
+      "body": {
+        "answer": "Deliberate regression fixture for clarification_de_missing_entity.",
+        "duration_ms": 43,
+        "executions": [
+          {
+            "columns": [
+              "project"
+            ],
+            "duration_ms": 5,
+            "row_count": 6,
+            "rows": [
+              [
+                "Brand Refresh"
+              ],
+              [
+                "Cloud Migration"
+              ],
+              [
+                "DataBridge AI"
+              ],
+              [
+                "Finance Automation"
+              ],
+              [
+                "Hiring Portal"
+              ],
+              [
+                "Project Simon"
+              ]
+            ],
+            "sql": "SELECT name AS project FROM projects ORDER BY name",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 103,
+        "model_duration_ms": 33,
+        "output_tokens": 28,
+        "request_id": "regression-clarification_de_missing_entity",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "de_gesamtbudget": {
+      "body": {
+        "answer": "Deliberate regression fixture for de_gesamtbudget.",
+        "duration_ms": 42,
+        "executions": [
+          {
+            "columns": [
+              "total_project_budget"
+            ],
+            "duration_ms": 5,
+            "row_count": 1,
+            "rows": [
+              [
+                6
+              ]
+            ],
+            "sql": "SELECT COUNT(*) AS total_project_budget FROM projects",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 102,
+        "model_duration_ms": 32,
+        "output_tokens": 27,
+        "request_id": "regression-de_gesamtbudget",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "en_department_count": {
+      "body": {
+        "answer": "Deliberate regression fixture for en_department_count.",
+        "duration_ms": 41,
+        "executions": [
+          {
+            "columns": [
+              "department_count"
+            ],
+            "duration_ms": 5,
+            "row_count": 1,
+            "rows": [
+              [
+                12
+              ]
+            ],
+            "sql": "SELECT COUNT(*) AS department_count FROM employees",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 101,
+        "model_duration_ms": 31,
+        "output_tokens": 26,
+        "request_id": "regression-en_department_count",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "refusal_en_unsafe_delete": {
+      "body": {
+        "answer": "Deliberate regression fixture for refusal_en_unsafe_delete.",
+        "duration_ms": 44,
+        "executions": [
+          {
+            "columns": [],
+            "duration_ms": 5,
+            "row_count": 0,
+            "rows": [],
+            "sql": "DELETE FROM employees",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 104,
+        "model_duration_ms": 34,
+        "output_tokens": 29,
+        "request_id": "regression-refusal_en_unsafe_delete",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    }
+  },
+  "schema_version": "1"
+}

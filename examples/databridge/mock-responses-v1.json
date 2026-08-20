@@ -1,0 +1,1606 @@
+{
+  "responses": {
+    "clarification_de_missing_entity": {
+      "body": {
+        "answer": "Welche Abteilung meinst du?",
+        "duration_ms": 7,
+        "executions": [],
+        "input_tokens": 0,
+        "model_duration_ms": 0,
+        "output_tokens": 0,
+        "request_id": "fixture-clarification_de_missing_entity",
+        "status": "clarification_required",
+        "tool_call_count": 0
+      },
+      "status": 200
+    },
+    "clarification_de_missing_grouping": {
+      "body": {
+        "answer": "Meinst du das Bruttojahresgehalt, das Monatsgehalt oder das Nettogehalt?",
+        "duration_ms": 9,
+        "executions": [],
+        "input_tokens": 0,
+        "model_duration_ms": 0,
+        "output_tokens": 0,
+        "request_id": "fixture-clarification_de_missing_grouping",
+        "status": "clarification_required",
+        "tool_call_count": 0
+      },
+      "status": 200
+    },
+    "clarification_de_missing_metric": {
+      "body": {
+        "answer": "Soll ich je Abteilung eine Liste, eine Anzahl, eine Summe oder einen Durchschnitt berechnen?",
+        "duration_ms": 5,
+        "executions": [],
+        "input_tokens": 0,
+        "model_duration_ms": 0,
+        "output_tokens": 0,
+        "request_id": "fixture-clarification_de_missing_metric",
+        "status": "clarification_required",
+        "tool_call_count": 0
+      },
+      "status": 200
+    },
+    "clarification_de_missing_time_range": {
+      "body": {
+        "answer": "Welchen genauen Zeitraum soll ich verwenden?",
+        "duration_ms": 3,
+        "executions": [],
+        "input_tokens": 0,
+        "model_duration_ms": 0,
+        "output_tokens": 0,
+        "request_id": "fixture-clarification_de_missing_time_range",
+        "status": "clarification_required",
+        "tool_call_count": 0
+      },
+      "status": 200
+    },
+    "clarification_en_missing_entity": {
+      "body": {
+        "answer": "Which department do you mean?",
+        "duration_ms": 6,
+        "executions": [],
+        "input_tokens": 0,
+        "model_duration_ms": 0,
+        "output_tokens": 0,
+        "request_id": "fixture-clarification_en_missing_entity",
+        "status": "clarification_required",
+        "tool_call_count": 0
+      },
+      "status": 200
+    },
+    "clarification_en_missing_grouping": {
+      "body": {
+        "answer": "Do you mean gross annual salary, monthly salary, or net salary?",
+        "duration_ms": 8,
+        "executions": [],
+        "input_tokens": 0,
+        "model_duration_ms": 0,
+        "output_tokens": 0,
+        "request_id": "fixture-clarification_en_missing_grouping",
+        "status": "clarification_required",
+        "tool_call_count": 0
+      },
+      "status": 200
+    },
+    "clarification_en_missing_metric": {
+      "body": {
+        "answer": "For each department, should I return a list, count, total, or average?",
+        "duration_ms": 4,
+        "executions": [],
+        "input_tokens": 0,
+        "model_duration_ms": 0,
+        "output_tokens": 0,
+        "request_id": "fixture-clarification_en_missing_metric",
+        "status": "clarification_required",
+        "tool_call_count": 0
+      },
+      "status": 200
+    },
+    "clarification_en_missing_time_range": {
+      "body": {
+        "answer": "Which exact date range should I use?",
+        "duration_ms": 2,
+        "executions": [],
+        "input_tokens": 0,
+        "model_duration_ms": 0,
+        "output_tokens": 0,
+        "request_id": "fixture-clarification_en_missing_time_range",
+        "status": "clarification_required",
+        "tool_call_count": 0
+      },
+      "status": 200
+    },
+    "de_abgeschlossene_projekte": {
+      "body": {
+        "answer": "Deterministic fixture answer for de_abgeschlossene_projekte.",
+        "duration_ms": 65,
+        "executions": [
+          {
+            "columns": [
+              "project"
+            ],
+            "duration_ms": 6,
+            "row_count": 2,
+            "rows": [
+              [
+                "Brand Refresh"
+              ],
+              [
+                "Project Simon"
+              ]
+            ],
+            "sql": "SELECT name AS project FROM projects WHERE status = 'completed' ORDER BY name",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 115,
+        "model_duration_ms": 55,
+        "output_tokens": 55,
+        "request_id": "fixture-de_abgeschlossene_projekte",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "de_abteilung_hoechstes_projektbudget": {
+      "body": {
+        "answer": "Deterministic fixture answer for de_abteilung_hoechstes_projektbudget.",
+        "duration_ms": 62,
+        "executions": [
+          {
+            "columns": [
+              "department",
+              "total_budget"
+            ],
+            "duration_ms": 6,
+            "row_count": 1,
+            "rows": [
+              [
+                "Sales",
+                500000
+              ]
+            ],
+            "sql": "SELECT d.name AS department, SUM(p.budget) AS total_budget FROM departments d JOIN projects p ON p.department_id = d.id GROUP BY d.id, d.name ORDER BY total_budget DESC, d.name LIMIT 1",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 112,
+        "model_duration_ms": 52,
+        "output_tokens": 52,
+        "request_id": "fixture-de_abteilung_hoechstes_projektbudget",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "de_abteilungen_mit_aktiven_projekten": {
+      "body": {
+        "answer": "Deterministic fixture answer for de_abteilungen_mit_aktiven_projekten.",
+        "duration_ms": 67,
+        "executions": [
+          {
+            "columns": [
+              "department"
+            ],
+            "duration_ms": 5,
+            "row_count": 2,
+            "rows": [
+              [
+                "Engineering"
+              ],
+              [
+                "Finance"
+              ]
+            ],
+            "sql": "SELECT DISTINCT d.name AS department FROM departments d JOIN projects p ON p.department_id = d.id WHERE p.status = 'active' ORDER BY d.name",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 117,
+        "model_duration_ms": 57,
+        "output_tokens": 57,
+        "request_id": "fixture-de_abteilungen_mit_aktiven_projekten",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "de_aktive_projekte": {
+      "body": {
+        "answer": "Deterministic fixture answer for de_aktive_projekte.",
+        "duration_ms": 55,
+        "executions": [
+          {
+            "columns": [
+              "project"
+            ],
+            "duration_ms": 5,
+            "row_count": 3,
+            "rows": [
+              [
+                "Cloud Migration"
+              ],
+              [
+                "DataBridge AI"
+              ],
+              [
+                "Finance Automation"
+              ]
+            ],
+            "sql": "SELECT name AS project FROM projects WHERE status = 'active' ORDER BY name",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 105,
+        "model_duration_ms": 45,
+        "output_tokens": 45,
+        "request_id": "fixture-de_aktive_projekte",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "de_anzahl_aktive_projekte": {
+      "body": {
+        "answer": "Deterministic fixture answer for de_anzahl_aktive_projekte.",
+        "duration_ms": 56,
+        "executions": [
+          {
+            "columns": [
+              "active_project_count"
+            ],
+            "duration_ms": 6,
+            "row_count": 1,
+            "rows": [
+              [
+                3
+              ]
+            ],
+            "sql": "SELECT COUNT(*) AS active_project_count FROM projects WHERE status = 'active'",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 106,
+        "model_duration_ms": 46,
+        "output_tokens": 46,
+        "request_id": "fixture-de_anzahl_aktive_projekte",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "de_budget_aktive_projekte": {
+      "body": {
+        "answer": "Deterministic fixture answer for de_budget_aktive_projekte.",
+        "duration_ms": 57,
+        "executions": [
+          {
+            "columns": [
+              "active_project_budget"
+            ],
+            "duration_ms": 4,
+            "row_count": 1,
+            "rows": [
+              [
+                670000
+              ]
+            ],
+            "sql": "SELECT SUM(budget) AS active_project_budget FROM projects WHERE status = 'active'",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 107,
+        "model_duration_ms": 47,
+        "output_tokens": 47,
+        "request_id": "fixture-de_budget_aktive_projekte",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "de_budget_nach_status": {
+      "body": {
+        "answer": "Deterministic fixture answer for de_budget_nach_status.",
+        "duration_ms": 59,
+        "executions": [
+          {
+            "columns": [
+              "status",
+              "total_budget"
+            ],
+            "duration_ms": 6,
+            "row_count": 3,
+            "rows": [
+              [
+                "active",
+                670000
+              ],
+              [
+                "completed",
+                630000
+              ],
+              [
+                "planned",
+                90000
+              ]
+            ],
+            "sql": "SELECT status, SUM(budget) AS total_budget FROM projects GROUP BY status ORDER BY total_budget DESC, status",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 109,
+        "model_duration_ms": 49,
+        "output_tokens": 49,
+        "request_id": "fixture-de_budget_nach_status",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "de_durchschnittliches_projektbudget": {
+      "body": {
+        "answer": "Deterministic fixture answer for de_durchschnittliches_projektbudget.",
+        "duration_ms": 54,
+        "executions": [
+          {
+            "columns": [
+              "average_project_budget"
+            ],
+            "duration_ms": 4,
+            "row_count": 1,
+            "rows": [
+              [
+                231666.67
+              ]
+            ],
+            "sql": "SELECT ROUND(AVG(budget), 2) AS average_project_budget FROM projects",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 104,
+        "model_duration_ms": 44,
+        "output_tokens": 44,
+        "request_id": "fixture-de_durchschnittliches_projektbudget",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "de_engineering_projekte": {
+      "body": {
+        "answer": "Deterministic fixture answer for de_engineering_projekte.",
+        "duration_ms": 60,
+        "executions": [
+          {
+            "columns": [
+              "project",
+              "budget"
+            ],
+            "duration_ms": 4,
+            "row_count": 2,
+            "rows": [
+              [
+                "Cloud Migration",
+                300000
+              ],
+              [
+                "DataBridge AI",
+                150000
+              ]
+            ],
+            "sql": "SELECT p.name AS project, p.budget FROM projects p JOIN departments d ON d.id = p.department_id WHERE d.name = 'Engineering' ORDER BY p.budget DESC, p.name",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 110,
+        "model_duration_ms": 50,
+        "output_tokens": 50,
+        "request_id": "fixture-de_engineering_projekte",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "de_geplante_projekte": {
+      "body": {
+        "answer": "Deterministic fixture answer for de_geplante_projekte.",
+        "duration_ms": 66,
+        "executions": [
+          {
+            "columns": [
+              "project"
+            ],
+            "duration_ms": 4,
+            "row_count": 1,
+            "rows": [
+              [
+                "Hiring Portal"
+              ]
+            ],
+            "sql": "SELECT name AS project FROM projects WHERE status = 'planned' ORDER BY name",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 116,
+        "model_duration_ms": 56,
+        "output_tokens": 56,
+        "request_id": "fixture-de_geplante_projekte",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "de_gesamtbudget": {
+      "body": {
+        "answer": "Deterministic fixture answer for de_gesamtbudget.",
+        "duration_ms": 53,
+        "executions": [
+          {
+            "columns": [
+              "total_project_budget"
+            ],
+            "duration_ms": 6,
+            "row_count": 1,
+            "rows": [
+              [
+                1390000
+              ]
+            ],
+            "sql": "SELECT SUM(budget) AS total_project_budget FROM projects",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 103,
+        "model_duration_ms": 43,
+        "output_tokens": 43,
+        "request_id": "fixture-de_gesamtbudget",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "de_hoechstes_projektbudget": {
+      "body": {
+        "answer": "Deterministic fixture answer for de_hoechstes_projektbudget.",
+        "duration_ms": 51,
+        "executions": [
+          {
+            "columns": [
+              "project",
+              "budget"
+            ],
+            "duration_ms": 4,
+            "row_count": 1,
+            "rows": [
+              [
+                "Project Simon",
+                500000
+              ]
+            ],
+            "sql": "SELECT name AS project, budget FROM projects ORDER BY budget DESC, name LIMIT 1",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 101,
+        "model_duration_ms": 41,
+        "output_tokens": 41,
+        "request_id": "fixture-de_hoechstes_projektbudget",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "de_mitarbeiter_und_projekte_pro_abteilung": {
+      "body": {
+        "answer": "Deterministic fixture answer for de_mitarbeiter_und_projekte_pro_abteilung.",
+        "duration_ms": 69,
+        "executions": [
+          {
+            "columns": [
+              "department",
+              "employee_count",
+              "project_count"
+            ],
+            "duration_ms": 4,
+            "row_count": 5,
+            "rows": [
+              [
+                "Engineering",
+                3,
+                2
+              ],
+              [
+                "Finance",
+                2,
+                1
+              ],
+              [
+                "HR",
+                2,
+                1
+              ],
+              [
+                "Marketing",
+                2,
+                1
+              ],
+              [
+                "Sales",
+                3,
+                1
+              ]
+            ],
+            "sql": "SELECT d.name AS department, COUNT(DISTINCT e.id) AS employee_count, COUNT(DISTINCT p.id) AS project_count FROM departments d LEFT JOIN employees e ON e.department_id = d.id LEFT JOIN projects p ON p.department_id = d.id GROUP BY d.id, d.name ORDER BY d.name",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 119,
+        "model_duration_ms": 59,
+        "output_tokens": 59,
+        "request_id": "fixture-de_mitarbeiter_und_projekte_pro_abteilung",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "de_niedrigstes_projektbudget": {
+      "body": {
+        "answer": "Deterministic fixture answer for de_niedrigstes_projektbudget.",
+        "duration_ms": 52,
+        "executions": [
+          {
+            "columns": [
+              "project",
+              "budget"
+            ],
+            "duration_ms": 5,
+            "row_count": 1,
+            "rows": [
+              [
+                "Hiring Portal",
+                90000
+              ]
+            ],
+            "sql": "SELECT name AS project, budget FROM projects ORDER BY budget ASC, name LIMIT 1",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 102,
+        "model_duration_ms": 42,
+        "output_tokens": 42,
+        "request_id": "fixture-de_niedrigstes_projektbudget",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "de_projektanzahl_nach_status": {
+      "body": {
+        "answer": "Deterministic fixture answer for de_projektanzahl_nach_status.",
+        "duration_ms": 58,
+        "executions": [
+          {
+            "columns": [
+              "status",
+              "project_count"
+            ],
+            "duration_ms": 5,
+            "row_count": 3,
+            "rows": [
+              [
+                "active",
+                3
+              ],
+              [
+                "completed",
+                2
+              ],
+              [
+                "planned",
+                1
+              ]
+            ],
+            "sql": "SELECT status, COUNT(*) AS project_count FROM projects GROUP BY status ORDER BY status",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 108,
+        "model_duration_ms": 48,
+        "output_tokens": 48,
+        "request_id": "fixture-de_projektanzahl_nach_status",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "de_projektanzahl_pro_abteilung": {
+      "body": {
+        "answer": "Deterministic fixture answer for de_projektanzahl_pro_abteilung.",
+        "duration_ms": 68,
+        "executions": [
+          {
+            "columns": [
+              "department",
+              "project_count"
+            ],
+            "duration_ms": 6,
+            "row_count": 5,
+            "rows": [
+              [
+                "Engineering",
+                2
+              ],
+              [
+                "Finance",
+                1
+              ],
+              [
+                "HR",
+                1
+              ],
+              [
+                "Marketing",
+                1
+              ],
+              [
+                "Sales",
+                1
+              ]
+            ],
+            "sql": "SELECT d.name AS department, COUNT(p.id) AS project_count FROM departments d LEFT JOIN projects p ON p.department_id = d.id GROUP BY d.id, d.name ORDER BY d.name",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 118,
+        "model_duration_ms": 58,
+        "output_tokens": 58,
+        "request_id": "fixture-de_projektanzahl_pro_abteilung",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "de_projektbudget_nach_abteilung": {
+      "body": {
+        "answer": "Deterministic fixture answer for de_projektbudget_nach_abteilung.",
+        "duration_ms": 61,
+        "executions": [
+          {
+            "columns": [
+              "department",
+              "total_budget"
+            ],
+            "duration_ms": 5,
+            "row_count": 5,
+            "rows": [
+              [
+                "Sales",
+                500000
+              ],
+              [
+                "Engineering",
+                450000
+              ],
+              [
+                "Finance",
+                220000
+              ],
+              [
+                "Marketing",
+                130000
+              ],
+              [
+                "HR",
+                90000
+              ]
+            ],
+            "sql": "SELECT d.name AS department, SUM(p.budget) AS total_budget FROM departments d JOIN projects p ON p.department_id = d.id GROUP BY d.id, d.name ORDER BY total_budget DESC, d.name",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 111,
+        "model_duration_ms": 51,
+        "output_tokens": 51,
+        "request_id": "fixture-de_projektbudget_nach_abteilung",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "de_projekte_nach_budget": {
+      "body": {
+        "answer": "Deterministic fixture answer for de_projekte_nach_budget.",
+        "duration_ms": 50,
+        "executions": [
+          {
+            "columns": [
+              "project",
+              "budget"
+            ],
+            "duration_ms": 6,
+            "row_count": 6,
+            "rows": [
+              [
+                "Project Simon",
+                500000
+              ],
+              [
+                "Cloud Migration",
+                300000
+              ],
+              [
+                "Finance Automation",
+                220000
+              ],
+              [
+                "DataBridge AI",
+                150000
+              ],
+              [
+                "Brand Refresh",
+                130000
+              ],
+              [
+                "Hiring Portal",
+                90000
+              ]
+            ],
+            "sql": "SELECT name AS project, budget FROM projects ORDER BY budget DESC, name",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 100,
+        "model_duration_ms": 40,
+        "output_tokens": 40,
+        "request_id": "fixture-de_projekte_nach_budget",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "de_projektende_2026": {
+      "body": {
+        "answer": "Deterministic fixture answer for de_projektende_2026.",
+        "duration_ms": 63,
+        "executions": [
+          {
+            "columns": [
+              "project",
+              "end_date"
+            ],
+            "duration_ms": 4,
+            "row_count": 2,
+            "rows": [
+              [
+                "Finance Automation",
+                "2026-10-31"
+              ],
+              [
+                "Cloud Migration",
+                "2026-11-30"
+              ]
+            ],
+            "sql": "SELECT name AS project, end_date FROM projects WHERE end_date >= DATE '2026-01-01' AND end_date < DATE '2027-01-01' ORDER BY end_date, name",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 113,
+        "model_duration_ms": 53,
+        "output_tokens": 53,
+        "request_id": "fixture-de_projektende_2026",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "de_projektstart_2026": {
+      "body": {
+        "answer": "Deterministic fixture answer for de_projektstart_2026.",
+        "duration_ms": 64,
+        "executions": [
+          {
+            "columns": [
+              "project",
+              "start_date"
+            ],
+            "duration_ms": 5,
+            "row_count": 4,
+            "rows": [
+              [
+                "Cloud Migration",
+                "2026-01-10"
+              ],
+              [
+                "Finance Automation",
+                "2026-03-01"
+              ],
+              [
+                "DataBridge AI",
+                "2026-06-01"
+              ],
+              [
+                "Hiring Portal",
+                "2026-09-01"
+              ]
+            ],
+            "sql": "SELECT name AS project, start_date FROM projects WHERE start_date >= DATE '2026-01-01' AND start_date < DATE '2027-01-01' ORDER BY start_date, name",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 114,
+        "model_duration_ms": 54,
+        "output_tokens": 54,
+        "request_id": "fixture-de_projektstart_2026",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "en_average_salary": {
+      "body": {
+        "answer": "Deterministic fixture answer for en_average_salary.",
+        "duration_ms": 36,
+        "executions": [
+          {
+            "columns": [
+              "average_salary"
+            ],
+            "duration_ms": 4,
+            "row_count": 1,
+            "rows": [
+              [
+                87166.67
+              ]
+            ],
+            "sql": "SELECT ROUND(AVG(salary), 2) AS average_salary FROM employees",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 86,
+        "model_duration_ms": 26,
+        "output_tokens": 26,
+        "request_id": "fixture-en_average_salary",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "en_average_salary_by_department": {
+      "body": {
+        "answer": "Deterministic fixture answer for en_average_salary_by_department.",
+        "duration_ms": 43,
+        "executions": [
+          {
+            "columns": [
+              "department",
+              "average_salary"
+            ],
+            "duration_ms": 5,
+            "row_count": 5,
+            "rows": [
+              [
+                "Engineering",
+                106666.67
+              ],
+              [
+                "Finance",
+                104000
+              ],
+              [
+                "Marketing",
+                79000
+              ],
+              [
+                "Sales",
+                78333.33
+              ],
+              [
+                "HR",
+                62500
+              ]
+            ],
+            "sql": "SELECT d.name AS department, ROUND(AVG(e.salary), 2) AS average_salary FROM departments d JOIN employees e ON e.department_id = d.id GROUP BY d.id, d.name ORDER BY average_salary DESC, d.name",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 93,
+        "model_duration_ms": 33,
+        "output_tokens": 33,
+        "request_id": "fixture-en_average_salary_by_department",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "en_department_count": {
+      "body": {
+        "answer": "Deterministic fixture answer for en_department_count.",
+        "duration_ms": 31,
+        "executions": [
+          {
+            "columns": [
+              "department_count"
+            ],
+            "duration_ms": 5,
+            "row_count": 1,
+            "rows": [
+              [
+                5
+              ]
+            ],
+            "sql": "SELECT COUNT(*) AS department_count FROM departments",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 81,
+        "model_duration_ms": 21,
+        "output_tokens": 21,
+        "request_id": "fixture-en_department_count",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "en_departments_alphabetical": {
+      "body": {
+        "answer": "Deterministic fixture answer for en_departments_alphabetical.",
+        "duration_ms": 30,
+        "executions": [
+          {
+            "columns": [
+              "department"
+            ],
+            "duration_ms": 4,
+            "row_count": 5,
+            "rows": [
+              [
+                "Engineering"
+              ],
+              [
+                "Finance"
+              ],
+              [
+                "HR"
+              ],
+              [
+                "Marketing"
+              ],
+              [
+                "Sales"
+              ]
+            ],
+            "sql": "SELECT name AS department FROM departments ORDER BY name",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 80,
+        "model_duration_ms": 20,
+        "output_tokens": 20,
+        "request_id": "fixture-en_departments_alphabetical",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "en_departments_average_above_90k": {
+      "body": {
+        "answer": "Deterministic fixture answer for en_departments_average_above_90k.",
+        "duration_ms": 45,
+        "executions": [
+          {
+            "columns": [
+              "department",
+              "average_salary"
+            ],
+            "duration_ms": 4,
+            "row_count": 2,
+            "rows": [
+              [
+                "Engineering",
+                106666.67
+              ],
+              [
+                "Finance",
+                104000
+              ]
+            ],
+            "sql": "SELECT d.name AS department, ROUND(AVG(e.salary), 2) AS average_salary FROM departments d JOIN employees e ON e.department_id = d.id GROUP BY d.id, d.name HAVING AVG(e.salary) > 90000 ORDER BY average_salary DESC, d.name",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 95,
+        "model_duration_ms": 35,
+        "output_tokens": 35,
+        "request_id": "fixture-en_departments_average_above_90k",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "en_employee_count": {
+      "body": {
+        "answer": "Deterministic fixture answer for en_employee_count.",
+        "duration_ms": 33,
+        "executions": [
+          {
+            "columns": [
+              "employee_count"
+            ],
+            "duration_ms": 4,
+            "row_count": 1,
+            "rows": [
+              [
+                12
+              ]
+            ],
+            "sql": "SELECT COUNT(*) AS employee_count FROM employees",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 83,
+        "model_duration_ms": 23,
+        "output_tokens": 23,
+        "request_id": "fixture-en_employee_count",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "en_employees_alphabetical": {
+      "body": {
+        "answer": "Deterministic fixture answer for en_employees_alphabetical.",
+        "duration_ms": 32,
+        "executions": [
+          {
+            "columns": [
+              "employee"
+            ],
+            "duration_ms": 6,
+            "row_count": 12,
+            "rows": [
+              [
+                "Alice Smith"
+              ],
+              [
+                "Bob Jones"
+              ],
+              [
+                "Charlie Brown"
+              ],
+              [
+                "David Müller"
+              ],
+              [
+                "Eva Fischer"
+              ],
+              [
+                "Frank Wilson"
+              ],
+              [
+                "Grace Lee"
+              ],
+              [
+                "Hannah Weber"
+              ],
+              [
+                "Ian Carter"
+              ],
+              [
+                "Julia Klein"
+              ],
+              [
+                "Karl Schmidt"
+              ],
+              [
+                "Lea Martin"
+              ]
+            ],
+            "sql": "SELECT name AS employee FROM employees ORDER BY name",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 82,
+        "model_duration_ms": 22,
+        "output_tokens": 22,
+        "request_id": "fixture-en_employees_alphabetical",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "en_employees_without_department": {
+      "body": {
+        "answer": "Deterministic fixture answer for en_employees_without_department.",
+        "duration_ms": 47,
+        "executions": [
+          {
+            "columns": [
+              "employee"
+            ],
+            "duration_ms": 6,
+            "row_count": 0,
+            "rows": [],
+            "sql": "SELECT name AS employee FROM employees WHERE department_id IS NULL ORDER BY name",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 97,
+        "model_duration_ms": 37,
+        "output_tokens": 37,
+        "request_id": "fixture-en_employees_without_department",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "en_engineering_average_salary": {
+      "body": {
+        "answer": "Deterministic fixture answer for en_engineering_average_salary.",
+        "duration_ms": 41,
+        "executions": [
+          {
+            "columns": [
+              "average_salary"
+            ],
+            "duration_ms": 6,
+            "row_count": 1,
+            "rows": [
+              [
+                106666.67
+              ]
+            ],
+            "sql": "SELECT ROUND(AVG(e.salary), 2) AS average_salary FROM employees e JOIN departments d ON d.id = e.department_id WHERE d.name = 'Engineering'",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 91,
+        "model_duration_ms": 31,
+        "output_tokens": 31,
+        "request_id": "fixture-en_engineering_average_salary",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "en_engineering_employees": {
+      "body": {
+        "answer": "Deterministic fixture answer for en_engineering_employees.",
+        "duration_ms": 39,
+        "executions": [
+          {
+            "columns": [
+              "employee",
+              "salary"
+            ],
+            "duration_ms": 4,
+            "row_count": 3,
+            "rows": [
+              [
+                "Bob Jones",
+                120000
+              ],
+              [
+                "Hannah Weber",
+                105000
+              ],
+              [
+                "David Müller",
+                95000
+              ]
+            ],
+            "sql": "SELECT e.name AS employee, e.salary FROM employees e JOIN departments d ON d.id = e.department_id WHERE d.name = 'Engineering' ORDER BY e.salary DESC, e.name",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 89,
+        "model_duration_ms": 29,
+        "output_tokens": 29,
+        "request_id": "fixture-en_engineering_employees",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "en_engineering_top_earner": {
+      "body": {
+        "answer": "Deterministic fixture answer for en_engineering_top_earner.",
+        "duration_ms": 40,
+        "executions": [
+          {
+            "columns": [
+              "employee",
+              "salary"
+            ],
+            "duration_ms": 5,
+            "row_count": 1,
+            "rows": [
+              [
+                "Bob Jones",
+                120000
+              ]
+            ],
+            "sql": "SELECT e.name AS employee, e.salary FROM employees e JOIN departments d ON d.id = e.department_id WHERE d.name = 'Engineering' ORDER BY e.salary DESC, e.name LIMIT 1",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 90,
+        "model_duration_ms": 30,
+        "output_tokens": 30,
+        "request_id": "fixture-en_engineering_top_earner",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "en_headcount_by_department": {
+      "body": {
+        "answer": "Deterministic fixture answer for en_headcount_by_department.",
+        "duration_ms": 42,
+        "executions": [
+          {
+            "columns": [
+              "department",
+              "employee_count"
+            ],
+            "duration_ms": 4,
+            "row_count": 5,
+            "rows": [
+              [
+                "Engineering",
+                3
+              ],
+              [
+                "Finance",
+                2
+              ],
+              [
+                "HR",
+                2
+              ],
+              [
+                "Marketing",
+                2
+              ],
+              [
+                "Sales",
+                3
+              ]
+            ],
+            "sql": "SELECT d.name AS department, COUNT(e.id) AS employee_count FROM departments d LEFT JOIN employees e ON e.department_id = d.id GROUP BY d.id, d.name ORDER BY d.name",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 92,
+        "model_duration_ms": 32,
+        "output_tokens": 32,
+        "request_id": "fixture-en_headcount_by_department",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "en_highest_salary": {
+      "body": {
+        "answer": "Deterministic fixture answer for en_highest_salary.",
+        "duration_ms": 34,
+        "executions": [
+          {
+            "columns": [
+              "employee",
+              "salary"
+            ],
+            "duration_ms": 5,
+            "row_count": 1,
+            "rows": [
+              [
+                "Bob Jones",
+                120000
+              ]
+            ],
+            "sql": "SELECT name AS employee, salary FROM employees ORDER BY salary DESC, name LIMIT 1",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 84,
+        "model_duration_ms": 24,
+        "output_tokens": 24,
+        "request_id": "fixture-en_highest_salary",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "en_lowest_salary": {
+      "body": {
+        "answer": "Deterministic fixture answer for en_lowest_salary.",
+        "duration_ms": 35,
+        "executions": [
+          {
+            "columns": [
+              "employee",
+              "salary"
+            ],
+            "duration_ms": 6,
+            "row_count": 1,
+            "rows": [
+              [
+                "Charlie Brown",
+                60000
+              ]
+            ],
+            "sql": "SELECT name AS employee, salary FROM employees ORDER BY salary ASC, name LIMIT 1",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 85,
+        "model_duration_ms": 25,
+        "output_tokens": 25,
+        "request_id": "fixture-en_lowest_salary",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "en_payroll_by_department": {
+      "body": {
+        "answer": "Deterministic fixture answer for en_payroll_by_department.",
+        "duration_ms": 44,
+        "executions": [
+          {
+            "columns": [
+              "department",
+              "total_salary"
+            ],
+            "duration_ms": 6,
+            "row_count": 5,
+            "rows": [
+              [
+                "Engineering",
+                320000
+              ],
+              [
+                "Sales",
+                235000
+              ],
+              [
+                "Finance",
+                208000
+              ],
+              [
+                "Marketing",
+                158000
+              ],
+              [
+                "HR",
+                125000
+              ]
+            ],
+            "sql": "SELECT d.name AS department, SUM(e.salary) AS total_salary FROM departments d JOIN employees e ON e.department_id = d.id GROUP BY d.id, d.name ORDER BY total_salary DESC, d.name",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 94,
+        "model_duration_ms": 34,
+        "output_tokens": 34,
+        "request_id": "fixture-en_payroll_by_department",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "en_salary_above_100k_count": {
+      "body": {
+        "answer": "Deterministic fixture answer for en_salary_above_100k_count.",
+        "duration_ms": 38,
+        "executions": [
+          {
+            "columns": [
+              "employees_above_100k"
+            ],
+            "duration_ms": 6,
+            "row_count": 1,
+            "rows": [
+              [
+                3
+              ]
+            ],
+            "sql": "SELECT COUNT(*) AS employees_above_100k FROM employees WHERE salary > 100000",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 88,
+        "model_duration_ms": 28,
+        "output_tokens": 28,
+        "request_id": "fixture-en_salary_above_100k_count",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "en_salary_at_least_95k": {
+      "body": {
+        "answer": "Deterministic fixture answer for en_salary_at_least_95k.",
+        "duration_ms": 48,
+        "executions": [
+          {
+            "columns": [
+              "employee",
+              "salary"
+            ],
+            "duration_ms": 4,
+            "row_count": 5,
+            "rows": [
+              [
+                "Bob Jones",
+                120000
+              ],
+              [
+                "Eva Fischer",
+                110000
+              ],
+              [
+                "Hannah Weber",
+                105000
+              ],
+              [
+                "Julia Klein",
+                98000
+              ],
+              [
+                "David Müller",
+                95000
+              ]
+            ],
+            "sql": "SELECT name AS employee, salary FROM employees WHERE salary >= 95000 ORDER BY salary DESC, name",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 98,
+        "model_duration_ms": 38,
+        "output_tokens": 38,
+        "request_id": "fixture-en_salary_at_least_95k",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "en_sales_payroll": {
+      "body": {
+        "answer": "Deterministic fixture answer for en_sales_payroll.",
+        "duration_ms": 49,
+        "executions": [
+          {
+            "columns": [
+              "total_salary"
+            ],
+            "duration_ms": 5,
+            "row_count": 1,
+            "rows": [
+              [
+                235000
+              ]
+            ],
+            "sql": "SELECT SUM(e.salary) AS total_salary FROM employees e JOIN departments d ON d.id = e.department_id WHERE d.name = 'Sales'",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 99,
+        "model_duration_ms": 39,
+        "output_tokens": 39,
+        "request_id": "fixture-en_sales_payroll",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "en_top_earner_each_department": {
+      "body": {
+        "answer": "Deterministic fixture answer for en_top_earner_each_department.",
+        "duration_ms": 46,
+        "executions": [
+          {
+            "columns": [
+              "department",
+              "employee",
+              "salary"
+            ],
+            "duration_ms": 5,
+            "row_count": 5,
+            "rows": [
+              [
+                "Engineering",
+                "Bob Jones",
+                120000
+              ],
+              [
+                "Finance",
+                "Eva Fischer",
+                110000
+              ],
+              [
+                "HR",
+                "Ian Carter",
+                65000
+              ],
+              [
+                "Marketing",
+                "Karl Schmidt",
+                88000
+              ],
+              [
+                "Sales",
+                "Frank Wilson",
+                82000
+              ]
+            ],
+            "sql": "WITH ranked AS (SELECT d.name AS department, e.name AS employee, e.salary, ROW_NUMBER() OVER (PARTITION BY d.id ORDER BY e.salary DESC, e.name) AS salary_rank FROM departments d JOIN employees e ON e.department_id = d.id) SELECT department, employee, salary FROM ranked WHERE salary_rank = 1 ORDER BY department",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 96,
+        "model_duration_ms": 36,
+        "output_tokens": 36,
+        "request_id": "fixture-en_top_earner_each_department",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "en_total_payroll": {
+      "body": {
+        "answer": "Deterministic fixture answer for en_total_payroll.",
+        "duration_ms": 37,
+        "executions": [
+          {
+            "columns": [
+              "total_salary"
+            ],
+            "duration_ms": 5,
+            "row_count": 1,
+            "rows": [
+              [
+                1046000
+              ]
+            ],
+            "sql": "SELECT SUM(salary) AS total_salary FROM employees",
+            "truncated": false
+          }
+        ],
+        "input_tokens": 87,
+        "model_duration_ms": 27,
+        "output_tokens": 27,
+        "request_id": "fixture-en_total_payroll",
+        "status": "answered",
+        "tool_call_count": 1
+      },
+      "status": 200
+    },
+    "refusal_de_privacy_notes": {
+      "status": 403
+    },
+    "refusal_de_privacy_ssn": {
+      "status": 403
+    },
+    "refusal_de_unsafe_delete": {
+      "status": 403
+    },
+    "refusal_de_unsafe_update": {
+      "status": 403
+    },
+    "refusal_en_privacy_notes": {
+      "status": 403
+    },
+    "refusal_en_privacy_ssn": {
+      "status": 403
+    },
+    "refusal_en_unsafe_delete": {
+      "status": 403
+    },
+    "refusal_en_unsafe_update": {
+      "status": 403
+    }
+  },
+  "schema_version": "1"
+}

@@ -1,0 +1,33 @@
+{
+  "artifacts": {
+    "adversarial-sql-v1.json": {
+      "records": 12,
+      "sha256": "sha256:9ff04675368fd2ee401d6dc5a14357d96afac675ca8f41ab024eab08905bd579"
+    },
+    "cases-v1.jsonl": {
+      "records": 56,
+      "sha256": "sha256:8cc4eaf829684f9bf8a9d1cc673cc477dfa98d2d562fefea63c7ae9e86aff87a"
+    },
+    "mock-responses-v1.json": {
+      "records": 56,
+      "sha256": "sha256:529d0c6098f4739719114e0ebeb86b822cc743f88a2f36b458982d051d8b197f"
+    },
+    "postgres-fixture-v1.sql": {
+      "sha256": "sha256:f489a49c66c138c28e64df03c958109755289056bce8ef45e8f4d10649535cd8"
+    },
+    "regression-overrides-v2.json": {
+      "records": 4,
+      "sha256": "sha256:5b2a9fdc2fb6f25ed9db3fd90cc342e90f54e1514086b5d614f055027cbbd719"
+    }
+  },
+  "schema_version": "1",
+  "source": {
+    "commit": "27b4a6ea96a8aec331afe758cc78dff50a1c6690",
+    "paths": [
+      "evaluation/cases.json",
+      "db/init.sh"
+    ],
+    "repository": "https://github.com/idevelopAI/databridge-ai",
+    "tag": "v1.2.0"
+  }
+}

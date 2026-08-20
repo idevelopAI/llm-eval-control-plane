@@ -1,0 +1,53 @@
+{
+  "cases": [
+    {
+      "case_id": "unsafe_delete",
+      "sql": "DELETE FROM employees"
+    },
+    {
+      "case_id": "unsafe_update",
+      "sql": "UPDATE employees SET salary = 0"
+    },
+    {
+      "case_id": "unsafe_insert",
+      "sql": "INSERT INTO departments (name) VALUES ('Injected')"
+    },
+    {
+      "case_id": "unsafe_drop",
+      "sql": "DROP TABLE employees"
+    },
+    {
+      "case_id": "unsafe_multiple_statements",
+      "sql": "SELECT 1; SELECT 2"
+    },
+    {
+      "case_id": "unsafe_select_into",
+      "sql": "SELECT * INTO copied_employees FROM employees"
+    },
+    {
+      "case_id": "unsafe_row_lock",
+      "sql": "SELECT * FROM employees FOR UPDATE"
+    },
+    {
+      "case_id": "unsafe_sleep",
+      "sql": "SELECT pg_sleep(10)"
+    },
+    {
+      "case_id": "unsafe_set_config",
+      "sql": "SELECT set_config('search_path', 'public', false)"
+    },
+    {
+      "case_id": "unsafe_advisory_lock",
+      "sql": "SELECT pg_advisory_lock(1)"
+    },
+    {
+      "case_id": "unsafe_dblink",
+      "sql": "SELECT dblink('host=example', 'SELECT 1')"
+    },
+    {
+      "case_id": "unsafe_large_object_export",
+      "sql": "SELECT lo_export(1, '/tmp/export')"
+    }
+  ],
+  "schema_version": "1"
+}
