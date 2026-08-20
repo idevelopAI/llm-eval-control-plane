@@ -38,6 +38,7 @@ def test_help_describes_truthful_commands() -> None:
 
     assert result.exit_code == 0
     assert "schema" in result.stdout
+    assert "compare" in result.stdout
     assert "run" in result.stdout
     assert "show" in result.stdout
     assert "validate" in result.stdout
@@ -321,3 +322,181 @@ def test_run_persists_sanitized_failures_and_returns_automation_exit_one(
     assert case["target"] is None
     assert case["target_failure"]["code"] == "target_exception"
     assert "private-sentinel" not in evidence.stdout
+
+
+def release_policy() -> dict[str, object]:
+    return {
+        "name": "offline-release-policy",
+        "dataset": {
+            "kind": "dataset",
+            "name": "offline-fixture",
+            "revision": 1,
+        },
+        "baseline": {
+            "kind": "target",
+            "name": "fake/release",
+            "revision": 1,
+        },
+        "candidate": {
+            "kind": "target",
+            "name": "fake/release",
+            "revision": 2,
+        },
+        "gates": [
+            {
+                "metric": "quality.exact_match",
+                "direction": "higher_is_better",
+                "threshold": 0.5,
+                "allowed_regression": 0.1,
+            }
+        ],
+    }
+
+
+def create_release_runs(
+    tmp_path: Path,
+    *,
+    regressed: bool,
+) -> tuple[Path, Path, Path]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    dataset = tmp_path / "release.jsonl"
+    store = tmp_path / "artifacts"
+    policy = tmp_path / "policy.json"
+    overrides = tmp_path / "overrides.json"
+    write_dataset(dataset)
+    policy.write_text(json.dumps(release_policy()), encoding="utf-8")
+    overrides.write_text('{"case-001":"mismatch"}', encoding="utf-8")
+
+    common = [
+        str(dataset),
+        "--dataset-name",
+        "offline-fixture",
+        "--target-name",
+        "fake/release",
+        "--store",
+        str(store),
+    ]
+    baseline = runner.invoke(
+        app,
+        ["run", *common, "--run-id", "baseline", "--target-revision", "1"],
+    )
+    candidate_args = [
+        "run",
+        *common,
+        "--run-id",
+        "candidate",
+        "--target-revision",
+        "2",
+    ]
+    if regressed:
+        candidate_args.extend(("--scenario-overrides", str(overrides)))
+    candidate = runner.invoke(app, candidate_args)
+    assert baseline.exit_code == candidate.exit_code == 0
+    return policy, dataset, store
+
+
+def test_compare_returns_json_and_release_exit_codes(tmp_path: Path) -> None:
+    policy, dataset, store = create_release_runs(tmp_path, regressed=False)
+    command = [
+        "compare",
+        str(policy),
+        str(dataset),
+        "--baseline-run",
+        "baseline",
+        "--candidate-run",
+        "candidate",
+        "--store",
+        str(store),
+    ]
+
+    passed = runner.invoke(app, command)
+
+    assert passed.exit_code == 0
+    report = json.loads(passed.stdout)
+    assert report["status"] == "passed"
+    assert report["gates"][0]["status"] == "passed"
+    assert "private-output-sentinel" not in passed.stdout
+
+    policy, dataset, store = create_release_runs(
+        tmp_path / "regression",
+        regressed=True,
+    )
+    failed = runner.invoke(
+        app,
+        [
+            "compare",
+            str(policy),
+            str(dataset),
+            "--baseline-run",
+            "baseline",
+            "--candidate-run",
+            "candidate",
+            "--store",
+            str(store),
+        ],
+    )
+
+    assert failed.exit_code == 1
+    report = json.loads(failed.stdout)
+    assert report["status"] == "failed"
+    assert report["gates"][0]["failure_codes"] == ["threshold", "regression"]
+    assert "private-output-sentinel" not in failed.stdout
+
+
+def test_compare_writes_junit_without_overwriting_existing_report(
+    tmp_path: Path,
+) -> None:
+    policy, dataset, store = create_release_runs(tmp_path, regressed=True)
+    report = tmp_path / "release.xml"
+    command = [
+        "compare",
+        str(policy),
+        str(dataset),
+        "--baseline-run",
+        "baseline",
+        "--candidate-run",
+        "candidate",
+        "--store",
+        str(store),
+        "--format",
+        "junit",
+        "--output",
+        str(report),
+    ]
+
+    created = runner.invoke(app, command)
+    repeated = runner.invoke(app, command)
+
+    assert created.exit_code == 1
+    assert created.stdout.strip() == "Created junit release report"
+    assert '<testsuite name="offline-release-policy"' in report.read_text()
+    assert repeated.exit_code == 2
+    assert repeated.stderr.strip() == "Release comparison could not be completed"
+
+
+def test_run_rejects_invalid_override_document_without_leaking_it(
+    tmp_path: Path,
+) -> None:
+    dataset = tmp_path / "dataset.jsonl"
+    overrides = tmp_path / "overrides.json"
+    write_dataset(dataset)
+    overrides.write_text(
+        '{"case-001":"echo","case-001":"private-sentinel"}',
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            str(dataset),
+            "--run-id",
+            "candidate",
+            "--scenario-overrides",
+            str(overrides),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert result.stderr.strip() == "Evaluation could not be completed"
+    assert "private-sentinel" not in result.stderr
