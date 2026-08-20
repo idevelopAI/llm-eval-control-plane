@@ -103,6 +103,7 @@ class ExecutionFailure(FrozenModel):
     message: SafeMessage
     retryable: bool = False
     evaluator: ArtifactRef | None = None
+    latency_ms: DurationMs | None = None
 
     @model_validator(mode="after")
     def validate_stage(self) -> Self:
@@ -113,6 +114,8 @@ class ExecutionFailure(FrozenModel):
                 raise ValueError(
                     "failure evaluator must reference an evaluator artifact"
                 )
+            if self.latency_ms is not None:
+                raise ValueError("evaluator failures cannot include target latency")
         elif self.evaluator is not None:
             raise ValueError("target failures cannot include an evaluator reference")
         return self

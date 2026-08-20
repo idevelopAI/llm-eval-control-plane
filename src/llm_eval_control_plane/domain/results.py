@@ -148,6 +148,7 @@ def _failure_record(failure: ExecutionFailure) -> dict[str, JsonValue]:
         "evaluator": (
             None if failure.evaluator is None else _artifact_record(failure.evaluator)
         ),
+        "latency_ms": failure.latency_ms,
         "message": failure.message,
         "retryable": failure.retryable,
         "stage": failure.stage.value,
