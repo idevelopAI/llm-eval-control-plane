@@ -20,9 +20,12 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = [
+  "httpx>=0.28,<1",
   "jsonschema>=4.23,<5",
+  "psycopg[binary]>=3.3,<4",
   "pydantic>=2.11,<3",
   "rfc8785>=0.1,<1",
+  "sqlglot>=30.17,<30.18",
   "typer>=0.16,<1",
 ]
 
