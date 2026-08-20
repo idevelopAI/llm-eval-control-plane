@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import re
 from collections import Counter
+from hashlib import sha256
 from pathlib import Path
 from typing import Annotated
 
 import typer
-from pydantic import ValidationError
+from pydantic import SecretStr, TypeAdapter, ValidationError
 
 from llm_eval_control_plane import __version__
 from llm_eval_control_plane.adapters import (
@@ -24,6 +27,16 @@ from llm_eval_control_plane.adapters import (
     read_dataset_jsonl,
     render_report,
 )
+from llm_eval_control_plane.adapters.databridge import (
+    DataBridgeHttpTarget,
+    DataBridgeMockTarget,
+)
+from llm_eval_control_plane.adapters.databridge_scorer import DataBridgeSqlEvaluator
+from llm_eval_control_plane.adapters.postgres_sandbox import (
+    PostgresReplayError,
+    PostgresSandboxConfig,
+    PsycopgPostgresExecutor,
+)
 from llm_eval_control_plane.application import (
     ComparisonConfigurationError,
     InProcessRunner,
@@ -35,11 +48,14 @@ from llm_eval_control_plane.domain import (
     CanonicalJsonError,
     CaseResult,
     EvaluationSpec,
+    ExecutionMode,
     ReleaseStatus,
     RunResult,
     RunStatus,
     parse_json,
+    sha256_digest,
 )
+from llm_eval_control_plane.domain.artifacts import Sha256Digest
 
 app = typer.Typer(
     add_completion=False,
@@ -47,6 +63,15 @@ app = typer.Typer(
     no_args_is_help=True,
     pretty_exceptions_show_locals=False,
 )
+databridge_app = typer.Typer(
+    help="Evaluate DataBridge SQL decisions against a read-only PostgreSQL fixture.",
+    no_args_is_help=True,
+)
+app.add_typer(databridge_app, name="databridge")
+
+_ENVIRONMENT_NAME = re.compile(r"^[A-Z_][A-Z0-9_]{0,127}$")
+_MAX_RESPONSE_MANIFEST_BYTES = 4 * 1_024 * 1_024
+_SHA256_DIGEST_ADAPTER = TypeAdapter(Sha256Digest)
 
 _DEFAULT_SCORERS = (
     BuiltInEvaluatorKind.EXACT_MATCH,
@@ -212,6 +237,255 @@ def run_evaluation(
     except (OSError, RunnerConfigurationError, ValidationError, ValueError) as error:
         typer.echo("Evaluation could not be completed", err=True)
         raise typer.Exit(code=2) from error
+
+    _print_json(_run_summary(result))
+    if result.status is RunStatus.COMPLETED_WITH_FAILURES:
+        raise typer.Exit(code=1)
+
+
+@databridge_app.command("run")
+def run_databridge_evaluation(
+    dataset: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            resolve_path=True,
+            help="Reviewed DataBridge JSONL dataset.",
+        ),
+    ],
+    run_id: Annotated[
+        str,
+        typer.Option("--run-id", help="Unique immutable run identifier."),
+    ],
+    fixture_sql: Annotated[
+        Path,
+        typer.Option(
+            "--fixture-sql",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            resolve_path=True,
+            help="Exact SQL seed whose digest identifies PostgreSQL replay.",
+        ),
+    ],
+    expected_fixture_fingerprint: Annotated[
+        str,
+        typer.Option(
+            "--expected-fixture-fingerprint",
+            help="Pinned normalized PostgreSQL content fingerprint.",
+        ),
+    ],
+    responses: Annotated[
+        Path | None,
+        typer.Option(
+            "--responses",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            resolve_path=True,
+            help="Strict offline DataBridge response manifest.",
+        ),
+    ] = None,
+    response_overrides: Annotated[
+        Path | None,
+        typer.Option(
+            "--response-overrides",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            resolve_path=True,
+            help="Strict mock response entries that replace selected cases.",
+        ),
+    ] = None,
+    live_base_url: Annotated[
+        str | None,
+        typer.Option(
+            "--live-base-url",
+            help="DataBridge HTTPS origin; entering live mode requires both opt-ins.",
+        ),
+    ] = None,
+    allow_live: Annotated[
+        bool,
+        typer.Option(
+            "--allow-live",
+            help="Explicitly permit provider network traffic for this run.",
+        ),
+    ] = False,
+    confirm_synthetic_database: Annotated[
+        bool,
+        typer.Option(
+            "--confirm-synthetic-database",
+            help="Confirm the remote DataBridge database contains synthetic data only.",
+        ),
+    ] = False,
+    allow_insecure_loopback: Annotated[
+        bool,
+        typer.Option(
+            "--allow-insecure-loopback",
+            help="Permit HTTP only for an explicitly selected loopback live endpoint.",
+        ),
+    ] = False,
+    api_key_env: Annotated[
+        str,
+        typer.Option(
+            "--api-key-env",
+            help="Environment-variable name containing the live DataBridge API key.",
+        ),
+    ] = "DATABRIDGE_API_KEY",
+    database_dsn_env: Annotated[
+        str,
+        typer.Option(
+            "--database-dsn-env",
+            help="Environment-variable name containing the restricted replay DSN.",
+        ),
+    ] = "DATABRIDGE_EVAL_DSN",
+    dataset_name: Annotated[
+        str,
+        typer.Option("--dataset-name", help="Stable logical dataset name."),
+    ] = "databridge/v1",
+    dataset_revision: Annotated[
+        int,
+        typer.Option("--dataset-revision", min=1),
+    ] = 1,
+    target_name: Annotated[
+        str,
+        typer.Option("--target-name", help="Stable logical target name."),
+    ] = "databridge/release",
+    target_revision: Annotated[
+        int,
+        typer.Option("--target-revision", min=1),
+    ] = 1,
+    timeout_seconds: Annotated[
+        float,
+        typer.Option("--timeout-seconds", min=0.001, max=60.0),
+    ] = 15.0,
+    store: Annotated[
+        Path,
+        typer.Option(
+            "--store",
+            file_okay=False,
+            help="Local artifact root; stored evidence may contain sensitive SQL.",
+        ),
+    ] = Path(".llm-eval"),
+) -> None:
+    """Run mock or explicitly opted-in live DataBridge evaluation evidence."""
+    result: RunResult | None = None
+    completed = False
+    try:
+        live_mode = _validate_databridge_mode(
+            responses=responses,
+            response_overrides=response_overrides,
+            live_base_url=live_base_url,
+            allow_live=allow_live,
+            confirm_synthetic_database=confirm_synthetic_database,
+            allow_insecure_loopback=allow_insecure_loopback,
+            api_key_env=api_key_env,
+            database_dsn_env=database_dsn_env,
+        )
+        expected_fingerprint = _SHA256_DIGEST_ADAPTER.validate_python(
+            expected_fixture_fingerprint,
+            strict=True,
+        )
+        dataset_version = read_dataset_jsonl(
+            dataset,
+            name=dataset_name,
+            revision=dataset_revision,
+        )
+        database_dsn = _required_environment_value(database_dsn_env)
+        if live_mode:
+            _required_environment_value(api_key_env)
+        fixture_sql_digest = _raw_file_digest(fixture_sql)
+        executor = PsycopgPostgresExecutor(
+            PostgresSandboxConfig(
+                dsn=SecretStr(database_dsn),
+                fixture_digest=sha256_digest(
+                    {
+                        "database_fingerprint": expected_fingerprint,
+                        "fixture_identity_schema": "databridge-postgres/v1",
+                        "fixture_sql_digest": fixture_sql_digest,
+                    }
+                ),
+            )
+        )
+        databridge_evaluator = DataBridgeSqlEvaluator(executor)
+        databridge_evaluator.preflight_dataset(dataset_version)
+        initial_fingerprint = executor.fingerprint_fixture()
+        if initial_fingerprint != expected_fingerprint:
+            raise ValueError("PostgreSQL fixture fingerprint did not match")
+        target: DataBridgeMockTarget | DataBridgeHttpTarget
+
+        if not live_mode:
+            assert responses is not None
+            mock_responses = _read_response_manifest(responses)
+            dataset_case_ids = {case.case_id for case in dataset_version.cases}
+            if set(mock_responses) != dataset_case_ids:
+                raise ValueError("mock responses must exactly match dataset cases")
+            if response_overrides is not None:
+                overrides = _read_response_manifest(response_overrides)
+                if not set(overrides).issubset(dataset_case_ids):
+                    raise ValueError("mock response overrides contain unknown cases")
+                mock_responses.update(overrides)
+            target = DataBridgeMockTarget(
+                fixtures=mock_responses,
+                name=target_name,
+                revision=target_revision,
+            )
+            runner = InProcessRunner(clock=DeterministicStepClock())
+            execution_mode = ExecutionMode.OFFLINE_MOCK
+        else:
+            assert live_base_url is not None
+            target = DataBridgeHttpTarget(
+                base_url=live_base_url,
+                api_key_env=api_key_env,
+                synthetic_database_confirmed=confirm_synthetic_database,
+                name=target_name,
+                revision=target_revision,
+                timeout_seconds=timeout_seconds,
+                allow_insecure_loopback=allow_insecure_loopback,
+            )
+            runner = InProcessRunner()
+            execution_mode = ExecutionMode.LIVE
+
+        result = asyncio.run(
+            runner.run(
+                run_id=run_id,
+                dataset=dataset_version,
+                target=target,
+                evaluators=(
+                    databridge_evaluator,
+                    *build_evaluators(
+                        (
+                            BuiltInEvaluatorKind.LATENCY,
+                            BuiltInEvaluatorKind.USAGE,
+                        )
+                    ),
+                ),
+                execution_mode=execution_mode,
+            )
+        )
+        if executor.fingerprint_fixture() != initial_fingerprint:
+            raise ValueError("PostgreSQL fixture changed during evaluation")
+        FilesystemRunRepository(store).save(result)
+        completed = True
+    except DatasetImportError as error:
+        location = "" if error.line is None else f" at line {error.line}"
+        typer.echo(f"Dataset import failed ({error.code}){location}", err=True)
+    except RunStoreError:
+        typer.echo("DataBridge evidence could not be persisted", err=True)
+    except (
+        OSError,
+        PostgresReplayError,
+        RunnerConfigurationError,
+        ValidationError,
+        ValueError,
+    ):
+        typer.echo("DataBridge evaluation could not be completed", err=True)
+
+    if not completed:
+        raise typer.Exit(code=2)
+    assert result is not None
 
     _print_json(_run_summary(result))
     if result.status is RunStatus.COMPLETED_WITH_FAILURES:
@@ -467,6 +741,81 @@ def _read_scenario_overrides(path: Path | None) -> dict[str, str]:
         assert isinstance(value, str)
         overrides[key] = value
     return overrides
+
+
+def _read_response_manifest(path: Path) -> dict[str, object]:
+    try:
+        with path.open("rb") as stream:
+            payload = stream.read(_MAX_RESPONSE_MANIFEST_BYTES + 1)
+        if len(payload) > _MAX_RESPONSE_MANIFEST_BYTES:
+            raise ValueError("response manifest exceeds the size limit")
+        document = parse_json(payload.decode("utf-8"))
+    except (OSError, UnicodeError, CanonicalJsonError):
+        raise ValueError("response manifest could not be read") from None
+    if (
+        not isinstance(document, dict)
+        or set(document) != {"responses", "schema_version"}
+        or document["schema_version"] != "1"
+        or not isinstance(document["responses"], dict)
+    ):
+        raise ValueError("response manifest failed contract validation")
+    return dict(document["responses"])
+
+
+def _validate_databridge_mode(
+    *,
+    responses: Path | None,
+    response_overrides: Path | None,
+    live_base_url: str | None,
+    allow_live: bool,
+    confirm_synthetic_database: bool,
+    allow_insecure_loopback: bool,
+    api_key_env: str,
+    database_dsn_env: str,
+) -> bool:
+    _validate_environment_name(database_dsn_env)
+    if live_base_url is None:
+        if responses is None:
+            raise ValueError("mock mode requires a response manifest")
+        if allow_live or confirm_synthetic_database or allow_insecure_loopback:
+            raise ValueError("live flags are invalid in mock mode")
+        return False
+    _validate_environment_name(api_key_env)
+    if responses is not None or response_overrides is not None:
+        raise ValueError("live mode cannot use mock response fixtures")
+    if not allow_live or not confirm_synthetic_database:
+        raise ValueError("live mode requires both explicit opt-ins")
+    if api_key_env == database_dsn_env:
+        raise ValueError("live credential references must be distinct")
+    return True
+
+
+def _validate_environment_name(name: str) -> None:
+    if not _ENVIRONMENT_NAME.fullmatch(name):
+        raise ValueError("credential environment name is invalid")
+
+
+def _required_environment_value(name: str) -> str:
+    _validate_environment_name(name)
+    value = os.environ.get(name)
+    if not value:
+        raise ValueError("required environment configuration is missing")
+    return value
+
+
+def _raw_file_digest(path: Path) -> str:
+    digest = sha256()
+    total = 0
+    try:
+        with path.open("rb") as stream:
+            while chunk := stream.read(64 * 1_024):
+                total += len(chunk)
+                if total > 4 * 1_024 * 1_024:
+                    raise ValueError("fixture SQL exceeds the size limit")
+                digest.update(chunk)
+    except OSError:
+        raise ValueError("fixture SQL could not be read") from None
+    return f"sha256:{digest.hexdigest()}"
 
 
 def _create_report(path: Path, report: str) -> None:
