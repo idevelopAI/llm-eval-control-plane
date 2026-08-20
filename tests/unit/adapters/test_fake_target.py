@@ -134,3 +134,45 @@ def test_deterministic_step_clock_advances_without_sleeping() -> None:
     for invalid in (0.0, -1.0, float("inf"), float("nan")):
         with raises(ValueError, match="positive finite"):
             DeterministicStepClock(step_ms=invalid)
+
+
+def test_fake_target_applies_versioned_case_scenario_overrides() -> None:
+    overrides = {"quality-case": "mismatch", "safety-case": "echo"}
+    target = DeterministicFakeTarget(
+        name="fake/release",
+        revision=2,
+        scenario_overrides=overrides,
+    )
+    baseline = DeterministicFakeTarget(name="fake/release", revision=1)
+    overrides["quality-case"] = "echo"
+
+    quality = invoke(
+        target,
+        request(
+            "quality-case",
+            "echo",
+            value="expected",
+            actual="regressed",
+        ),
+    )
+    safety = invoke(
+        target,
+        request("safety-case", "refuse", value="safe response"),
+    )
+
+    assert isinstance(quality, TargetResponse)
+    assert quality.output.to_value() == "regressed"
+    assert isinstance(safety, TargetResponse)
+    assert safety.outcome is TargetOutcome.COMPLETED
+    assert target.ref.digest != baseline.ref.digest
+
+
+def test_fake_target_rejects_invalid_scenario_overrides_safely() -> None:
+    for overrides in (
+        {"../../private": "echo"},
+        {"case-001": "private-scenario"},
+    ):
+        with raises(ValueError, match="failed contract validation") as captured:
+            DeterministicFakeTarget(scenario_overrides=overrides)
+
+        assert "private" not in str(captured.value).lower()
