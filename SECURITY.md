@@ -28,10 +28,17 @@ Evaluation payloads are potentially sensitive. The project follows these rules:
   when read. Run identifiers are hashed before use as filenames.
 - CI uses deterministic public or synthetic fixtures and does not require paid
   model access.
+- Release reports expose bounded artifact identities, aggregate values, slice
+  labels, case IDs, and failure codes. They omit inputs, expectations, target
+  outputs, exception text, and absolute artifact-store paths.
+- `compare --output` creates a new report and refuses to overwrite an existing
+  path. Treat reports as internal evidence when case IDs or metric topology are
+  sensitive.
 - Live evaluation is an explicit mode with separate configuration and evidence
   retention controls.
 
-The current Phase 1 workflow executes only the checked-in deterministic fake
-target. It contains no provider client, API credential, network call, or live
-model integration. Future live adapters must preserve these redaction and
-retention defaults.
+The current Phase 2 workflow executes only the checked-in deterministic fake
+target and deterministic evaluators. The release-gate Action has read-only
+repository permissions and contains no provider client, API credential, secret
+reference, network model call, or live model integration. Future live adapters
+must preserve these redaction and retention defaults.

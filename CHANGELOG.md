@@ -27,13 +27,25 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - CLI commands to run offline datasets and inspect redacted run or case evidence,
   alongside JSON Schema inspection and specification validation.
 - A normalized 100-case fixture with pinned dataset and result digests.
+- Immutable aggregate, gate, case-transition, and release-decision contracts.
+- Baseline comparison that verifies artifact alignment, recomputes stored
+  evidence, and calculates global and slice aggregates.
+- Absolute threshold, regression-budget, and coverage release gates for both
+  higher-is-better and lower-is-better metrics.
+- JSON, Markdown, and JUnit reports plus CI-safe `compare` exit codes.
+- A pinned 40-case bilingual release fixture and credential-free GitHub Action
+  that proves a seeded safety regression is blocked.
 
 ### Changed
 
-- Documentation now describes the implemented Phase 1 evaluation spine and
+- The offline target supports versioned, validated per-case scenario overrides
+  for deterministic candidate-regression evidence.
+- Documentation now describes the implemented Phase 2 release workflow and
   clearly separates synthetic fixture measurements from performance claims.
 
 ### Security
 
 - Local evaluation artifacts are ignored by Git and target output disclosure is
   opt-in for one explicitly selected case.
+- Default release reports omit case inputs, expectations, target outputs, and
+  absolute local storage paths; report files use create-once semantics.

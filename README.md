@@ -1,16 +1,68 @@
 # LLM Eval Control Plane
 
 [![CI](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/ci.yml/badge.svg)](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/ci.yml)
+[![Release Gate](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/release-gate.yml/badge.svg)](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/release-gate.yml)
 
 A deterministic-first control plane for evaluating AI application behavior,
 preserving case-level evidence, and making quality, safety, latency, and usage
 changes measurable before release.
 
-> **Status:** Phase 1 evaluation spine. The repository runs reviewed JSONL
-> datasets end to end against a deterministic offline target, applies versioned
-> scorers, aggregates coverage-aware metrics, and stores immutable local run
-> evidence. Real-provider targets, candidate/baseline comparison, and release
-> gate execution are not implemented yet.
+> **Status:** Phase 2 baseline comparison and release gates. The repository runs
+> reviewed JSONL datasets, stores immutable case evidence, compares a candidate
+> with an aligned baseline, recomputes global and slice aggregates, and emits a
+> content-addressed pass/fail decision. The checked-in GitHub Action proves the
+> release gate without credentials or network model calls.
+
+## Baseline comparison and release gates
+
+The release fixture contains 40 English and German quality/refusal cases. Run
+the baseline and a deliberately regressed candidate with only deterministic
+scorers:
+
+```bash
+uv sync --locked
+uv run llm-eval run examples/release-gate-40.jsonl \
+  --run-id baseline-v1 \
+  --dataset-name release-gate/offline \
+  --target-name fake/release \
+  --target-revision 1 \
+  --scorer exact_match --scorer refusal --scorer latency
+
+uv run llm-eval run examples/release-gate-40.jsonl \
+  --run-id candidate-v2-regression \
+  --dataset-name release-gate/offline \
+  --target-name fake/release \
+  --target-revision 2 \
+  --scenario-overrides examples/release-regression-overrides.json \
+  --scorer exact_match --scorer refusal --scorer latency
+
+uv run llm-eval compare \
+  examples/release-gate-spec.json \
+  examples/release-gate-40.jsonl \
+  --baseline-run baseline-v1 \
+  --candidate-run candidate-v2-regression \
+  --format markdown
+```
+
+The final command intentionally returns `1`: broad quality remains inside its
+budget while the refusal-only safety slice catches a regression.
+
+| Gate | Baseline | Candidate | Delta | Decision |
+|---|---:|---:|---:|---|
+| Exact match, all 40 cases | `1.0` | `0.95` | `-0.05` | Pass |
+| Exact match, `language/de` | `1.0` | `0.95` | `-0.05` | Pass |
+| Refusal correctness, `safety/refusal` | `1.0` | `0.875` | `-0.125` | **Fail** |
+| Simulated latency, all cases | `5.0 ms` | `5.0 ms` | `0.0 ms` | Pass |
+
+`delta` always means `candidate - baseline`. `allowed_regression` is an
+absolute budget in metric units. Every gate also requires matching scored and
+skipped coverage with no execution errors, so a technical failure cannot be
+mistaken for a good score.
+
+Reports support `--format json`, `--format markdown`, and `--format junit`.
+Use `--output PATH` to create a new report file; existing files are never
+overwritten. Reports include artifact identities, metrics, slice names, and case
+IDs, but omit case inputs, expected values, and target outputs.
 
 ## Reproducible 100-case demo
 
@@ -72,8 +124,9 @@ and file permissions.
 
 The `run` command returns `0` when execution completes, `1` when sanitized target
 or evaluator failures were persisted, and `2` for input, configuration, storage,
-or integrity errors. A zero metric score is evidence, not a release decision;
-release gates are a later vertical slice.
+or integrity errors. The `compare` command returns `0` for a passing release,
+`1` for a valid failed release decision, and `2` when comparison could not be
+performed safely.
 
 ## Current capabilities
 
@@ -88,6 +141,13 @@ release gates are a later vertical slice.
 - Atomic create-once local persistence with hashed storage keys, bounded reads,
   canonical-byte validation, and digest verification
 - Safe JSON CLI summaries plus opt-in per-case output disclosure
+- Candidate-minus-baseline comparison with strict artifact, case, evaluator,
+  digest, and stored-summary alignment
+- Global and slice-aware gates with absolute thresholds, regression budgets,
+  coverage enforcement, and case transition evidence
+- Stable JSON, Markdown, and JUnit release reports with automation exit codes
+- A credential-free GitHub release check that proves both a passing candidate
+  and a blocked seeded safety regression
 - Python 3.11–3.14 CI, strict typing, linting, branch coverage, packaging, and
   isolated wheel smoke tests
 
@@ -97,6 +157,8 @@ release gates are a later vertical slice.
 - Version and hash every reproducibility-relevant artifact.
 - Preserve case-level evidence behind every aggregate metric.
 - Count skipped and failed evaluations instead of silently dropping coverage.
+- Let narrow safety and language slices block a release independently of broad
+  averages.
 - Keep offline CI fixtures deterministic and separate from live-provider runs.
 - Never expose prompts, expected values, outputs, or private exception details in
   default CLI output or telemetry.
