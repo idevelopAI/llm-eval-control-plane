@@ -299,6 +299,32 @@ def test_config_and_executor_repr_redact_the_dsn() -> None:
     assert FIXTURE_DIGEST in repr(executor)
 
 
+def test_executor_semantic_config_covers_limits_without_secrets() -> None:
+    executor = PsycopgPostgresExecutor(
+        config(limits=PostgresSandboxLimits(max_rows=17)),
+        connect=connect_factory(FakeConnect([FakeConnection(FakeCursor())])),
+    )
+
+    semantic_config = executor.semantic_config
+    assert semantic_config["fixture_digest"] == FIXTURE_DIGEST
+    assert semantic_config["limits"] == {
+        "connect_timeout_seconds": 5,
+        "lock_timeout_ms": 250,
+        "max_cells": 25_000,
+        "max_columns": 64,
+        "max_result_bytes": 1_048_576,
+        "max_rows": 17,
+        "statement_timeout_ms": 2_000,
+    }
+    assert semantic_config["transaction"] == {
+        "read_only": True,
+        "rollback_always": True,
+        "search_path": "public",
+        "timezone": "UTC",
+    }
+    assert "secret" not in repr(semantic_config)
+
+
 def test_fixture_fingerprint_is_order_independent_and_content_sensitive() -> None:
     class FingerprintExecutor(PsycopgPostgresExecutor):
         def __init__(self, changed: bool) -> None:

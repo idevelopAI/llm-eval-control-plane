@@ -50,10 +50,20 @@ class FakeExecutor:
         results: dict[str, SqlReplayResult | PostgresReplayError],
         *,
         fixture_digest: str = FIXTURE_DIGEST,
+        replay_revision: int = 1,
     ) -> None:
         self.results = results
         self.fixture_digest = fixture_digest
+        self.replay_revision = replay_revision
         self.calls: list[str] = []
+
+    @property
+    def semantic_config(self) -> dict[str, object]:
+        return {
+            "executor_schema": "fake-postgres/v1",
+            "fixture_digest": self.fixture_digest,
+            "replay_revision": self.replay_revision,
+        }
 
     def execute(self, sql: str) -> SqlReplayResult:
         self.calls.append(sql)
@@ -186,9 +196,7 @@ def test_unordered_comparison_preserves_duplicate_rows() -> None:
     )[SQL_RESULT_SET_EQUIVALENT]
     mismatching = observations_by_metric(
         DataBridgeSqlEvaluator(
-            FakeExecutor(
-                {REFERENCE_SQL: reference, CANDIDATE_SQL: missing_duplicate}
-            )
+            FakeExecutor({REFERENCE_SQL: reference, CANDIDATE_SQL: missing_duplicate})
         ),
         evaluation_case(expectation),
         SqlTargetOutput(
@@ -447,6 +455,14 @@ def test_evaluator_digest_covers_fixture_identity() -> None:
     second = DataBridgeSqlEvaluator(
         FakeExecutor({}, fixture_digest="sha256:" + ("2" * 64))
     )
+
+    assert first.ref.digest is not None
+    assert first.ref.digest != second.ref.digest
+
+
+def test_evaluator_digest_covers_replay_semantics() -> None:
+    first = DataBridgeSqlEvaluator(FakeExecutor({}, replay_revision=1))
+    second = DataBridgeSqlEvaluator(FakeExecutor({}, replay_revision=2))
 
     assert first.ref.digest is not None
     assert first.ref.digest != second.ref.digest
