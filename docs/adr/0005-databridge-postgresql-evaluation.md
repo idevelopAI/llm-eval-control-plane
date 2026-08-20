@@ -86,7 +86,7 @@ observation and fails release coverage.
   and an unchanged database fingerprint provide independent safety layers.
 - Live evaluation cannot make an unknown production database safe; it is allowed
   only for an explicitly confirmed synthetic DataBridge deployment.
-- SQLGlot, PostgreSQL, normalization, policy, and fixture versions are part of
-  evaluator identity, so changes produce new evidence rather than silently
-  reinterpreting old runs.
-
+- SQLGlot, the psycopg driver, replay limits, normalization, policy, and fixture
+  identities are part of evaluator identity. Continuous integration also pins
+  the PostgreSQL image by digest, so changes produce new evidence rather than
+  silently reinterpreting old runs.
