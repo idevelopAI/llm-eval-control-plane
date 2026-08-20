@@ -189,6 +189,19 @@ def test_databridge_mock_command_persists_safe_offline_evidence(
     ):
         assert secret not in serialized
 
+    conflict = runner.invoke(
+        app,
+        [
+            *command(dataset, fixture_sql, store),
+            "--responses",
+            str(responses),
+            "--target-revision",
+            "2",
+        ],
+    )
+    assert conflict.exit_code == 2
+    assert conflict.stderr.strip() == "DataBridge evidence could not be persisted"
+
 
 def test_databridge_live_command_requires_opt_ins_and_uses_live_evidence(
     monkeypatch: MonkeyPatch,
@@ -411,6 +424,27 @@ def test_databridge_mock_rejects_unbounded_or_misaligned_manifests(
         ],
     )
 
+    unknown_override = tmp_path / "unknown-override.json"
+    unknown_override.write_text(
+        json.dumps(
+            {
+                "responses": {"unknown-case": {"status": 403}},
+                "schema_version": "1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    unknown_override_result = runner.invoke(
+        app,
+        [
+            *command(dataset, fixture_sql, tmp_path / "unknown-override-store"),
+            "--responses",
+            str(_responses),
+            "--response-overrides",
+            str(unknown_override),
+        ],
+    )
+
     invalid_utf8 = tmp_path / "invalid-utf8.json"
     invalid_utf8.write_bytes(b'{"responses":{"private-byte-sentinel":\xff}}')
     invalid_utf8_result = runner.invoke(
@@ -422,10 +456,116 @@ def test_databridge_mock_rejects_unbounded_or_misaligned_manifests(
         ],
     )
 
-    for result in (oversized_result, unknown_result, invalid_utf8_result):
+    for result in (
+        oversized_result,
+        unknown_result,
+        unknown_override_result,
+        invalid_utf8_result,
+    ):
         assert result.exit_code == 2
         assert result.stderr.strip() == ("DataBridge evaluation could not be completed")
         assert result.exception is not None
         chain = exception_chain_text(result.exception)
         assert "private-byte-sentinel" not in chain
         assert "private-dsn-sentinel" not in chain
+
+
+def test_databridge_mode_validation_precedes_secret_reads(tmp_path: Path) -> None:
+    dataset, responses, fixture_sql = write_query_fixture(tmp_path)
+    base = command(dataset, fixture_sql, tmp_path / "store")
+    results = (
+        runner.invoke(app, base),
+        runner.invoke(
+            app,
+            [*base, "--responses", str(responses), "--allow-live"],
+        ),
+        runner.invoke(
+            app,
+            [
+                *base,
+                "--responses",
+                str(responses),
+                "--live-base-url",
+                "https://databridge.example",
+                "--allow-live",
+                "--confirm-synthetic-database",
+            ],
+        ),
+        runner.invoke(
+            app,
+            [
+                *base,
+                "--responses",
+                str(responses),
+                "--database-dsn-env",
+                "invalid-name",
+            ],
+        ),
+    )
+
+    for result in results:
+        assert result.exit_code == 2
+        assert result.stderr.strip() == ("DataBridge evaluation could not be completed")
+
+
+def test_databridge_rejects_fixture_mismatch_and_midrun_mutation(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    dataset, responses, fixture_sql = write_query_fixture(tmp_path)
+    monkeypatch.setenv("DATABRIDGE_EVAL_DSN", "private-dsn-sentinel")
+    monkeypatch.setattr(PsycopgPostgresExecutor, "execute", replay_success)
+
+    monkeypatch.setattr(
+        PsycopgPostgresExecutor,
+        "fingerprint_fixture",
+        lambda _executor: f"sha256:{'2' * 64}",
+    )
+    mismatch = runner.invoke(
+        app,
+        [
+            *command(dataset, fixture_sql, tmp_path / "mismatch-store"),
+            "--responses",
+            str(responses),
+        ],
+    )
+
+    fingerprints = iter((FIXTURE_FINGERPRINT, f"sha256:{'3' * 64}"))
+    monkeypatch.setattr(
+        PsycopgPostgresExecutor,
+        "fingerprint_fixture",
+        lambda _executor: next(fingerprints),
+    )
+    mutation = runner.invoke(
+        app,
+        [
+            *command(dataset, fixture_sql, tmp_path / "mutation-store"),
+            "--responses",
+            str(responses),
+        ],
+    )
+
+    assert mismatch.exit_code == mutation.exit_code == 2
+    assert not (tmp_path / "mismatch-store").exists()
+    assert not (tmp_path / "mutation-store").exists()
+
+
+def test_databridge_rejects_oversized_fixture_before_database_access(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    dataset, responses, fixture_sql = write_query_fixture(tmp_path)
+    fixture_sql.write_bytes(b"x" * ((4 * 1_024 * 1_024) + 1))
+    monkeypatch.setenv("DATABRIDGE_EVAL_DSN", "private-dsn-sentinel")
+
+    result = runner.invoke(
+        app,
+        [
+            *command(dataset, fixture_sql, tmp_path / "store"),
+            "--responses",
+            str(responses),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert result.stderr.strip() == "DataBridge evaluation could not be completed"
