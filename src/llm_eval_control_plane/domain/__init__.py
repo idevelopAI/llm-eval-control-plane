@@ -55,6 +55,13 @@ from llm_eval_control_plane.domain.results import (
     RunStatus,
     calculate_run_digest,
 )
+from llm_eval_control_plane.domain.sql import (
+    SqlBehavior,
+    SqlExpectation,
+    SqlReplayResult,
+    SqlResultOrder,
+    SqlTargetOutput,
+)
 
 __all__ = [
     "AggregateComparison",
@@ -90,6 +97,11 @@ __all__ = [
     "RunStatus",
     "ScoredObservation",
     "SkippedObservation",
+    "SqlBehavior",
+    "SqlExpectation",
+    "SqlReplayResult",
+    "SqlResultOrder",
+    "SqlTargetOutput",
     "TargetObservation",
     "TargetOutcome",
     "TargetRequest",
