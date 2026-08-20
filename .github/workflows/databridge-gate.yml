@@ -33,7 +33,6 @@ jobs:
           --health-retries 10
     env:
       DATABRIDGE_EVAL_DSN: postgresql://databridge_eval_reader@127.0.0.1:5432/databridge_eval
-      EVAL_STORE: ${{ runner.temp }}/databridge-evidence
       FIXTURE_FINGERPRINT: sha256:e40acff961cc83377391195acb15d09fa2931b1cc9b3dd01ee03fcc043a21a09
     steps:
       - name: Check out repository
@@ -89,7 +88,7 @@ jobs:
           --expected-fixture-fingerprint "$FIXTURE_FINGERPRINT"
           --responses examples/databridge/mock-responses-v1.json
           --target-revision 1
-          --store "$EVAL_STORE"
+          --store "$RUNNER_TEMP/databridge-evidence"
 
       - name: Run passing candidate evidence
         run: >-
@@ -100,7 +99,7 @@ jobs:
           --expected-fixture-fingerprint "$FIXTURE_FINGERPRINT"
           --responses examples/databridge/mock-responses-v1.json
           --target-revision 2
-          --store "$EVAL_STORE"
+          --store "$RUNNER_TEMP/databridge-evidence"
 
       - name: Enforce passing DataBridge policy
         run: >-
@@ -109,7 +108,7 @@ jobs:
           examples/databridge/cases-v1.jsonl
           --baseline-run databridge-baseline-ci
           --candidate-run databridge-candidate-pass-ci
-          --store "$EVAL_STORE"
+          --store "$RUNNER_TEMP/databridge-evidence"
           --format json
           --output "$RUNNER_TEMP/databridge-pass.json"
 
@@ -123,7 +122,7 @@ jobs:
           --responses examples/databridge/mock-responses-v1.json
           --response-overrides examples/databridge/regression-overrides-v2.json
           --target-revision 2
-          --store "$EVAL_STORE"
+          --store "$RUNNER_TEMP/databridge-evidence"
 
       - name: Prove the seeded regressions are blocked
         shell: bash
@@ -134,7 +133,7 @@ jobs:
             examples/databridge/cases-v1.jsonl \
             --baseline-run databridge-baseline-ci \
             --candidate-run databridge-candidate-regression-ci \
-            --store "$EVAL_STORE" \
+            --store "$RUNNER_TEMP/databridge-evidence" \
             --format json \
             --output "$RUNNER_TEMP/databridge-regression.json"
           gate_exit=$?
