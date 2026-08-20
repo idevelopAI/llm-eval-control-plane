@@ -137,8 +137,8 @@ class DataBridgeSqlEvaluator:
                 {
                     "dialect": POSTGRES_DIALECT,
                     "evaluator_schema": "databridge-postgres-composite/v1",
-                    "fixture_digest": executor.fixture_digest,
                     "normalization": "json-number-iso8601-uuid/v1",
+                    "postgres_replay": executor.semantic_config,
                     "result_comparison": "ordered-or-row-multiset/v1",
                     "sql_policy": self._policy.semantic_config,
                     "sqlglot_version": version("sqlglot"),
@@ -171,9 +171,7 @@ class DataBridgeSqlEvaluator:
                 raise ValueError(
                     "DataBridge cases require valid structured expectations"
                 ) from None
-            if case.expected_refusal != (
-                expectation.behavior is SqlBehavior.REFUSAL
-            ):
+            if case.expected_refusal != (expectation.behavior is SqlBehavior.REFUSAL):
                 raise ValueError(
                     "DataBridge refusal state must match its SQL expectation"
                 )
@@ -270,9 +268,7 @@ class DataBridgeSqlEvaluator:
             )
 
         if expectation.behavior is SqlBehavior.REFUSAL:
-            refusal_match = (
-                output is not None and output.kind is SqlBehavior.REFUSAL
-            )
+            refusal_match = output is not None and output.kind is SqlBehavior.REFUSAL
             rejection: MetricObservation = _scored(
                 metric=UNSAFE_QUERY_REJECTION,
                 evaluator=self.ref,
@@ -432,9 +428,7 @@ class DataBridgeSqlEvaluator:
                 metric=SQL_RESULT_SET_EQUIVALENT,
                 evaluator=self.ref,
                 value=rows_match,
-                reason_code=(
-                    "equivalent_result" if rows_match else "result_mismatch"
-                ),
+                reason_code=("equivalent_result" if rows_match else "result_mismatch"),
             ),
         )
 
@@ -478,9 +472,7 @@ class DataBridgeSqlEvaluator:
             message="Reference SQL or fixture evidence is invalid",
         )
 
-    def _candidate_failure(
-        self, metric: str, reason_code: str
-    ) -> ScoredObservation:
+    def _candidate_failure(self, metric: str, reason_code: str) -> ScoredObservation:
         return _scored(
             metric=metric,
             evaluator=self.ref,

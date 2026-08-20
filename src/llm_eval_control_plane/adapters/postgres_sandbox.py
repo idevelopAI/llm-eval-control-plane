@@ -7,6 +7,7 @@ from collections.abc import Callable, Sequence
 from contextlib import suppress
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
+from importlib.metadata import version
 from typing import Annotated, ClassVar, Protocol, cast
 from uuid import UUID
 
@@ -71,6 +72,9 @@ class PostgresExecutor(Protocol):
 
     @property
     def fixture_digest(self) -> Sha256Digest: ...
+
+    @property
+    def semantic_config(self) -> dict[str, object]: ...
 
     def execute(self, sql: str) -> SqlReplayResult: ...
 
@@ -168,11 +172,28 @@ class PsycopgPostgresExecutor:
     def fixture_digest(self) -> Sha256Digest:
         return self._config.fixture_digest
 
+    @property
+    def semantic_config(self) -> dict[str, object]:
+        """Return non-secret replay settings covered by evaluator identity."""
+        return {
+            "driver": {"name": "psycopg", "version": version("psycopg")},
+            "executor_schema": "psycopg-postgres-read-only/v1",
+            "fixture_digest": self.fixture_digest,
+            "limits": self._config.limits.model_dump(mode="json"),
+            "transaction": {
+                "read_only": True,
+                "rollback_always": True,
+                "search_path": "public",
+                "timezone": "UTC",
+            },
+        }
+
     @staticmethod
     def _load_connect() -> ConnectFactory:
         try:
             import psycopg
         except ImportError:
+
             def unavailable(*_args: object, **_kwargs: object) -> _Connection:
                 raise PostgresReplayError("dependency_unavailable")
 
