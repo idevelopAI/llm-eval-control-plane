@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Final
 
 from llm_eval_control_plane.domain import (
@@ -23,6 +24,21 @@ class FakeTargetError(RuntimeError):
     def __init__(self, code: str) -> None:
         super().__init__("Deterministic fake target could not execute the scenario")
         self.code = code
+
+
+class DeterministicStepClock:
+    """Advance a fixed duration on every read for reproducible offline runs."""
+
+    def __init__(self, *, step_ms: float = 5.0) -> None:
+        if not math.isfinite(step_ms) or step_ms <= 0:
+            raise ValueError("Clock step must be a positive finite duration")
+        self._next = 0.0
+        self._step_seconds = step_ms / 1_000
+
+    def __call__(self) -> float:
+        current = self._next
+        self._next += self._step_seconds
+        return current
 
 
 class DeterministicFakeTarget:

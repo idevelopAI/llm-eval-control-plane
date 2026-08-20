@@ -20,6 +20,9 @@ htmlcov/
 build/
 dist/
 
+# Local evaluation artifacts (may contain model inputs and outputs)
+.llm-eval/
+
 # Editors and operating systems
 .DS_Store
 .idea/
