@@ -127,6 +127,14 @@ class RunStatus(StrEnum):
     COMPLETED_WITH_FAILURES = "completed_with_failures"
 
 
+class ExecutionMode(StrEnum):
+    """Truthful execution environment recorded with every run."""
+
+    OFFLINE_DETERMINISTIC_FIXTURE = "offline_deterministic_fixture"
+    OFFLINE_MOCK = "offline_mock"
+    LIVE = "live"
+
+
 def _artifact_record(artifact: ArtifactRef) -> dict[str, JsonValue]:
     return {
         "digest": artifact.digest,
@@ -214,18 +222,21 @@ def calculate_run_digest(
     evaluators: tuple[ArtifactRef, ...],
     cases: tuple[CaseResult, ...],
     metrics: tuple[MetricSummary, ...],
+    execution_mode: ExecutionMode = ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE,
 ) -> str:
     """Hash the stable run content projection, excluding the caller's run ID."""
-    return sha256_digest(
-        {
-            "cases": [_case_record(case) for case in cases],
-            "dataset": _artifact_record(dataset),
-            "digest_schema": "run-result/v1",
-            "evaluators": [_artifact_record(evaluator) for evaluator in evaluators],
-            "metrics": [_summary_record(summary) for summary in metrics],
-            "target": _artifact_record(target),
-        }
-    )
+    record: dict[str, JsonValue] = {
+        "cases": [_case_record(case) for case in cases],
+        "dataset": _artifact_record(dataset),
+        "digest_schema": "run-result/v1",
+        "evaluators": [_artifact_record(evaluator) for evaluator in evaluators],
+        "metrics": [_summary_record(summary) for summary in metrics],
+        "target": _artifact_record(target),
+    }
+    if execution_mode is not ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE:
+        record["digest_schema"] = "run-result/v2"
+        record["execution_mode"] = execution_mode.value
+    return sha256_digest(record)
 
 
 class RunResult(FrozenModel):
@@ -233,6 +244,7 @@ class RunResult(FrozenModel):
 
     run_id: RunId
     status: RunStatus
+    execution_mode: ExecutionMode = ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE
     dataset: ArtifactRef
     target: ArtifactRef
     evaluators: Annotated[tuple[ArtifactRef, ...], Field(min_length=1)]
@@ -281,6 +293,7 @@ class RunResult(FrozenModel):
             evaluators=self.evaluators,
             cases=self.cases,
             metrics=self.metrics,
+            execution_mode=self.execution_mode,
         )
         if self.result_digest != expected_digest:
             raise ValueError("run result digest does not match canonical content")
@@ -296,6 +309,7 @@ class RunResult(FrozenModel):
         evaluators: tuple[ArtifactRef, ...],
         cases: tuple[CaseResult, ...],
         metrics: tuple[MetricSummary, ...],
+        execution_mode: ExecutionMode = ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE,
     ) -> RunResult:
         """Create a sorted, content-addressed complete result."""
         ordered_evaluators = tuple(
@@ -316,6 +330,7 @@ class RunResult(FrozenModel):
         return cls(
             run_id=run_id,
             status=status,
+            execution_mode=execution_mode,
             dataset=dataset,
             target=target,
             evaluators=ordered_evaluators,
@@ -327,5 +342,6 @@ class RunResult(FrozenModel):
                 evaluators=ordered_evaluators,
                 cases=ordered_cases,
                 metrics=ordered_metrics,
+                execution_mode=execution_mode,
             ),
         )

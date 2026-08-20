@@ -8,7 +8,11 @@ from llm_eval_control_plane.adapters import (
     DeterministicFakeTarget,
     build_evaluators,
 )
-from llm_eval_control_plane.application import InProcessRunner, RunnerConfigurationError
+from llm_eval_control_plane.application import (
+    InProcessRunner,
+    RunnerConfigurationError,
+    TargetInvocationError,
+)
 from llm_eval_control_plane.domain import (
     ArtifactKind,
     ArtifactRef,
@@ -17,6 +21,7 @@ from llm_eval_control_plane.domain import (
     DatasetVersion,
     EvaluationCase,
     ExecutionFailure,
+    ExecutionMode,
     FailureCode,
     RunResult,
     RunStatus,
@@ -56,6 +61,7 @@ def execute(
     evaluators: object | None = None,
     clock: SequenceClock | None = None,
     run_id: str = "test-run",
+    execution_mode: ExecutionMode = ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE,
 ) -> RunResult:
     selected_target = DeterministicFakeTarget() if target is None else target
     selected_evaluators = (
@@ -75,6 +81,7 @@ def execute(
             dataset=dataset_version,
             target=selected_target,  # type: ignore[arg-type]
             evaluators=selected_evaluators,  # type: ignore[arg-type]
+            execution_mode=execution_mode,
         )
     )
 
@@ -137,6 +144,40 @@ def test_runner_sanitizes_target_exceptions_and_keeps_elapsed_time() -> None:
     assert failure.message == "Target raised an exception"
     assert failure.latency_ms == 2.0
     assert result.status is RunStatus.COMPLETED_WITH_FAILURES
+
+
+class UnavailableTarget(DeterministicFakeTarget):
+    async def invoke(self, request: object) -> object:
+        del request
+        raise TargetInvocationError(
+            code=FailureCode.TARGET_UNAVAILABLE,
+            retryable=True,
+        )
+
+
+def test_runner_persists_typed_target_failures_without_provider_details() -> None:
+    result = execute(
+        dataset_version=dataset(case("case-a", "echo", value="answer")),
+        target=UnavailableTarget(),
+        execution_mode=ExecutionMode.LIVE,
+        clock=SequenceClock((0.0, 0.025)),
+    )
+
+    failure = result.cases[0].target_failure
+    assert failure is not None
+    assert failure.code is FailureCode.TARGET_UNAVAILABLE
+    assert failure.message == "Target was unavailable"
+    assert failure.retryable is True
+    assert failure.latency_ms == 25.0
+    assert result.execution_mode is ExecutionMode.LIVE
+
+
+def test_target_invocation_error_rejects_non_transport_codes() -> None:
+    with raises(ValueError, match="target transport code"):
+        TargetInvocationError(
+            code=FailureCode.EVALUATOR_EXCEPTION,
+            retryable=False,
+        )
 
 
 class BrokenEvaluator:

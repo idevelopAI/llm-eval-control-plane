@@ -90,6 +90,12 @@ class FailureStage(StrEnum):
 
 class FailureCode(StrEnum):
     TARGET_EXCEPTION = "target_exception"
+    TARGET_AUTHENTICATION = "target_authentication"
+    TARGET_PROTOCOL_ERROR = "target_protocol_error"
+    TARGET_RATE_LIMITED = "target_rate_limited"
+    TARGET_REJECTED = "target_rejected"
+    TARGET_TIMEOUT = "target_timeout"
+    TARGET_UNAVAILABLE = "target_unavailable"
     INVALID_TARGET_OUTPUT = "invalid_target_output"
     EVALUATOR_EXCEPTION = "evaluator_exception"
     INVALID_EVALUATOR_OUTPUT = "invalid_evaluator_output"

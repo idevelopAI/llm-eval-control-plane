@@ -8,6 +8,7 @@ from llm_eval_control_plane.domain import (
     CaseResult,
     CaseResultStatus,
     ExecutionFailure,
+    ExecutionMode,
     FailureCode,
     FailureStage,
     MetricSummary,
@@ -191,6 +192,35 @@ def test_run_result_is_sorted_content_addressed_and_run_id_independent() -> None
     assert first.status is RunStatus.COMPLETED
     assert [case.case_id for case in first.cases] == ["case-a", "case-b"]
     assert first.result_digest == second.result_digest
+
+
+def test_execution_mode_is_digest_covered_for_provider_runs() -> None:
+    live = RunResult.create(
+        run_id="live",
+        dataset=DATASET,
+        target=TARGET,
+        evaluators=(EVALUATOR,),
+        cases=(completed_case(),),
+        metrics=(summary(),),
+        execution_mode=ExecutionMode.LIVE,
+    )
+    mock = RunResult.create(
+        run_id="mock",
+        dataset=DATASET,
+        target=TARGET,
+        evaluators=(EVALUATOR,),
+        cases=(completed_case(),),
+        metrics=(summary(),),
+        execution_mode=ExecutionMode.OFFLINE_MOCK,
+    )
+
+    assert live.execution_mode is ExecutionMode.LIVE
+    assert live.result_digest != mock.result_digest
+
+    payload = live.model_dump()
+    payload["execution_mode"] = ExecutionMode.OFFLINE_MOCK
+    with raises(ValidationError, match="digest does not match"):
+        RunResult.model_validate(payload)
 
 
 def test_run_result_rejects_tampering_and_inconsistent_status() -> None:
