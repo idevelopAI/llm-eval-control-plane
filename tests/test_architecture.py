@@ -22,12 +22,14 @@ def imports_below(root: Path) -> Iterator[tuple[Path, str]]:
 
 def test_domain_does_not_depend_on_outer_or_infrastructure_layers() -> None:
     forbidden_roots = {
+        "alembic",
         "fastapi",
         "httpx",
         "opentelemetry",
         "redis",
         "sqlalchemy",
         "typer",
+        "uvicorn",
     }
     violations: list[str] = []
 
@@ -44,10 +46,21 @@ def test_domain_does_not_depend_on_outer_or_infrastructure_layers() -> None:
 
 
 def test_application_depends_only_inward() -> None:
+    forbidden_roots = {
+        "alembic",
+        "fastapi",
+        "httpx",
+        "opentelemetry",
+        "redis",
+        "sqlalchemy",
+        "typer",
+        "uvicorn",
+    }
     violations = [
         f"{source_path.name}: imports {module}"
         for source_path, module in imports_below(PACKAGE_ROOT / "application")
-        if module == "llm_eval_control_plane.cli"
+        if module.split(".", maxsplit=1)[0] in forbidden_roots
+        or module == "llm_eval_control_plane.cli"
         or module.startswith("llm_eval_control_plane.adapters")
     ]
 
