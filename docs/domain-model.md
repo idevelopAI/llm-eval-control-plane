@@ -14,6 +14,7 @@
 | `CaseResult` | Target evidence and all evaluator outcomes for one case | Implemented |
 | `MetricSummary` | Attempted/scored/skipped/error counts and optional mean | Implemented |
 | `RunResult` | Complete immutable run with resolved artifacts and digest | Implemented |
+| `ExecutionMode` | `offline_deterministic_fixture`, `offline_mock`, or `live` evidence boundary | Implemented |
 | `EvaluationSpec` | Dataset, candidate, baseline, and slice-aware gate policy | Implemented |
 | `MetricGate` | Directional threshold and absolute regression budget | Implemented |
 | `MetricAggregate` | Attempted/scored/skipped/error evidence for one metric and slice | Implemented |
@@ -21,6 +22,9 @@
 | `GateCaseComparison` | Threshold-relative case transition for one configured gate | Implemented |
 | `GateResult` | Coverage, threshold, and regression checks for one gate | Implemented |
 | `ReleaseDecision` | Content-addressed pass/fail evidence for the whole policy | Implemented |
+| `SqlExpectation` | Reviewed query, clarification, or refusal oracle | Implemented |
+| `SqlTargetOutput` | Minimal normalized decision and generated-SQL evidence | Implemented |
+| `SqlReplayResult` | Bounded normalized PostgreSQL columns and rows | Implemented |
 | Suite version | Dataset, evaluators, slices, and execution settings | Deferred |
 
 The deterministic fake target and built-in scorers are adapter implementations,
@@ -48,6 +52,9 @@ behavior revisions inside a run.
 - Each case is invoked exactly once by the evaluation runner.
 - Target responses require structured refusal state and explicit non-negative
   input/output usage. Refusals are never inferred from wording.
+- Every run records its execution mode. Deterministic fake runs default to
+  `offline_deterministic_fixture`; DataBridge mock and live runs record
+  `offline_mock` and `live` explicitly.
 - The application boundary validates every untrusted target and evaluator return
   value.
 - Missing or invalid target output produces a sanitized target failure and does
@@ -71,8 +78,53 @@ behavior revisions inside a run.
 - `completed_with_failures` represents technical target/evaluator failures, not
   low metric values. Release policy is applied later by comparison.
 - The result digest covers resolved artifacts, target evidence, observations,
-  failures, and aggregates. It excludes only the caller-selected run ID.
+  failures, aggregates, and non-legacy execution mode. It excludes only the
+  caller-selected run ID.
 - Loading a stored result recalculates and verifies its result digest.
+
+## DataBridge SQL invariants
+
+- DataBridge input is a strict object containing only `question`,
+  `chat_history`, and `language` (`en` or `de`). Expected SQL, expected results,
+  refusal state, and slices remain evaluator-only data.
+- `SqlExpectation.behavior` is exactly `query`, `clarification`, or `refusal`.
+  Query expectations require reviewed SQL, unique expected column names,
+  expected rows, and `ordered` or `unordered` row semantics. They cannot contain
+  clarification codes.
+- Clarification expectations contain one or more accepted stable codes and no
+  SQL evidence. Refusal expectations contain neither SQL evidence nor
+  clarification codes. Explicit irrelevant fields are rejected even when their
+  value is `null`.
+- Normalized query output contains one to 16 SQL executions. Clarification
+  output contains a stable code and no SQL. Refusal output contains neither.
+  Natural-language answers, returned database rows and columns, request IDs, and
+  provider timings do not enter `SqlTargetOutput`.
+- The strict DataBridge wire response is bounded and category-consistent:
+  `answered` requires at least one execution, while
+  `clarification_required` permits none. HTTP `403` is normalized as structured
+  refusal without parsing or retaining the response body.
+- Every SQL execution is policy-checked before a database connection is opened.
+  The PostgreSQL policy requires exactly one query, rejects comments and
+  prohibited syntax, restricts schemas and tables, and allowlists deterministic
+  functions. Policy-rejected SQL is never replayed.
+- PostgreSQL replay uses the original accepted SQL in a fresh explicit read-only
+  transaction with statement, lock, connection, row, column, cell, and encoded
+  result limits. Rollback and connection close are attempted on every path.
+- Evaluation starts only when the connected fixture matches its pinned
+  normalized content fingerprint, rechecks that fingerprint before persistence,
+  and covers it together with the seed-file digest in evaluator identity.
+- PostgreSQL scalars normalize to canonical JSON-safe booleans, integers,
+  finite floats, strings, `null`, ISO 8601 dates/times, and lowercase UUID text.
+  Unsupported or non-finite values produce sanitized replay errors.
+- The composite evaluator emits exactly one scored, skipped, or error
+  observation for each of its eight metrics. Query candidate failures score
+  zero; a broken reference SQL/fixture oracle produces technical error evidence;
+  category-inapplicable metrics are explicitly skipped.
+- Ordered result expectations compare canonical rows positionally. Unordered
+  expectations compare row multisets, preserving duplicate counts.
+- DataBridge mock response, latency, and usage evidence is deterministic and
+  simulated. It does not establish deployed-model accuracy or performance. Live
+  accuracy was not run for this release.
 
 ## Persistence invariants
 
@@ -110,6 +162,7 @@ Before gate evaluation, the comparator requires:
 - policy target names/revisions and optional digests to match resolved runs;
 - identical ordered case IDs, metric sets, evaluator revisions, and digests;
 - stored global metric summaries to equal aggregates recomputed from cases.
+- candidate and baseline runs to use the same execution mode.
 
 A gate's coverage check requires both sides to have zero errors, at least one
 scored case, equal scored counts, and equal skipped counts. Coverage, threshold,
@@ -121,9 +174,9 @@ target/evaluator failures are incomparable and force the relevant coverage gate
 to fail.
 
 The release decision is failed if any gate fails. Its digest includes resolved
-dataset/target/evaluator identities, both result digests, every aggregate, gate
-result, and gate-scoped case transition. Run IDs are excluded so equivalent
-evidence has the same decision identity.
+dataset/target/evaluator identities, both result digests, execution mode, every
+aggregate, gate result, and gate-scoped case transition. Run IDs are excluded so
+equivalent evidence has the same decision identity.
 
 `EvaluationSpec.schema_version` is currently the literal value `"1"`. Breaking
 changes require a new schema version and migration path; optional fields may

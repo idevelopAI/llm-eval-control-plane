@@ -89,9 +89,10 @@ The evaluator emits these metrics:
 | `sql.expected_columns` | exact expected column names and order |
 | `sql.result_set_equivalent` | ordered sequence or duplicate-preserving multiset match |
 
-Stable reason codes are persisted instead of SQL, row values, or database error
-text. Candidate mistakes score zero. Broken reference evidence is an evaluation
-error and therefore fails coverage.
+Scorer observations persist stable reason codes instead of copying SQL, row
+values, or database error text into messages. Generated SQL remains sensitive
+target evidence; returned rows do not. Candidate mistakes score zero. Broken
+reference evidence is an evaluation error and therefore fails coverage.
 
 ## Mock and live boundaries
 
@@ -111,4 +112,3 @@ execute generated SQL before its response reaches this control plane. It require
 No live result is claimed in the README until that opt-in workflow has actually
 been run. The repository's continuous integration has no DataBridge API secret
 and cannot enter live mode.
-
