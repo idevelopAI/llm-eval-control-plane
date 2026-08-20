@@ -138,6 +138,22 @@ def test_case_comparison_derives_newly_failing_state() -> None:
     with raises(ValidationError, match="change does not match"):
         GateCaseComparison.model_validate(payload)
 
+    payload = item.model_dump()
+    payload["delta"] = None
+    with raises(ValidationError, match="delta exists exactly"):
+        GateCaseComparison.model_validate(payload)
+
+    payload = item.model_dump()
+    payload["baseline"] = {"status": "skipped", "value": None}
+    payload["delta"] = None
+    with raises(ValidationError, match="pass states exist exactly"):
+        GateCaseComparison.model_validate(payload)
+
+    payload = item.model_dump()
+    payload["slices"] = ("language/en", "answerability/answerable")
+    with raises(ValidationError, match="canonically ordered"):
+        GateCaseComparison.model_validate(payload)
+
 
 def test_aggregate_requires_complete_coverage_accounting() -> None:
     with raises(ValidationError, match="outcome counts"):
@@ -154,6 +170,35 @@ def test_aggregate_requires_complete_coverage_accounting() -> None:
     with raises(ValidationError, match="delta exists exactly"):
         AggregateComparison.model_validate(payload)
 
+    with raises(ValidationError, match="mean exists exactly"):
+        MetricAggregate(
+            attempted=10,
+            scored=10,
+            skipped=0,
+            errors=0,
+        )
+
+    payload = aggregate().model_dump()
+    payload["evaluator"] = DATASET.model_dump()
+    with raises(ValidationError, match="must reference an evaluator"):
+        AggregateComparison.model_validate(payload)
+
+    payload = aggregate().model_dump()
+    payload["evaluator"] = EVALUATOR.model_copy(update={"digest": None}).model_dump()
+    with raises(ValidationError, match="resolved digest"):
+        AggregateComparison.model_validate(payload)
+
+    payload = aggregate().model_dump()
+    payload["candidate"] = {
+        "attempted": 11,
+        "scored": 11,
+        "skipped": 0,
+        "errors": 0,
+        "mean": 0.9,
+    }
+    with raises(ValidationError, match="attempt the same"):
+        AggregateComparison.model_validate(payload)
+
 
 def test_gate_result_requires_matching_failure_codes_and_status() -> None:
     failed = gate_result(passed=False)
@@ -164,6 +209,16 @@ def test_gate_result_requires_matching_failure_codes_and_status() -> None:
     payload = failed.model_dump()
     payload["failure_codes"] = ()
     with raises(ValidationError, match="failure codes"):
+        GateResult.model_validate(payload)
+
+    payload = failed.model_dump()
+    payload["metric"] = "quality.other"
+    with raises(ValidationError, match="reference its aggregate"):
+        GateResult.model_validate(payload)
+
+    payload = failed.model_dump()
+    payload["status"] = GateStatus.PASSED
+    with raises(ValidationError, match="status does not match"):
         GateResult.model_validate(payload)
 
 
@@ -183,4 +238,51 @@ def test_release_decision_fails_when_any_gate_fails_and_rejects_tampering() -> N
     payload = failed.model_dump()
     payload["decision_digest"] = "sha256:" + "0" * 64
     with raises(ValidationError, match="digest does not match"):
+        ReleaseDecision.model_validate(payload)
+
+
+def test_release_decision_rejects_invalid_artifacts_order_and_status() -> None:
+    valid = decision()
+
+    payload = valid.model_dump(mode="json")
+    payload["dataset"] = BASELINE.model_dump(mode="json")
+    with raises(ValidationError, match="resolved dataset"):
+        ReleaseDecision.model_validate(payload)
+
+    payload = valid.model_dump(mode="json")
+    payload["baseline"] = DATASET.model_dump(mode="json")
+    with raises(ValidationError, match="resolved target"):
+        ReleaseDecision.model_validate(payload)
+
+    payload = valid.model_dump(mode="json")
+    second = payload["aggregates"][0].copy()
+    second["metric"] = "performance.latency_ms"
+    payload["aggregates"] = [payload["aggregates"][0], second]
+    with raises(ValidationError, match="aggregates must be canonically ordered"):
+        ReleaseDecision.model_validate(payload)
+
+    payload = valid.model_dump(mode="json")
+    second = payload["gates"][0].copy()
+    second["metric"] = "performance.latency_ms"
+    second["aggregate"] = second["aggregate"].copy()
+    second["aggregate"]["metric"] = "performance.latency_ms"
+    payload["gates"] = [payload["gates"][0], second]
+    with raises(ValidationError, match="gates must be canonically ordered"):
+        ReleaseDecision.model_validate(payload)
+
+    payload = valid.model_dump(mode="json")
+    second = payload["cases"][0].copy()
+    second["metric"] = "performance.latency_ms"
+    payload["cases"] = [payload["cases"][0], second]
+    with raises(ValidationError, match="cases must be canonically ordered"):
+        ReleaseDecision.model_validate(payload)
+
+    payload = valid.model_dump(mode="json")
+    payload["gates"] = [payload["gates"][0], payload["gates"][0]]
+    with raises(ValidationError, match="gates must be unique"):
+        ReleaseDecision.model_validate(payload)
+
+    payload = valid.model_dump(mode="json")
+    payload["status"] = ReleaseStatus.FAILED
+    with raises(ValidationError, match="status does not match"):
         ReleaseDecision.model_validate(payload)
