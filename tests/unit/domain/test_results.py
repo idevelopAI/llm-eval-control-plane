@@ -37,6 +37,7 @@ def ref(kind: ArtifactKind, name: str) -> ArtifactRef:
 DATASET = ref(ArtifactKind.DATASET, "dataset")
 TARGET = ref(ArtifactKind.TARGET, "target")
 EVALUATOR = ref(ArtifactKind.EVALUATOR, "evaluator")
+SECOND_EVALUATOR = ref(ArtifactKind.EVALUATOR, "second-evaluator")
 
 
 def target_observation() -> TargetObservation:
@@ -103,6 +104,40 @@ def test_case_result_rejects_duplicate_observations() -> None:
             status=CaseResultStatus.COMPLETED,
             target=target_observation(),
             observations=(observation, observation),
+        )
+
+
+def test_case_result_requires_canonical_nested_ordering() -> None:
+    first = completed_case().observations[0]
+    second = ScoredObservation(
+        metric="second_metric",
+        evaluator=SECOND_EVALUATOR,
+        value=1.0,
+        reason_code="observed",
+    )
+    with raises(ValidationError, match="observations must be canonically ordered"):
+        CaseResult(
+            case_id="unordered",
+            status=CaseResultStatus.COMPLETED,
+            target=target_observation(),
+            observations=(second, first),
+        )
+
+    failures = tuple(
+        ExecutionFailure(
+            stage=FailureStage.EVALUATOR,
+            code=FailureCode.EVALUATOR_EXCEPTION,
+            message="Evaluator raised an exception",
+            evaluator=evaluator,
+        )
+        for evaluator in (SECOND_EVALUATOR, EVALUATOR)
+    )
+    with raises(ValidationError, match="failures must be canonically ordered"):
+        CaseResult(
+            case_id="unordered",
+            status=CaseResultStatus.COMPLETED_WITH_ERRORS,
+            target=target_observation(),
+            evaluator_failures=failures,
         )
 
 
@@ -175,4 +210,41 @@ def test_run_result_rejects_tampering_and_inconsistent_status() -> None:
     payload = run.model_dump()
     payload["status"] = RunStatus.COMPLETED_WITH_FAILURES
     with raises(ValidationError, match="status does not match"):
+        RunResult.model_validate(payload)
+
+
+def test_run_result_requires_canonical_top_level_ordering() -> None:
+    run = RunResult.create(
+        run_id="run",
+        dataset=DATASET,
+        target=TARGET,
+        evaluators=(SECOND_EVALUATOR, EVALUATOR),
+        cases=(completed_case("case-b"), completed_case("case-a")),
+        metrics=(
+            summary(),
+            MetricSummary(
+                metric="second_metric",
+                evaluator=SECOND_EVALUATOR,
+                attempted=1,
+                scored=1,
+                skipped=0,
+                errors=0,
+                mean=1.0,
+            ),
+        ),
+    )
+
+    payload = run.model_dump()
+    payload["evaluators"] = tuple(reversed(payload["evaluators"]))
+    with raises(ValidationError, match="references must be canonically ordered"):
+        RunResult.model_validate(payload)
+
+    payload = run.model_dump()
+    payload["cases"] = tuple(reversed(payload["cases"]))
+    with raises(ValidationError, match="case results must be canonically ordered"):
+        RunResult.model_validate(payload)
+
+    payload = run.model_dump()
+    payload["metrics"] = tuple(reversed(payload["metrics"]))
+    with raises(ValidationError, match="summaries must be canonically ordered"):
         RunResult.model_validate(payload)

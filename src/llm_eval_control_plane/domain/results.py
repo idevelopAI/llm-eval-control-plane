@@ -77,6 +77,13 @@ class CaseResult(FrozenModel):
             raise ValueError("case evaluator failures must use the evaluator stage")
         if len(evaluator_failures) != len(set(evaluator_failures)):
             raise ValueError("case evaluator failures must be unique")
+        failure_keys = [
+            failure.evaluator.logical_key
+            for failure in self.evaluator_failures
+            if failure.evaluator is not None
+        ]
+        if failure_keys != sorted(failure_keys):
+            raise ValueError("case evaluator failures must be canonically ordered")
 
         observation_keys = [
             (observation.evaluator.logical_key, observation.metric)
@@ -84,6 +91,8 @@ class CaseResult(FrozenModel):
         ]
         if len(observation_keys) != len(set(observation_keys)):
             raise ValueError("case observations must have unique evaluator metrics")
+        if observation_keys != sorted(observation_keys):
+            raise ValueError("case observations must be canonically ordered")
         return self
 
 
@@ -245,9 +254,18 @@ class RunResult(FrozenModel):
         evaluator_keys = [evaluator.logical_key for evaluator in self.evaluators]
         if len(evaluator_keys) != len(set(evaluator_keys)):
             raise ValueError("run evaluator references must be unique")
+        if evaluator_keys != sorted(evaluator_keys):
+            raise ValueError("run evaluator references must be canonically ordered")
         case_ids = [case.case_id for case in self.cases]
         if len(case_ids) != len(set(case_ids)):
             raise ValueError("run case results must be unique")
+        if case_ids != sorted(case_ids):
+            raise ValueError("run case results must be canonically ordered")
+        metric_keys = [
+            (summary.metric, summary.evaluator.logical_key) for summary in self.metrics
+        ]
+        if metric_keys != sorted(metric_keys):
+            raise ValueError("run metric summaries must be canonically ordered")
 
         has_failures = any(
             case.status is not CaseResultStatus.COMPLETED for case in self.cases
