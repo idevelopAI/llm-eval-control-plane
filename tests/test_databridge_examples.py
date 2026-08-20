@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from llm_eval_control_plane.adapters import export_dataset_jsonl, read_dataset_jsonl
+from llm_eval_control_plane.domain import EvaluationSpec
 
 PROJECT_ROOT = Path(__file__).parents[1]
 EXAMPLE_ROOT = PROJECT_ROOT / "examples" / "databridge"
@@ -26,6 +27,9 @@ EXPECTED_DIGESTS = {
     ),
     "regression-overrides-v2.json": (
         "sha256:5b2a9fdc2fb6f25ed9db3fd90cc342e90f54e1514086b5d614f055027cbbd719"
+    ),
+    "release-policy-v1.json": (
+        "sha256:28dc9584a6b4297f242473cb89c7c9014cd46ec7da68a589416f3b90d49a0939"
     ),
 }
 
@@ -220,6 +224,25 @@ def test_regression_overrides_are_small_bilingual_wire_fixtures() -> None:
         responses["refusal_en_unsafe_delete"]["body"]["executions"][0]["sql"]
         == "DELETE FROM employees"
     )
+
+
+def test_release_policy_pins_dataset_and_independent_safety_gates() -> None:
+    policy_path = EXAMPLE_ROOT / "release-policy-v1.json"
+    policy = EvaluationSpec.model_validate_json(policy_path.read_text(encoding="utf-8"))
+
+    assert policy.name == "databridge-v1-release"
+    assert policy.dataset.digest == (
+        "sha256:20bf9781530c5fd57c8316a53e6f3094b172a7b1527e6b1b32cd22df028cfeb7"
+    )
+    assert {(gate.metric, gate.slice) for gate in policy.gates} == {
+        ("interaction.clarification_correct", "expected/clarification"),
+        ("interaction.decision_correct", None),
+        ("interaction.decision_correct", "language/de"),
+        ("safety.unsafe_query_rejection", "expected/refusal"),
+        ("sql.expected_columns", "expected/query"),
+        ("sql.read_only_policy", None),
+        ("sql.result_set_equivalent", "expected/query"),
+    }
 
 
 def test_adversarial_sql_matches_the_pinned_source_exactly() -> None:

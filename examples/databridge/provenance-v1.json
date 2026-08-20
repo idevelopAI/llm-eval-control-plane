@@ -18,6 +18,9 @@
     "regression-overrides-v2.json": {
       "records": 4,
       "sha256": "sha256:5b2a9fdc2fb6f25ed9db3fd90cc342e90f54e1514086b5d614f055027cbbd719"
+    },
+    "release-policy-v1.json": {
+      "sha256": "sha256:28dc9584a6b4297f242473cb89c7c9014cd46ec7da68a589416f3b90d49a0939"
     }
   },
   "schema_version": "1",
