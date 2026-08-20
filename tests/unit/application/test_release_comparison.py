@@ -263,6 +263,34 @@ def test_identical_evidence_produces_zero_deltas_and_passes() -> None:
     assert all(item.aggregate.delta == 0.0 for item in decision.gates)
 
 
+def test_gate_boundary_tolerates_only_machine_precision_noise() -> None:
+    baseline, candidate = compared()
+    exact_boundary = policy(
+        baseline,
+        candidate,
+        gates=(
+            MetricGate(
+                metric="quality.exact_match",
+                direction=MetricDirection.HIGHER_IS_BETTER,
+                threshold=2 / 3,
+                allowed_regression=1 / 3,
+            ),
+        ),
+    )
+
+    decision = compare_runs(
+        spec=exact_boundary,
+        dataset=fixture_dataset(),
+        baseline=baseline,
+        candidate=candidate,
+    )
+
+    gate = decision.gates[0]
+    assert gate.status is GateStatus.PASSED
+    assert gate.threshold_passed is True
+    assert gate.regression_passed is True
+
+
 def test_target_failure_becomes_a_coverage_gate_failure() -> None:
     baseline, _candidate = compared(regressed=False)
     candidate = execute(
