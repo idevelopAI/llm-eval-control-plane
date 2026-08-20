@@ -2,25 +2,28 @@
 
 ## System objective
 
-LLM Eval Control Plane makes AI application releases measurable. It resolves
-immutable evaluation inputs, executes a candidate and optional baseline against
-the same cases, stores case-level evidence, aggregates versioned metrics, and
-produces a deterministic gate decision.
+LLM Eval Control Plane turns AI application behavior into reproducible evidence.
+The implemented Phase 1 slice loads a content-addressed dataset, invokes a
+versioned target once per case, validates untrusted responses, applies versioned
+evaluators, preserves case-level outcomes, aggregates coverage-aware metrics,
+and atomically stores a complete immutable run.
+
+Candidate/baseline comparison and deterministic release-gate decisions remain
+outside the current execution slice.
 
 ## Architectural style
 
-The project begins as a modular monolith. Process boundaries will be introduced
-only when durable execution or independent scaling requires them.
+The project is a modular monolith. The CLI is the composition root: it constructs
+concrete adapters and passes them into application-owned protocol ports.
 
 ```mermaid
 flowchart LR
-    CLI["CLI / GitHub Action"] --> APP["Application use cases"]
-    API["HTTP API"] --> APP
-    WORKER["Worker entry point"] --> APP
-    APP --> DOMAIN["Domain contracts and rules"]
-    APP --> PORTS["Repository and target ports"]
-    ADAPTERS["PostgreSQL / HTTP target adapters"] --> PORTS
-    APP --> ADAPTERS
+    CLI["CLI composition root"] --> RUNNER["Application runner"]
+    CLI --> ADAPTERS["Concrete adapters"]
+    RUNNER --> PORTS["Target / evaluator / repository ports"]
+    RUNNER --> DOMAIN["Immutable domain contracts"]
+    ADAPTERS -. implement .-> PORTS
+    ADAPTERS --> DOMAIN
 ```
 
 The compile-time dependency rule is:
@@ -29,68 +32,108 @@ The compile-time dependency rule is:
 entrypoints and adapters -> application -> domain
 ```
 
-The domain layer must not import FastAPI, SQLAlchemy, Redis, OpenTelemetry, or
-model-provider SDKs. Evaluator implementations and target integrations are
-adapters; text-to-SQL and RAG are not hard-coded into the core state model.
+The application layer does not import concrete adapters. The domain does not
+import CLI, persistence, network, telemetry, queue, database, or provider SDKs.
 
-## Current structure
+## Implemented structure
 
 ```text
 src/llm_eval_control_plane/
-├── cli.py                 # contract inspection and validation only
+├── cli.py
+├── application/
+│   ├── ports.py           # target, evaluator, and run-repository protocols
+│   └── runner.py          # serial in-process orchestration and aggregation
+├── adapters/
+│   ├── fake_target.py     # deterministic offline target and synthetic clock
+│   ├── filesystem.py      # atomic append-only local run storage
+│   ├── jsonl.py           # strict normalized dataset transport
+│   └── scorers.py         # deterministic built-in evaluators
 └── domain/
     ├── artifacts.py       # immutable version references
-    ├── evaluation.py      # metric gates and evaluation specifications
-    └── models.py          # shared strict/frozen model behavior
+    ├── canonical.py       # strict parsing and RFC 8785 hashing
+    ├── datasets.py        # reviewed cases and dataset versions
+    ├── evaluation.py      # future gate specifications
+    ├── execution.py       # target and evaluator result envelopes
+    ├── models.py          # shared strict/frozen model behavior
+    └── results.py         # case evidence, aggregates, and run digests
 ```
 
-Planned modules will be introduced when their first complete use case exists:
-
-```text
-src/llm_eval_control_plane/
-├── application/           # orchestration and Protocol ports
-├── adapters/              # target, persistence, and evaluator implementations
-├── entrypoints/           # CLI, API, and worker boundaries
-└── bootstrap/             # settings, logging, and dependency composition
-```
-
-## Evaluation flow
+## Phase 1 execution flow
 
 ```mermaid
 sequenceDiagram
     participant User
-    participant Control as Control Plane
-    participant Target
-    participant Evaluator
-    participant Gate
+    participant CLI
+    participant Loader as JSONL adapter
+    participant Runner as Application runner
+    participant Target as Target port
+    participant Eval as Evaluator ports
+    participant Store as Run repository
 
-    User->>Control: Submit versioned specification
-    Control->>Control: Resolve immutable artifacts
-    loop Every evaluation case
-        Control->>Target: Execute bounded request
-        Target-->>Control: Output + evidence + usage
-        Control->>Evaluator: Score validated result
-        Evaluator-->>Control: Metric observations
+    User->>CLI: run dataset + immutable run ID
+    CLI->>Loader: parse strict UTF-8 JSONL
+    Loader-->>CLI: sorted, content-addressed dataset
+    CLI->>Runner: inject target, evaluators, clock
+    loop Every case in canonical order
+        Runner->>Target: case ID + input only
+        Target-->>Runner: untrusted response envelope
+        Runner->>Runner: validate response and measured latency
+        Runner->>Eval: case expectations + validated observation
+        Eval-->>Runner: scored / skipped / error evidence
     end
-    Control->>Control: Aggregate metrics and slices
-    Control->>Gate: Compare candidate with policy/baseline
-    Gate-->>User: Pass/fail decision with evidence
+    Runner->>Runner: aggregate every attempted metric
+    Runner-->>CLI: immutable RunResult + result digest
+    CLI->>Store: atomic create-once save
+    CLI-->>User: redacted JSON summary
 ```
+
+Target expectations are never passed through the target port. Target and
+evaluator exceptions are converted to bounded failure codes; remaining cases
+continue. The runner catches ordinary exceptions but does not swallow process
+control exceptions such as cancellation or keyboard interruption.
+
+## Determinism boundaries
+
+- Dataset content uses RFC 8785 canonical JSON. Case and slice order are
+  normalized before hashing.
+- Result arrays have enforced canonical order. The result digest excludes the
+  caller-selected run ID but includes outputs, observations, usage, and measured
+  latency.
+- The offline CLI injects a fixed-step clock so the checked-in fixture produces
+  stable bytes. Its 5 ms values are synthetic and must not be presented as a
+  performance benchmark.
+- A future live target will use the runner's monotonic clock; measured latency
+  will then intentionally change the result digest.
+
+## Persistence contract
+
+One complete run is stored as an RFC 8785 envelope plus exactly one LF. Run IDs
+are validated before path construction and mapped to domain-separated SHA-256
+filenames, avoiding traversal, reserved-name, and case-insensitive collisions.
+
+Publishing uses a fully written same-directory temporary file and an atomic hard
+link. Existing byte-identical content is an idempotent success; different valid
+content is a conflict; corrupt or special files fail closed. Reads are bounded,
+reject symlinks and non-regular files where the platform supports those checks,
+revalidate the storage schema and domain digest, and require exact canonical
+bytes.
 
 ## Trust boundaries
 
-- Target responses, documents, SQL, citations, and model-generated structures
-  are untrusted.
-- A target adapter may reference a credential but cannot serialize it into a run
-  manifest or result.
-- Default telemetry contains bounded identifiers, timings, counts, and outcome
-  codes—not evaluation content.
-- Deterministic fixtures run in CI. Live-provider evaluations are opt-in and do
-  not determine whether ordinary unit tests pass.
+- Dataset lines, target outputs, schemas, and stored bytes are untrusted.
+- Remote JSON Schema references are disabled; evaluation never performs schema
+  network fetches.
+- Credentials are absent from Phase 1. The offline target requires no environment
+  variables, keys, or provider SDKs.
+- Default CLI output contains bounded identifiers, digests, counts, metrics, and
+  failure codes—not inputs, expectations, target outputs, or exception text.
+- Local artifacts can contain evaluation content. `.llm-eval/` is ignored, and
+  POSIX stores use `0700` directories and `0600` files.
 
-## Deferred decisions
+## Deferred boundaries
 
-PostgreSQL, Redis-backed execution, FastAPI, React, OpenTelemetry, authentication,
-and cloud infrastructure are intentionally deferred until their corresponding
-vertical slice. Kubernetes, multi-cloud support, billing, and arbitrary
-third-party Python plugins are outside the MVP.
+Real target adapters, comparison and gates, PostgreSQL, durable queues, an HTTP
+API, a dashboard, OpenTelemetry, authentication, and cloud infrastructure will
+be introduced only with a complete vertical slice and its tests. Kubernetes,
+multi-cloud abstractions, billing, and arbitrary third-party Python plugins are
+outside the MVP.

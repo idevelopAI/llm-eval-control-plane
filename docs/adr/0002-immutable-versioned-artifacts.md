@@ -13,7 +13,7 @@ for authoring but insufficient as evidence.
 
 Every reproducibility-relevant input is referenced by artifact kind, stable name,
 positive revision, and optional SHA-256 digest. Published revisions are immutable;
-changes create a new revision. A run will store fully resolved references.
+changes create a new revision. A run stores fully resolved references.
 
 Credentials are never part of an artifact snapshot. Target versions will contain
 only a secret reference that is resolved at execution time.
@@ -22,5 +22,5 @@ only a secret reference that is resolved at execution time.
 
 - A run can be connected to the exact inputs that produced it.
 - Storage will contain more artifact revisions instead of in-place edits.
-- Canonical hashing rules must be specified before content-derived versions are
-  introduced.
+- Canonical hashing rules are a public compatibility contract for
+  content-derived versions; see ADR 0003.
