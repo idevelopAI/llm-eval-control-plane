@@ -135,6 +135,20 @@ def test_deterministic_storage_envelope_has_final_newline(tmp_path: Path) -> Non
     assert payload == stored_path(second_root, "run-001").read_bytes()
 
 
+def test_get_loads_pre_execution_mode_run_artifacts(tmp_path: Path) -> None:
+    repository = FilesystemRunRepository(tmp_path)
+    expected = result()
+    repository.save(expected)
+    path = stored_path(tmp_path, expected.run_id)
+    document = json.loads(path.read_bytes())
+    del document["result"]["execution_mode"]
+    path.write_bytes(canonical_json_bytes(document) + b"\n")
+
+    loaded = repository.get(expected.run_id)
+
+    assert loaded == expected
+
+
 def test_hashed_storage_keys_avoid_platform_filename_collisions(tmp_path: Path) -> None:
     repository = FilesystemRunRepository(tmp_path)
 
