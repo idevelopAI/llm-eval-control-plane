@@ -44,8 +44,10 @@ def test_parse_json_rejects_non_finite_numbers(constant: str) -> None:
 def test_parse_json_rejects_bom_and_malformed_json() -> None:
     with raises(CanonicalJsonError, match="must not start with a BOM"):
         parse_json('\ufeff{"ok":true}')
-    with raises(CanonicalJsonError, match="Could not parse JSON"):
+    with raises(CanonicalJsonError, match="Could not parse JSON") as raised:
         parse_json("not-json")
+    assert raised.value.line == 1
+    assert raised.value.column == 1
 
 
 @mark.parametrize(

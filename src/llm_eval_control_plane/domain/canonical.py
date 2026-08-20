@@ -19,9 +19,18 @@ JsonValue: TypeAlias = (
 class CanonicalJsonError(ValueError):
     """Describe invalid JSON without retaining or echoing its contents."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        line: int | None = None,
+        column: int | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.line = line
+        self.column = column
 
 
 def _reject_constant(_value: str) -> None:
@@ -83,7 +92,12 @@ def parse_json(text: str) -> JsonValue:
     except CanonicalJsonError:
         raise
     except json.JSONDecodeError as error:
-        raise CanonicalJsonError("invalid_json", "Could not parse JSON") from error
+        raise CanonicalJsonError(
+            "invalid_json",
+            "Could not parse JSON",
+            line=error.lineno,
+            column=error.colno,
+        ) from error
     return _validated_json_value(value)
 
 
