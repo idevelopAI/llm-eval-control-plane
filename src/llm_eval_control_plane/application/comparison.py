@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from decimal import Decimal
 
 from llm_eval_control_plane.domain import (
     AggregateComparison,
@@ -80,7 +81,10 @@ def compare_runs(
             delta = (
                 None
                 if baseline_aggregate.mean is None or candidate_aggregate.mean is None
-                else candidate_aggregate.mean - baseline_aggregate.mean
+                else _difference(
+                    candidate_aggregate.mean,
+                    baseline_aggregate.mean,
+                )
             )
             aggregates.append(
                 AggregateComparison(
@@ -336,8 +340,8 @@ def _passes(
     threshold: float,
 ) -> bool:
     if direction is MetricDirection.HIGHER_IS_BETTER:
-        return value >= threshold
-    return value <= threshold
+        return _at_least(value, threshold)
+    return _at_most(value, threshold)
 
 
 def _regression_passes(
@@ -347,8 +351,31 @@ def _regression_passes(
     allowed_regression: float,
 ) -> bool:
     if direction is MetricDirection.HIGHER_IS_BETTER:
-        return delta >= -allowed_regression
-    return delta <= allowed_regression
+        return _at_least(delta, -allowed_regression)
+    return _at_most(delta, allowed_regression)
+
+
+def _difference(left: float, right: float) -> float:
+    """Subtract decimal renderings to avoid binary boundary artifacts."""
+    return float(Decimal(str(left)) - Decimal(str(right)))
+
+
+def _at_least(value: float, boundary: float) -> bool:
+    return value >= boundary or math.isclose(
+        value,
+        boundary,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    )
+
+
+def _at_most(value: float, boundary: float) -> bool:
+    return value <= boundary or math.isclose(
+        value,
+        boundary,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    )
 
 
 def _compare_case(
@@ -400,7 +427,7 @@ def _compare_case(
         slices=case.slices,
         baseline=baseline,
         candidate=candidate,
-        delta=candidate.value - baseline.value,
+        delta=_difference(candidate.value, baseline.value),
         baseline_passed=baseline_passed,
         candidate_passed=candidate_passed,
         change=change,
