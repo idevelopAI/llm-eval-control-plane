@@ -8,7 +8,11 @@ from collections.abc import Callable
 
 from pydantic import TypeAdapter, ValidationError
 
-from llm_eval_control_plane.application.ports import EvaluatorPort, TargetPort
+from llm_eval_control_plane.application.ports import (
+    EvaluatorPort,
+    TargetInvocationError,
+    TargetPort,
+)
 from llm_eval_control_plane.domain import (
     ArtifactKind,
     CaseResult,
@@ -16,6 +20,7 @@ from llm_eval_control_plane.domain import (
     DatasetVersion,
     ErrorObservation,
     ExecutionFailure,
+    ExecutionMode,
     FailureCode,
     FailureStage,
     MetricSummary,
@@ -54,6 +59,7 @@ class InProcessRunner:
         dataset: DatasetVersion,
         target: TargetPort,
         evaluators: tuple[EvaluatorPort, ...],
+        execution_mode: ExecutionMode = ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE,
     ) -> RunResult:
         """Execute every case and return a complete immutable result."""
         ordered_evaluators = self._validate_plan(target, evaluators)
@@ -63,6 +69,22 @@ class InProcessRunner:
             started = self._clock()
             try:
                 raw_response = await target.invoke(request)
+            except TargetInvocationError as error:
+                latency_ms = self._elapsed_ms(started)
+                case_results.append(
+                    CaseResult(
+                        case_id=case.case_id,
+                        status=CaseResultStatus.TARGET_FAILED,
+                        target_failure=ExecutionFailure(
+                            stage=FailureStage.TARGET,
+                            code=error.code,
+                            message=self._target_failure_message(error.code),
+                            retryable=error.retryable,
+                            latency_ms=latency_ms,
+                        ),
+                    )
+                )
+                continue
             except Exception:
                 latency_ms = self._elapsed_ms(started)
                 case_results.append(
@@ -166,7 +188,19 @@ class InProcessRunner:
             evaluators=tuple(evaluator.ref for evaluator in ordered_evaluators),
             cases=cases,
             metrics=summaries,
+            execution_mode=execution_mode,
         )
+
+    @staticmethod
+    def _target_failure_message(code: FailureCode) -> str:
+        return {
+            FailureCode.TARGET_AUTHENTICATION: "Target authentication failed",
+            FailureCode.TARGET_PROTOCOL_ERROR: "Target protocol validation failed",
+            FailureCode.TARGET_RATE_LIMITED: "Target rate limit was reached",
+            FailureCode.TARGET_REJECTED: "Target rejected the request",
+            FailureCode.TARGET_TIMEOUT: "Target request timed out",
+            FailureCode.TARGET_UNAVAILABLE: "Target was unavailable",
+        }.get(code, "Target invocation failed")
 
     def _elapsed_ms(self, started: float) -> float:
         finished = self._clock()

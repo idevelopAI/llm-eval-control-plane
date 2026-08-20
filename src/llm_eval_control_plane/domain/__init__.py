@@ -49,6 +49,7 @@ from llm_eval_control_plane.domain.execution import (
 from llm_eval_control_plane.domain.results import (
     CaseResult,
     CaseResultStatus,
+    ExecutionMode,
     MetricSummary,
     RunResult,
     RunStatus,
@@ -71,6 +72,7 @@ __all__ = [
     "EvaluationCase",
     "EvaluationSpec",
     "ExecutionFailure",
+    "ExecutionMode",
     "FailureCode",
     "FailureStage",
     "GateCaseComparison",

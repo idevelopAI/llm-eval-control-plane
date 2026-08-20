@@ -7,6 +7,7 @@ from llm_eval_control_plane.application.comparison import (
 from llm_eval_control_plane.application.ports import (
     EvaluatorPort,
     RunRepository,
+    TargetInvocationError,
     TargetPort,
 )
 from llm_eval_control_plane.application.runner import (
@@ -20,6 +21,7 @@ __all__ = [
     "InProcessRunner",
     "RunRepository",
     "RunnerConfigurationError",
+    "TargetInvocationError",
     "TargetPort",
     "compare_runs",
 ]

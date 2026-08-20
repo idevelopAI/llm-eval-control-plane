@@ -17,6 +17,7 @@ from llm_eval_control_plane.domain import (
     DatasetVersion,
     EvaluationCase,
     EvaluationSpec,
+    ExecutionMode,
     GateStatus,
     MetricDirection,
     MetricGate,
@@ -355,6 +356,23 @@ def test_compare_runs_rejects_invalid_policy_and_evidence_alignment() -> None:
             dataset=fixture_dataset(),
             baseline=baseline,
             candidate=candidate,
+        )
+
+    live_candidate = RunResult.create(
+        run_id=candidate.run_id,
+        dataset=candidate.dataset,
+        target=candidate.target,
+        evaluators=candidate.evaluators,
+        cases=candidate.cases,
+        metrics=candidate.metrics,
+        execution_mode=ExecutionMode.LIVE,
+    )
+    with raises(ComparisonConfigurationError, match="execution modes must match"):
+        compare_runs(
+            spec=policy(baseline, live_candidate),
+            dataset=fixture_dataset(),
+            baseline=baseline,
+            candidate=live_candidate,
         )
 
 

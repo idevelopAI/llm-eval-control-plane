@@ -192,6 +192,10 @@ def _validate_inputs(
         raise ComparisonConfigurationError(
             "baseline comparison requires a baseline target reference"
         )
+    if baseline.execution_mode is not candidate.execution_mode:
+        raise ComparisonConfigurationError(
+            "candidate and baseline execution modes must match"
+        )
     resolved_dataset = dataset.artifact_ref
     for actual in (baseline.dataset, candidate.dataset):
         if actual != resolved_dataset:

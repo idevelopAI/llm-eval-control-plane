@@ -373,7 +373,7 @@ def _run_summary(result: RunResult) -> dict[str, object]:
             "target_failed": statuses["target_failed"],
         },
         "dataset_digest": result.dataset.digest,
-        "execution_mode": "offline_deterministic_fixture",
+        "execution_mode": result.execution_mode.value,
         "metrics": [
             {
                 "attempted": metric.attempted,
