@@ -6,8 +6,8 @@ from llm_eval_control_plane.domain import ArtifactRef, EvaluationCase
 from llm_eval_control_plane.domain.evaluation import MetricName
 from llm_eval_control_plane.domain.execution import (
     MetricObservation,
+    TargetObservation,
     TargetRequest,
-    TargetResponse,
 )
 from llm_eval_control_plane.domain.results import RunResult
 
@@ -33,7 +33,7 @@ class EvaluatorPort(Protocol):
     def evaluate(
         self,
         case: EvaluationCase,
-        response: TargetResponse,
+        target: TargetObservation,
     ) -> tuple[MetricObservation, ...]: ...
 
 

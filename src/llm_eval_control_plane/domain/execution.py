@@ -10,6 +10,7 @@ from pydantic import Field, FiniteFloat, StrictInt, model_validator
 from llm_eval_control_plane.domain.artifacts import ArtifactKind, ArtifactRef
 from llm_eval_control_plane.domain.canonical import CanonicalJson
 from llm_eval_control_plane.domain.datasets import CaseId
+from llm_eval_control_plane.domain.evaluation import MetricName
 from llm_eval_control_plane.domain.models import FrozenModel
 
 SafeCode = Annotated[
@@ -126,7 +127,7 @@ class ObservationStatus(StrEnum):
 class ObservationBase(FrozenModel):
     """Shared identity for one evaluator metric on one case."""
 
-    metric: SafeCode
+    metric: MetricName
     evaluator: ArtifactRef
 
     @model_validator(mode="after")
