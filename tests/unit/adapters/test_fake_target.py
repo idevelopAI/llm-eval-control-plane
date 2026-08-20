@@ -2,7 +2,11 @@ import asyncio
 
 from pytest import mark, raises
 
-from llm_eval_control_plane.adapters import DeterministicFakeTarget, FakeTargetError
+from llm_eval_control_plane.adapters import (
+    DeterministicFakeTarget,
+    DeterministicStepClock,
+    FakeTargetError,
+)
 from llm_eval_control_plane.domain import (
     ArtifactKind,
     CanonicalJson,
@@ -120,3 +124,13 @@ def test_fake_target_has_resolved_version_identity_and_fresh_output_values() -> 
     assert target.ref.kind is ArtifactKind.TARGET
     assert target.ref.revision == 3
     assert target.ref.digest is not None
+
+
+def test_deterministic_step_clock_advances_without_sleeping() -> None:
+    clock = DeterministicStepClock(step_ms=2.5)
+
+    assert (clock(), clock(), clock()) == (0.0, 0.0025, 0.005)
+
+    for invalid in (0.0, -1.0, float("inf"), float("nan")):
+        with raises(ValueError, match="positive finite"):
+            DeterministicStepClock(step_ms=invalid)

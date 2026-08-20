@@ -2,6 +2,7 @@
 
 from llm_eval_control_plane.adapters.fake_target import (
     DeterministicFakeTarget,
+    DeterministicStepClock,
     FakeTargetError,
 )
 from llm_eval_control_plane.adapters.filesystem import (
@@ -29,6 +30,7 @@ __all__ = [
     "CorruptRunError",
     "DatasetImportError",
     "DeterministicFakeTarget",
+    "DeterministicStepClock",
     "FakeTargetError",
     "FilesystemRunRepository",
     "InvalidRunIdError",

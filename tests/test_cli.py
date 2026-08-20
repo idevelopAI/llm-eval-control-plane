@@ -38,8 +38,9 @@ def test_help_describes_truthful_commands() -> None:
 
     assert result.exit_code == 0
     assert "schema" in result.stdout
+    assert "run" in result.stdout
+    assert "show" in result.stdout
     assert "validate" in result.stdout
-    assert "run" not in result.stdout.lower()
 
 
 def test_schema_command_returns_json_schema() -> None:
@@ -109,4 +110,171 @@ def test_validate_reports_unreadable_file(
     result = runner.invoke(app, ["validate", str(spec_path)])
 
     assert result.exit_code == 2
-    assert "Could not read specification: simulated read failure" in result.stderr
+    assert result.stderr.strip() == "Could not read evaluation specification"
+    assert "simulated read failure" not in result.stderr
+
+
+def write_dataset(path: Path, *, value: str = "private-output-sentinel") -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "case_id": "case-001",
+                "input": {"scenario": "echo", "value": value},
+                "expected": value,
+                "slices": ["language/en"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_run_persists_offline_result_and_prints_safe_summary(tmp_path: Path) -> None:
+    dataset = tmp_path / "dataset.jsonl"
+    store = tmp_path / "artifacts"
+    write_dataset(dataset)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            str(dataset),
+            "--run-id",
+            "run-001",
+            "--store",
+            str(store),
+        ],
+    )
+
+    assert result.exit_code == 0
+    summary = json.loads(result.stdout)
+    assert summary["run_id"] == "run-001"
+    assert summary["status"] == "completed"
+    assert summary["case_counts"] == {
+        "attempted": 1,
+        "completed": 1,
+        "completed_with_errors": 0,
+        "target_failed": 0,
+    }
+    assert summary["execution_mode"] == "offline_deterministic_fixture"
+    assert summary["dataset_digest"].startswith("sha256:")
+    assert summary["result_digest"].startswith("sha256:")
+    assert "private-output-sentinel" not in result.stdout
+    assert len(list((store / "runs").glob("*.json"))) == 1
+
+    repeated = runner.invoke(
+        app,
+        [
+            "run",
+            str(dataset),
+            "--run-id",
+            "run-001",
+            "--store",
+            str(store),
+        ],
+    )
+    assert repeated.exit_code == 0
+    assert json.loads(repeated.stdout) == summary
+
+
+def test_show_keeps_target_output_opt_in_per_case(tmp_path: Path) -> None:
+    dataset = tmp_path / "dataset.jsonl"
+    store = tmp_path / "artifacts"
+    write_dataset(dataset)
+    run_result = runner.invoke(
+        app,
+        ["run", str(dataset), "--run-id", "run-001", "--store", str(store)],
+    )
+    assert run_result.exit_code == 0
+
+    summary = runner.invoke(app, ["show", "run-001", "--store", str(store)])
+    safe_case = runner.invoke(
+        app,
+        ["show", "run-001", "--store", str(store), "--case", "case-001"],
+    )
+    revealed_case = runner.invoke(
+        app,
+        [
+            "show",
+            "run-001",
+            "--store",
+            str(store),
+            "--case",
+            "case-001",
+            "--include-output",
+        ],
+    )
+
+    assert summary.exit_code == safe_case.exit_code == revealed_case.exit_code == 0
+    assert "private-output-sentinel" not in summary.stdout
+    assert "private-output-sentinel" not in safe_case.stdout
+    assert json.loads(safe_case.stdout)["target"].get("output") is None
+    assert json.loads(revealed_case.stdout)["target"]["output"] == (
+        "private-output-sentinel"
+    )
+
+
+def test_show_rejects_unsafe_or_missing_selections(tmp_path: Path) -> None:
+    store = tmp_path / "artifacts"
+
+    missing_case = runner.invoke(
+        app,
+        ["show", "missing-run", "--store", str(store), "--include-output"],
+    )
+    missing_run = runner.invoke(
+        app,
+        ["show", "missing-run", "--store", str(store)],
+    )
+    invalid_id = runner.invoke(
+        app,
+        ["show", "../../private-sentinel", "--store", str(store)],
+    )
+
+    assert missing_case.exit_code == 2
+    assert "requires --case" in missing_case.stderr
+    assert missing_run.exit_code == 2
+    assert missing_run.stderr.strip() == "Run artifact was not found"
+    assert invalid_id.exit_code == 2
+    assert invalid_id.stderr.strip() == "Run ID is invalid"
+    assert "private-sentinel" not in invalid_id.stderr
+
+
+def test_run_reports_dataset_errors_without_echoing_content(tmp_path: Path) -> None:
+    dataset = tmp_path / "invalid.jsonl"
+    dataset.write_text(
+        '{"case_id":"case-001","input":"private-sentinel","unknown":true}\n',
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        ["run", str(dataset), "--run-id", "run-001", "--store", str(tmp_path)],
+    )
+
+    assert result.exit_code == 2
+    assert result.stderr.strip() == "Dataset import failed (invalid_case) at line 1"
+    assert "private-sentinel" not in result.stderr
+
+
+def test_run_rejects_duplicate_scorers_without_internal_error(tmp_path: Path) -> None:
+    dataset = tmp_path / "dataset.jsonl"
+    write_dataset(dataset)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            str(dataset),
+            "--run-id",
+            "run-001",
+            "--store",
+            str(tmp_path / "artifacts"),
+            "--scorer",
+            "exact_match",
+            "--scorer",
+            "exact_match",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert result.stderr.strip() == "Evaluation could not be completed"
