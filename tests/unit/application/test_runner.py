@@ -197,6 +197,51 @@ class BrokenEvaluator:
         return ("invalid",)  # type: ignore[return-value]
 
 
+class ReverseMetricEvaluator:
+    def __init__(self) -> None:
+        self._ref = ArtifactRef(
+            kind=ArtifactKind.EVALUATOR,
+            name="reverse-metric",
+            revision=1,
+            digest=sha256_digest({"evaluator": "reverse-metric"}),
+        )
+
+    @property
+    def ref(self) -> ArtifactRef:
+        return self._ref
+
+    @property
+    def metric_names(self) -> tuple[MetricName, ...]:
+        return ("quality.alpha", "quality.zeta")
+
+    def evaluate(
+        self, case: EvaluationCase, target: TargetObservation
+    ) -> tuple[MetricObservation, ...]:
+        del case, target
+        return tuple(
+            ScoredObservation(
+                metric=metric,
+                evaluator=self.ref,
+                value=1.0,
+                reason_code="observed",
+            )
+            for metric in reversed(self.metric_names)
+        )
+
+
+def test_runner_canonicalizes_multi_metric_evaluator_output() -> None:
+    result = execute(
+        dataset_version=dataset(case("case-a", "echo", value="answer")),
+        evaluators=(ReverseMetricEvaluator(),),
+        clock=SequenceClock((0.0, 0.001)),
+    )
+
+    assert [item.metric for item in result.cases[0].observations] == [
+        "quality.alpha",
+        "quality.zeta",
+    ]
+
+
 @mark.parametrize(
     ("mode", "expected_code"),
     [

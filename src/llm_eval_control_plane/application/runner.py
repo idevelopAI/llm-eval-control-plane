@@ -129,7 +129,15 @@ class InProcessRunner:
                         )
                     )
                     continue
-                observations.extend(validated)
+                observations.extend(
+                    sorted(
+                        validated,
+                        key=lambda observation: (
+                            observation.evaluator.logical_key,
+                            observation.metric,
+                        ),
+                    )
+                )
 
             has_errors = bool(evaluator_failures) or any(
                 isinstance(observation, ErrorObservation)
