@@ -18,6 +18,7 @@ from llm_eval_control_plane.domain.datasets import CaseId, SliceLabel
 from llm_eval_control_plane.domain.evaluation import MetricDirection, MetricName
 from llm_eval_control_plane.domain.execution import RunId
 from llm_eval_control_plane.domain.models import FrozenModel
+from llm_eval_control_plane.domain.results import ExecutionMode
 
 
 class ComparisonValueStatus(StrEnum):
@@ -206,22 +207,25 @@ def calculate_decision_digest(
     aggregates: tuple[AggregateComparison, ...],
     gates: tuple[GateResult, ...],
     cases: tuple[GateCaseComparison, ...],
+    execution_mode: ExecutionMode = ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE,
 ) -> str:
     """Hash complete stable release evidence, excluding run identifiers."""
-    return sha256_digest(
-        {
-            "aggregates": [item.model_dump(mode="json") for item in aggregates],
-            "baseline": baseline.model_dump(mode="json"),
-            "baseline_result_digest": baseline_result_digest,
-            "candidate": candidate.model_dump(mode="json"),
-            "candidate_result_digest": candidate_result_digest,
-            "cases": [item.model_dump(mode="json") for item in cases],
-            "dataset": dataset.model_dump(mode="json"),
-            "decision_schema": "release-decision/v1",
-            "gates": [item.model_dump(mode="json") for item in gates],
-            "spec_name": spec_name,
-        }
-    )
+    record: dict[str, object] = {
+        "aggregates": [item.model_dump(mode="json") for item in aggregates],
+        "baseline": baseline.model_dump(mode="json"),
+        "baseline_result_digest": baseline_result_digest,
+        "candidate": candidate.model_dump(mode="json"),
+        "candidate_result_digest": candidate_result_digest,
+        "cases": [item.model_dump(mode="json") for item in cases],
+        "dataset": dataset.model_dump(mode="json"),
+        "decision_schema": "release-decision/v1",
+        "gates": [item.model_dump(mode="json") for item in gates],
+        "spec_name": spec_name,
+    }
+    if execution_mode is not ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE:
+        record["decision_schema"] = "release-decision/v2"
+        record["execution_mode"] = execution_mode.value
+    return sha256_digest(record)
 
 
 class ReleaseDecision(FrozenModel):
@@ -229,6 +233,7 @@ class ReleaseDecision(FrozenModel):
 
     schema_version: Literal["1"] = "1"
     spec_name: ArtifactName
+    execution_mode: ExecutionMode = ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE
     dataset: ArtifactRef
     baseline: ArtifactRef
     candidate: ArtifactRef
@@ -281,6 +286,7 @@ class ReleaseDecision(FrozenModel):
             aggregates=self.aggregates,
             gates=self.gates,
             cases=self.cases,
+            execution_mode=self.execution_mode,
         )
         if self.decision_digest != expected_digest:
             raise ValueError("decision digest does not match canonical evidence")
@@ -301,6 +307,7 @@ class ReleaseDecision(FrozenModel):
         aggregates: tuple[AggregateComparison, ...],
         gates: tuple[GateResult, ...],
         cases: tuple[GateCaseComparison, ...],
+        execution_mode: ExecutionMode = ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE,
     ) -> ReleaseDecision:
         ordered_aggregates = tuple(
             sorted(aggregates, key=lambda item: (item.metric, item.slice or ""))
@@ -328,9 +335,11 @@ class ReleaseDecision(FrozenModel):
             aggregates=ordered_aggregates,
             gates=ordered_gates,
             cases=ordered_cases,
+            execution_mode=execution_mode,
         )
         return cls(
             spec_name=spec_name,
+            execution_mode=execution_mode,
             dataset=dataset,
             baseline=baseline,
             candidate=candidate,

@@ -178,6 +178,7 @@ def compare_runs(
         aggregates=tuple(aggregates),
         gates=tuple(gate_results),
         cases=tuple(case_comparisons),
+        execution_mode=baseline.execution_mode,
     )
 
 
