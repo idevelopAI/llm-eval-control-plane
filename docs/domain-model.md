@@ -14,11 +14,14 @@
 | `CaseResult` | Target evidence and all evaluator outcomes for one case | Implemented |
 | `MetricSummary` | Attempted/scored/skipped/error counts and optional mean | Implemented |
 | `RunResult` | Complete immutable run with resolved artifacts and digest | Implemented |
-| `EvaluationSpec` | Dataset, candidate, optional baseline, and gate inputs | Implemented contract |
-| `MetricGate` | Directional threshold and permitted regression | Implemented contract |
+| `EvaluationSpec` | Dataset, candidate, baseline, and slice-aware gate policy | Implemented |
+| `MetricGate` | Directional threshold and absolute regression budget | Implemented |
+| `MetricAggregate` | Attempted/scored/skipped/error evidence for one metric and slice | Implemented |
+| `AggregateComparison` | Candidate, baseline, and candidate-minus-baseline aggregate | Implemented |
+| `GateCaseComparison` | Threshold-relative case transition for one configured gate | Implemented |
+| `GateResult` | Coverage, threshold, and regression checks for one gate | Implemented |
+| `ReleaseDecision` | Content-addressed pass/fail evidence for the whole policy | Implemented |
 | Suite version | Dataset, evaluators, slices, and execution settings | Deferred |
-| Baseline comparison | Candidate and baseline metric deltas | Deferred |
-| Gate decision | Deterministic pass/fail evidence | Deferred |
 
 The deterministic fake target and built-in scorers are adapter implementations,
 not additional domain entities. Their `ArtifactRef` values identify their exact
@@ -42,7 +45,7 @@ behavior revisions inside a run.
 
 - A target receives `case_id` and `input` only. It never receives `expected`,
   expected refusal state, schemas, tolerances, or slice labels.
-- Each case is invoked exactly once by the Phase 1 runner.
+- Each case is invoked exactly once by the evaluation runner.
 - Target responses require structured refusal state and explicit non-negative
   input/output usage. Refusals are never inferred from wording.
 - The application boundary validates every untrusted target and evaluator return
@@ -66,7 +69,7 @@ behavior revisions inside a run.
 - A mean exists exactly when at least one observation was scored. Skipped and
   error observations are never silently dropped from coverage counts.
 - `completed_with_failures` represents technical target/evaluator failures, not
-  low metric values. Release policy has not been applied yet.
+  low metric values. Release policy is applied later by comparison.
 - The result digest covers resolved artifacts, target evidence, observations,
   failures, and aggregates. It excludes only the caller-selected run ID.
 - Loading a stored result recalculates and verifies its result digest.
@@ -89,9 +92,38 @@ For `higher_is_better`, the absolute gate passes when a candidate metric is at
 least the configured threshold. For `lower_is_better`, it passes when the value
 is no greater than the threshold.
 
-`allowed_regression` is part of the validated contract, but comparison execution
-is deferred. Its absolute-versus-relative semantics will be versioned before a
-gate decision is produced.
+`allowed_regression` is an absolute budget in the metric's own units. Every
+delta is `candidate - baseline`. Therefore a higher-is-better regression passes
+when `delta >= -allowed_regression`; a lower-is-better regression passes when
+`delta <= allowed_regression`. A fixed `1e-12` absolute tolerance prevents
+machine-precision noise at an exact numeric boundary and is not a user-visible
+regression allowance.
+
+When `slice` is absent, a gate covers the whole dataset. When present, it covers
+exactly the cases carrying that slice label. Empty or unknown gate slices are
+configuration errors rather than zero-valued aggregates. A policy cannot define
+the same `(metric, slice)` gate twice.
+
+Before gate evaluation, the comparator requires:
+
+- candidate and baseline runs to use the exact supplied dataset artifact;
+- policy target names/revisions and optional digests to match resolved runs;
+- identical ordered case IDs, metric sets, evaluator revisions, and digests;
+- stored global metric summaries to equal aggregates recomputed from cases.
+
+A gate's coverage check requires both sides to have zero errors, at least one
+scored case, equal scored counts, and equal skipped counts. Coverage, threshold,
+and regression failures have separate stable codes and may coexist.
+
+Case evidence is classified as newly passing, newly failing, unchanged passing,
+unchanged failing, or incomparable relative to that gate's threshold. Technical
+target/evaluator failures are incomparable and force the relevant coverage gate
+to fail.
+
+The release decision is failed if any gate fails. Its digest includes resolved
+dataset/target/evaluator identities, both result digests, every aggregate, gate
+result, and gate-scoped case transition. Run IDs are excluded so equivalent
+evidence has the same decision identity.
 
 `EvaluationSpec.schema_version` is currently the literal value `"1"`. Breaking
 changes require a new schema version and migration path; optional fields may
