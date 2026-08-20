@@ -8,6 +8,7 @@ from llm_eval_control_plane.domain import (
     CaseChange,
     ComparisonValue,
     ComparisonValueStatus,
+    ExecutionMode,
     GateCaseComparison,
     GateFailureCode,
     GateResult,
@@ -228,6 +229,32 @@ def test_release_decision_is_content_addressed_and_run_id_independent() -> None:
 
     assert first.status is ReleaseStatus.PASSED
     assert first.decision_digest == second.decision_digest
+
+
+def test_live_release_decision_covers_execution_mode() -> None:
+    offline = decision()
+    live = ReleaseDecision.create(
+        spec_name=offline.spec_name,
+        dataset=offline.dataset,
+        baseline=offline.baseline,
+        candidate=offline.candidate,
+        baseline_run_id=offline.baseline_run_id,
+        candidate_run_id=offline.candidate_run_id,
+        baseline_result_digest=offline.baseline_result_digest,
+        candidate_result_digest=offline.candidate_result_digest,
+        aggregates=offline.aggregates,
+        gates=offline.gates,
+        cases=offline.cases,
+        execution_mode=ExecutionMode.LIVE,
+    )
+
+    assert live.execution_mode is ExecutionMode.LIVE
+    assert live.decision_digest != offline.decision_digest
+
+    payload = live.model_dump()
+    payload["execution_mode"] = ExecutionMode.OFFLINE_MOCK
+    with raises(ValidationError, match="digest does not match"):
+        ReleaseDecision.model_validate(payload)
 
 
 def test_release_decision_fails_when_any_gate_fails_and_rejects_tampering() -> None:

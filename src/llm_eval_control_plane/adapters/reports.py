@@ -53,6 +53,7 @@ def _render_markdown(decision: ReleaseDecision) -> str:
         f"**Decision:** `{decision.status.value.upper()}`",
         "",
         f"- Policy: `{decision.spec_name}`",
+        f"- Execution mode: `{decision.execution_mode.value}`",
         f"- Baseline run: `{decision.baseline_run_id}`",
         f"- Candidate run: `{decision.candidate_run_id}`",
         f"- Dataset digest: `{decision.dataset.digest}`",
@@ -179,6 +180,7 @@ def _render_junit(decision: ReleaseDecision) -> str:
         ("candidate_run_id", decision.candidate_run_id),
         ("dataset_digest", decision.dataset.digest or ""),
         ("decision_digest", decision.decision_digest),
+        ("execution_mode", decision.execution_mode.value),
         ("release_status", decision.status.value),
     ):
         ElementTree.SubElement(properties, "property", {"name": name, "value": value})

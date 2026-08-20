@@ -122,6 +122,7 @@ def test_markdown_report_identifies_gate_and_newly_failing_case() -> None:
     assert "language/en" in report
     assert "case-en-001" in report
     assert "regression" in report
+    assert "Execution mode: `offline_deterministic_fixture`" in report
 
     passed = render_report(decision(passed=True), ReportFormat.MARKDOWN)
     assert "**Decision:** `PASSED`" in passed
@@ -143,6 +144,9 @@ def test_junit_report_maps_each_failed_gate_to_a_test_failure() -> None:
     assert failure is not None
     assert failure.attrib["type"] == "release_gate_failure"
     assert "allowed_regression=0.05" in (failure.text or "")
+    execution_mode = root.find('./properties/property[@name="execution_mode"]')
+    assert execution_mode is not None
+    assert execution_mode.attrib["value"] == "offline_deterministic_fixture"
 
     passed = ElementTree.fromstring(
         render_report(decision(passed=True), ReportFormat.JUNIT)
