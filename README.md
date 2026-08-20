@@ -64,11 +64,10 @@ uv run llm-eval validate examples/evaluation-spec.json
 The CLI deliberately does not execute evaluations yet. Execution, persistence,
 and comparison will be added as complete vertical slices in later milestones.
 
-## Architecture and roadmap
+## Architecture
 
 - [Architecture](docs/architecture.md)
 - [Domain model](docs/domain-model.md)
-- [Project roadmap](docs/roadmap.md)
 - [Architecture decisions](docs/adr/)
 
 The project starts as a modular monolith. Its dependency direction is
