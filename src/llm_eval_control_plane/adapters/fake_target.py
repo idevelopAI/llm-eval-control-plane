@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import math
-from typing import Final
+from collections.abc import Mapping
+from typing import Final, cast
+
+from pydantic import TypeAdapter, ValidationError
 
 from llm_eval_control_plane.domain import (
     ArtifactKind,
@@ -16,6 +19,9 @@ from llm_eval_control_plane.domain import (
     sha256_digest,
 )
 from llm_eval_control_plane.domain.canonical import JsonValue
+from llm_eval_control_plane.domain.datasets import CaseId
+
+_CASE_ID_ADAPTER = TypeAdapter(CaseId)
 
 
 class FakeTargetError(RuntimeError):
@@ -46,27 +52,36 @@ class DeterministicFakeTarget:
 
     _BEHAVIOR_VERSION: Final = "fake-target/v1"
 
-    def __init__(self, *, name: str = "fake/deterministic", revision: int = 1) -> None:
+    def __init__(
+        self,
+        *,
+        name: str = "fake/deterministic",
+        revision: int = 1,
+        scenario_overrides: Mapping[str, str] | None = None,
+    ) -> None:
+        overrides = self._validated_overrides(scenario_overrides or {})
+        identity: dict[str, JsonValue] = {
+            "behavior": self._BEHAVIOR_VERSION,
+            "scenarios": [
+                "echo",
+                "uppercase",
+                "offset",
+                "refuse",
+                "mismatch",
+                "malformed",
+                "missing_usage",
+                "raise",
+            ],
+        }
+        if overrides:
+            identity["scenario_overrides"] = cast(JsonValue, overrides)
         self._ref = ArtifactRef(
             kind=ArtifactKind.TARGET,
             name=name,
             revision=revision,
-            digest=sha256_digest(
-                {
-                    "behavior": self._BEHAVIOR_VERSION,
-                    "scenarios": [
-                        "echo",
-                        "uppercase",
-                        "offset",
-                        "refuse",
-                        "mismatch",
-                        "malformed",
-                        "missing_usage",
-                        "raise",
-                    ],
-                }
-            ),
+            digest=sha256_digest(identity),
         )
+        self._scenario_overrides = overrides
         self._invocations: list[str] = []
 
     @property
@@ -86,6 +101,7 @@ class DeterministicFakeTarget:
         scenario = payload.get("scenario")
         if not isinstance(scenario, str):
             raise FakeTargetError("missing_scenario")
+        scenario = self._scenario_overrides.get(request.case_id, scenario)
 
         if scenario == "malformed":
             return {
@@ -148,3 +164,29 @@ class DeterministicFakeTarget:
     @staticmethod
     def _estimated_units(value: bytes) -> int:
         return max(1, (len(value) + 3) // 4)
+
+    @staticmethod
+    def _validated_overrides(overrides: Mapping[str, str]) -> dict[str, str]:
+        allowed = {
+            "echo",
+            "malformed",
+            "mismatch",
+            "missing_usage",
+            "offset",
+            "raise",
+            "refuse",
+            "uppercase",
+        }
+        normalized: dict[str, str] = {}
+        try:
+            for case_id, scenario in overrides.items():
+                validated_case_id = _CASE_ID_ADAPTER.validate_python(
+                    case_id,
+                    strict=True,
+                )
+                if scenario not in allowed:
+                    raise ValueError("unknown fake-target override scenario")
+                normalized[validated_case_id] = scenario
+        except (ValidationError, ValueError) as error:
+            raise ValueError("Scenario overrides failed contract validation") from error
+        return dict(sorted(normalized.items()))
