@@ -31,6 +31,7 @@ from llm_eval_control_plane.domain import (
     CaseResult,
     EvaluationSpec,
     RunResult,
+    RunStatus,
 )
 
 app = typer.Typer(
@@ -179,6 +180,8 @@ def run_evaluation(
         raise typer.Exit(code=2) from error
 
     _print_json(_run_summary(result))
+    if result.status is RunStatus.COMPLETED_WITH_FAILURES:
+        raise typer.Exit(code=1)
 
 
 @app.command("show")
@@ -258,6 +261,7 @@ def _run_summary(result: RunResult) -> dict[str, object]:
         ],
         "result_digest": result.result_digest,
         "run_id": result.run_id,
+        "schema_version": "run-summary/v1",
         "status": result.status.value,
     }
 
