@@ -213,6 +213,13 @@ def test_show_keeps_target_output_opt_in_per_case(tmp_path: Path) -> None:
         "private-output-sentinel"
     )
 
+    missing_case = runner.invoke(
+        app,
+        ["show", "run-001", "--store", str(store), "--case", "missing-case"],
+    )
+    assert missing_case.exit_code == 2
+    assert missing_case.stderr.strip() == "Case was not found in run artifact"
+
 
 def test_show_rejects_unsafe_or_missing_selections(tmp_path: Path) -> None:
     store = tmp_path / "artifacts"
@@ -278,3 +285,39 @@ def test_run_rejects_duplicate_scorers_without_internal_error(tmp_path: Path) ->
 
     assert result.exit_code == 2
     assert result.stderr.strip() == "Evaluation could not be completed"
+
+
+def test_run_persists_sanitized_failures_and_returns_automation_exit_one(
+    tmp_path: Path,
+) -> None:
+    dataset = tmp_path / "failure.jsonl"
+    store = tmp_path / "artifacts"
+    dataset.write_text(
+        json.dumps(
+            {
+                "case_id": "case-001",
+                "input": {"scenario": "raise", "value": "private-sentinel"},
+                "expected": "answer",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        ["run", str(dataset), "--run-id", "failed-run", "--store", str(store)],
+    )
+    evidence = runner.invoke(
+        app,
+        ["show", "failed-run", "--store", str(store), "--case", "case-001"],
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(result.stdout)["status"] == "completed_with_failures"
+    assert "private-sentinel" not in result.stdout
+    assert evidence.exit_code == 0
+    case = json.loads(evidence.stdout)
+    assert case["target"] is None
+    assert case["target_failure"]["code"] == "target_exception"
+    assert "private-sentinel" not in evidence.stdout
