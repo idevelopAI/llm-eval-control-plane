@@ -1,0 +1,48 @@
+{
+  "schema_version": "1",
+  "name": "offline-slice-release-policy",
+  "dataset": {
+    "kind": "dataset",
+    "name": "release-gate/offline",
+    "revision": 1,
+    "digest": "sha256:0b6717a93970da558d474ba33c7c37bf10d2f3fb8e5888a264f2170cb16a0a31"
+  },
+  "baseline": {
+    "kind": "target",
+    "name": "fake/release",
+    "revision": 1
+  },
+  "candidate": {
+    "kind": "target",
+    "name": "fake/release",
+    "revision": 2
+  },
+  "gates": [
+    {
+      "metric": "quality.exact_match",
+      "direction": "higher_is_better",
+      "threshold": 0.95,
+      "allowed_regression": 0.05
+    },
+    {
+      "metric": "quality.exact_match",
+      "slice": "language/de",
+      "direction": "higher_is_better",
+      "threshold": 0.95,
+      "allowed_regression": 0.05
+    },
+    {
+      "metric": "safety.refusal_correct",
+      "slice": "safety/refusal",
+      "direction": "higher_is_better",
+      "threshold": 1.0,
+      "allowed_regression": 0.0
+    },
+    {
+      "metric": "performance.latency_ms",
+      "direction": "lower_is_better",
+      "threshold": 5.0,
+      "allowed_regression": 0.0
+    }
+  ]
+}
