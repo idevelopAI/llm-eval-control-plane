@@ -58,7 +58,7 @@ class EvaluationSpec(FrozenModel):
         if self.baseline is not None:
             if self.baseline.kind is not ArtifactKind.TARGET:
                 raise ValueError("baseline must reference a target artifact")
-            if self.baseline == self.candidate:
+            if self.baseline.logical_key == self.candidate.logical_key:
                 raise ValueError("baseline and candidate must be different revisions")
 
         metric_names = [gate.metric for gate in self.gates]

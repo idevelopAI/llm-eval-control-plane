@@ -83,6 +83,14 @@ def test_evaluation_spec_rejects_identical_candidate_and_baseline() -> None:
         valid_spec(candidate=candidate, baseline=candidate)
 
 
+def test_evaluation_spec_compares_logical_revisions_not_digest_assertions() -> None:
+    candidate = artifact(ArtifactKind.TARGET, revision=2)
+    baseline = candidate.model_copy(update={"digest": "sha256:" + "a" * 64})
+
+    with raises(ValidationError, match="must be different revisions"):
+        valid_spec(candidate=candidate, baseline=baseline)
+
+
 def test_evaluation_spec_rejects_duplicate_metric_gates() -> None:
     with raises(ValidationError, match="gate metric names must be unique"):
         valid_spec(gates=(gate(), gate()))
