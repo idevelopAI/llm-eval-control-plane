@@ -35,6 +35,7 @@ dependencies = [
 
 [project.scripts]
 llm-eval = "llm_eval_control_plane.cli:app"
+llm-eval-worker = "llm_eval_control_plane.worker:main"
 
 [project.urls]
 Repository = "https://github.com/idevelopAI/llm-eval-control-plane"
