@@ -31,6 +31,10 @@ def test_openapi_operation_ids_and_dynamic_responses_are_stable(
     comparison_responses = document["paths"]["/v1/comparisons"]["post"]["responses"]
     assert {"200", "201", "202"} <= set(run_responses)
     assert {"200", "201", "202"} <= set(comparison_responses)
+    for responses in (run_responses, comparison_responses):
+        for status in ("200", "201", "202"):
+            location = responses[status]["headers"]["Location"]
+            assert location["schema"]["pattern"].startswith("^/v1/jobs/")
     assert "503" in document["paths"]["/health/ready"]["get"]["responses"]
 
 
@@ -91,3 +95,5 @@ def test_openapi_documents_required_idempotency_header_and_bounds(
         ]
         == 64
     )
+    resolved_reference = document["components"]["schemas"]["ResolvedArtifactRefInput"]
+    assert "digest" in resolved_reference["required"]

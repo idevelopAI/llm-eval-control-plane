@@ -212,6 +212,16 @@ def test_comparison_submission_persists_redacted_decision_and_replays(
         },
     }
 
+    unresolved = json.loads(json.dumps(body))
+    del unresolved["spec"]["dataset"]["digest"]
+    unresolved_response = api_harness.client.post(
+        "/v1/comparisons",
+        json=unresolved,
+        headers={"Idempotency-Key": "unresolved-comparison"},
+    )
+    assert unresolved_response.status_code == 422
+    assert unresolved_response.json()["error"]["code"] == "invalid_request"
+
     created = api_harness.client.post(
         "/v1/comparisons",
         json=body,

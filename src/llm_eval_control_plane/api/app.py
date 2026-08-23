@@ -116,6 +116,15 @@ _ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     500: {"model": ApiErrorDocument, "description": "Internal service error"},
     503: {"model": ApiErrorDocument, "description": "Service unavailable"},
 }
+_JOB_LOCATION_HEADERS: dict[str, dict[str, object]] = {
+    "Location": {
+        "description": "Canonical path of the durable submission job",
+        "schema": {
+            "type": "string",
+            "pattern": r"^/v1/jobs/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+        },
+    }
+}
 
 
 def create_app(
@@ -304,10 +313,20 @@ def create_app(
         operation_id="submit_evaluation_run",
         responses={
             **_ERROR_RESPONSES,
-            200: {"model": RunSubmissionResponse, "description": "Terminal replay"},
+            200: {
+                "model": RunSubmissionResponse,
+                "description": "Terminal replay",
+                "headers": _JOB_LOCATION_HEADERS,
+            },
             201: {
                 "model": RunSubmissionResponse,
                 "description": "Synchronously completed new job",
+                "headers": _JOB_LOCATION_HEADERS,
+            },
+            202: {
+                "model": RunSubmissionResponse,
+                "description": "Existing queued or running job",
+                "headers": _JOB_LOCATION_HEADERS,
             },
         },
         tags=["runs"],
@@ -429,10 +448,17 @@ def create_app(
             200: {
                 "model": ComparisonSubmissionResponse,
                 "description": "Terminal replay",
+                "headers": _JOB_LOCATION_HEADERS,
             },
             201: {
                 "model": ComparisonSubmissionResponse,
                 "description": "Synchronously completed new job",
+                "headers": _JOB_LOCATION_HEADERS,
+            },
+            202: {
+                "model": ComparisonSubmissionResponse,
+                "description": "Existing queued or running job",
+                "headers": _JOB_LOCATION_HEADERS,
             },
         },
         tags=["release decisions"],
@@ -453,7 +479,7 @@ def create_app(
                 dataset_revision=body.dataset_revision,
                 baseline_run_id=body.baseline_run_id,
                 candidate_run_id=body.candidate_run_id,
-                spec=body.spec,
+                spec=body.spec.to_domain(),
             )
         )
         response.status_code = _submission_status(outcome)
