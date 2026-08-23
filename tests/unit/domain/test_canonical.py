@@ -50,6 +50,15 @@ def test_parse_json_rejects_bom_and_malformed_json() -> None:
     assert raised.value.column == 1
 
 
+def test_parse_json_normalizes_oversized_integer_failures() -> None:
+    with raises(CanonicalJsonError, match="Could not parse JSON") as raised:
+        parse_json("9" * 10_000)
+
+    assert raised.value.code == "invalid_json"
+    assert raised.value.line is None
+    assert raised.value.column is None
+
+
 @mark.parametrize(
     "value",
     [math.inf, math.nan, 2**60, {1: "not-a-string-key"}, object()],

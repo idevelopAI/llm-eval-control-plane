@@ -85,6 +85,29 @@ def test_deeply_nested_json_is_a_safe_client_error_with_request_id(
     assert response.json()["error"]["request_id"] == "nested-request"
 
 
+def test_oversized_json_integer_is_a_safe_client_error_with_request_id(
+    api_harness: ApiHarness,
+) -> None:
+    response = api_harness.client.post(
+        "/v1/datasets",
+        content=b'{"name":' + (b"9" * 10_000) + b"}",
+        headers={
+            "Content-Type": "application/json",
+            "X-Request-ID": "integer-limit-request",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.headers["x-request-id"] == "integer-limit-request"
+    assert response.json()["error"] == {
+        "code": "invalid_json",
+        "details": [],
+        "message": "Request body is not valid strict JSON",
+        "request_id": "integer-limit-request",
+    }
+    assert "9999999999999999" not in response.text
+
+
 def test_media_type_and_content_encoding_are_enforced(
     api_harness: ApiHarness,
 ) -> None:
