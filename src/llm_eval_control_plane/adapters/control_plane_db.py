@@ -103,6 +103,9 @@ jobs_table = Table(
     Column("idempotency_key", String(128), nullable=False),
     Column("request_digest", String(71), nullable=False),
     Column("resource_id", String(128), nullable=False),
+    Column("attempt_count", Integer, nullable=False, server_default=text("0")),
+    Column("max_attempts", Integer, nullable=False, server_default=text("3")),
+    Column("available_at", DateTime(timezone=True), nullable=False),
     Column("error_code", String(64), nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
@@ -110,8 +113,34 @@ jobs_table = Table(
     CheckConstraint("kind IN ('run', 'comparison')", name="ck_control_plane_jobs_kind"),
     PrimaryKeyConstraint("job_id", name="pk_control_plane_jobs"),
     CheckConstraint(
-        "status IN ('queued', 'running', 'succeeded', 'failed')",
+        "status IN ('queued', 'running', 'cancel_requested', "
+        "'succeeded', 'failed', 'canceled')",
         name="ck_control_plane_jobs_status",
+    ),
+    CheckConstraint(
+        "attempt_count >= 0 AND attempt_count <= max_attempts",
+        name="ck_control_plane_jobs_attempt_count",
+    ),
+    CheckConstraint(
+        "max_attempts BETWEEN 1 AND 10",
+        name="ck_control_plane_jobs_max_attempts",
+    ),
+    CheckConstraint(
+        "status <> 'queued' OR attempt_count < max_attempts",
+        name="ck_control_plane_jobs_queued_attempt",
+    ),
+    CheckConstraint(
+        "status NOT IN ('running', 'cancel_requested', 'succeeded', 'failed') "
+        "OR attempt_count > 0",
+        name="ck_control_plane_jobs_started_attempt",
+    ),
+    CheckConstraint(
+        "available_at >= created_at",
+        name="ck_control_plane_jobs_available_at",
+    ),
+    CheckConstraint(
+        "updated_at >= created_at",
+        name="ck_control_plane_jobs_updated_at",
     ),
     CheckConstraint("version >= 0", name="ck_control_plane_jobs_version"),
     CheckConstraint(
@@ -151,6 +180,121 @@ Index(
     jobs_table.c.status,
     jobs_table.c.created_at,
     jobs_table.c.job_id,
+)
+Index(
+    "ix_control_plane_jobs_claimable",
+    jobs_table.c.available_at,
+    jobs_table.c.created_at,
+    jobs_table.c.job_id,
+    postgresql_where=text("status = 'queued'"),
+    sqlite_where=text("status = 'queued'"),
+)
+
+job_payloads_table = Table(
+    "control_plane_job_payloads",
+    CONTROL_PLANE_METADATA,
+    Column("job_id", String(128), nullable=False),
+    Column("payload_digest", String(71), nullable=False),
+    Column("document", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    ForeignKeyConstraint(
+        ("job_id",),
+        ("control_plane_jobs.job_id",),
+        name="fk_control_plane_job_payloads_job",
+        ondelete="RESTRICT",
+    ),
+    CheckConstraint(
+        "length(payload_digest) = 71",
+        name="ck_control_plane_job_payloads_digest_length",
+    ),
+    PrimaryKeyConstraint("job_id", name="pk_control_plane_job_payloads"),
+)
+
+job_attempts_table = Table(
+    "control_plane_job_attempts",
+    CONTROL_PLANE_METADATA,
+    Column("job_id", String(128), nullable=False),
+    Column("attempt_number", Integer, nullable=False),
+    Column("status", String(32), nullable=False),
+    Column("worker_id", String(128), nullable=False),
+    Column("lease_token", String(128), nullable=False),
+    Column("error_code", String(64), nullable=True),
+    Column("started_at", DateTime(timezone=True), nullable=False),
+    Column("heartbeat_at", DateTime(timezone=True), nullable=False),
+    Column("lease_expires_at", DateTime(timezone=True), nullable=False),
+    Column("finished_at", DateTime(timezone=True), nullable=True),
+    ForeignKeyConstraint(
+        ("job_id",),
+        ("control_plane_jobs.job_id",),
+        name="fk_control_plane_job_attempts_job",
+        ondelete="RESTRICT",
+    ),
+    CheckConstraint(
+        "attempt_number > 0",
+        name="ck_control_plane_job_attempts_attempt_number",
+    ),
+    CheckConstraint(
+        "length(worker_id) BETWEEN 1 AND 128",
+        name="ck_control_plane_job_attempts_worker_id_length",
+    ),
+    CheckConstraint(
+        "length(lease_token) BETWEEN 32 AND 128",
+        name="ck_control_plane_job_attempts_lease_token_length",
+    ),
+    CheckConstraint(
+        "status IN ('running', 'succeeded', 'retry_scheduled', 'failed', "
+        "'canceled', 'lease_expired')",
+        name="ck_control_plane_job_attempts_status",
+    ),
+    CheckConstraint(
+        "heartbeat_at >= started_at",
+        name="ck_control_plane_job_attempts_heartbeat_at",
+    ),
+    CheckConstraint(
+        "lease_expires_at > heartbeat_at",
+        name="ck_control_plane_job_attempts_lease_expires_at",
+    ),
+    CheckConstraint(
+        "finished_at IS NULL OR finished_at >= heartbeat_at",
+        name="ck_control_plane_job_attempts_finished_at",
+    ),
+    CheckConstraint(
+        "(status = 'running' AND finished_at IS NULL) OR "
+        "(status <> 'running' AND finished_at IS NOT NULL)",
+        name="ck_control_plane_job_attempts_terminal_time",
+    ),
+    CheckConstraint(
+        "(status IN ('retry_scheduled', 'failed', 'lease_expired') "
+        "AND error_code IS NOT NULL) OR "
+        "(status NOT IN ('retry_scheduled', 'failed', 'lease_expired') "
+        "AND error_code IS NULL)",
+        name="ck_control_plane_job_attempts_failure_code",
+    ),
+    PrimaryKeyConstraint(
+        "job_id",
+        "attempt_number",
+        name="pk_control_plane_job_attempts",
+    ),
+    UniqueConstraint(
+        "job_id",
+        "lease_token",
+        name="uq_control_plane_job_attempts_job_lease_token",
+    ),
+)
+Index(
+    "ux_control_plane_job_attempts_active_job",
+    job_attempts_table.c.job_id,
+    unique=True,
+    postgresql_where=text("status = 'running'"),
+    sqlite_where=text("status = 'running'"),
+)
+Index(
+    "ix_control_plane_job_attempts_expiring",
+    job_attempts_table.c.lease_expires_at,
+    job_attempts_table.c.job_id,
+    job_attempts_table.c.attempt_number,
+    postgresql_where=text("status = 'running'"),
+    sqlite_where=text("status = 'running'"),
 )
 
 runs_table = Table(
@@ -346,7 +490,7 @@ def _limit(value: int) -> int:
 
 
 _CURSOR_DOMAIN = b"llm-eval-control-plane/keyset-cursor/v1\0"
-_SCHEMA_REVISION = "20260820_0001"
+_SCHEMA_REVISION = "20260823_0002"
 _DEFAULT_MAX_DOCUMENT_BYTES = 64 * 1024 * 1024
 
 
@@ -618,6 +762,9 @@ class SqlAlchemyControlPlaneRepository:
             "idempotency_key": record.idempotency_key,
             "request_digest": record.request_digest,
             "resource_id": record.resource_id,
+            "attempt_count": record.attempt_count,
+            "max_attempts": record.max_attempts,
+            "available_at": record.available_at,
             "error_code": record.error_code,
             "created_at": record.created_at,
             "updated_at": record.updated_at,
@@ -771,6 +918,8 @@ class SqlAlchemyControlPlaneRepository:
                     )
                     .values(
                         status=next_record.status.value,
+                        attempt_count=next_record.attempt_count,
+                        available_at=next_record.available_at,
                         error_code=next_record.error_code,
                         updated_at=next_record.updated_at,
                         version=row["version"] + 1,
@@ -1261,6 +1410,9 @@ class SqlAlchemyControlPlaneRepository:
                 idempotency_key=row["idempotency_key"],
                 request_digest=row["request_digest"],
                 resource_id=row["resource_id"],
+                attempt_count=row["attempt_count"],
+                max_attempts=row["max_attempts"],
+                available_at=_aware(row["available_at"]),
                 error_code=row["error_code"],
                 created_at=_aware(row["created_at"]),
                 updated_at=_aware(row["updated_at"]),
