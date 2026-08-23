@@ -401,6 +401,8 @@ def _decode_cursor(
         return payload["key"]
     except (
         CanonicalJsonError,
+        OverflowError,
+        RecursionError,
         UnicodeError,
         ValueError,
     ) as error:
