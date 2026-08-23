@@ -3,19 +3,20 @@
 ## System objective
 
 LLM Eval Control Plane turns AI application behavior into reproducible evidence.
-The implemented Phase 4 slice registers immutable dataset revisions, accepts
-durable idempotent run and comparison submissions, executes deterministic
-evaluations, preserves append-only evidence in PostgreSQL, and exposes safe
-summaries through a versioned HTTP API. The same application core still supports
+The implemented Phase 5 slice registers immutable dataset revisions, accepts
+durable idempotent run and comparison submissions, stores their resolved worker
+payloads, executes them through leased workers, recovers expired attempts, and
+preserves append-only evidence in PostgreSQL. A versioned HTTP API exposes only
+safe resource, job, and attempt summaries. The same application core supports
 the CLI evaluation, comparison, and DataBridge workflows. DataBridge adds strict
 HTTP normalization, SQL safety policy, and bounded read-only PostgreSQL replay
 without weakening the provider-neutral application ports.
 
 ## Architectural style
 
-The project is a modular monolith. The CLI and API runtime are composition roots:
-each constructs concrete adapters and passes them into application-owned
-protocol ports.
+The project is a modular monolith. The CLI, API, and worker runtimes are
+composition roots: each constructs concrete adapters and passes them into
+application-owned protocol ports.
 
 ```mermaid
 flowchart LR
@@ -23,10 +24,13 @@ flowchart LR
     CLI --> COMPARE["Comparison + gate service"]
     CLI --> ADAPTERS["Concrete adapters"]
     API["FastAPI composition root"] --> CONTROL["Control-plane service"]
-    API --> EXECUTOR["Deterministic API executor"]
     API --> DB["PostgreSQL repository"]
-    CONTROL --> RUNNER
-    CONTROL --> COMPARE
+    WORKER["Worker composition root"] --> ORCHESTRATE["Leased worker service"]
+    WORKER --> EXECUTOR["Deterministic executor"]
+    WORKER --> DB
+    ORCHESTRATE --> RUNNER
+    ORCHESTRATE --> COMPARE
+    ORCHESTRATE --> DB
     RUNNER --> PORTS["Target / evaluator / repository ports"]
     RUNNER --> DOMAIN["Immutable domain contracts"]
     COMPARE --> DOMAIN
@@ -51,6 +55,7 @@ import CLI, persistence, network, telemetry, queue, database, or provider SDKs.
 ```text
 src/llm_eval_control_plane/
 ├── cli.py
+├── worker.py             # worker loop, reaper, health, and shutdown
 ├── api/
 │   ├── app.py            # FastAPI routes and safe exception translation
 │   ├── contracts.py      # versioned request and redacted response models
@@ -62,7 +67,8 @@ src/llm_eval_control_plane/
 │   ├── ports.py           # target, evaluator, and run-repository protocols
 │   ├── runner.py          # serial in-process orchestration and aggregation
 │   ├── comparison.py      # alignment, slice aggregation, and gate decisions
-│   └── control_plane.py   # durable submissions and repository protocol
+│   ├── control_plane.py   # enqueue-only submissions and repository protocol
+│   └── worker.py          # leased attempt orchestration and fenced publication
 ├── adapters/
 │   ├── control_plane_db.py # SQLAlchemy PostgreSQL repository
 │   ├── databridge/        # strict v1.2.0 wire contracts + mock/HTTP targets
@@ -154,10 +160,10 @@ control exceptions such as cancellation or keyboard interruption.
 ## Durable HTTP submission flow
 
 API v1 exposes liveness and readiness, dataset registration and lookup, run
-submission and retrieval, durable job inspection, comparison submission, and
-release-decision retrieval. Collection endpoints use bounded `limit` values,
-opaque keyset cursors, documented exact-name filters, and enumerated kind/status
-filters. Dataset names containing `/` use the slash-safe route
+submission and retrieval, durable job and attempt inspection, cancellation,
+comparison submission, and release-decision retrieval. Collection endpoints use
+bounded `limit` values, opaque keyset cursors, documented exact-name filters, and
+enumerated kind/status filters. Dataset names containing `/` use the slash-safe route
 `/v1/dataset-revisions/{revision}/{name:path}`. The complete, machine-readable
 contract is committed as
 [`openapi-v1.json`](openapi-v1.json).
@@ -168,51 +174,68 @@ sequenceDiagram
     participant Boundary as API boundary
     participant Service as Control-plane service
     participant Store as PostgreSQL repository
-    participant Execute as Deterministic executor
+    participant Worker as Leased worker
+    participant Execute as Executor / comparator
 
     Client->>Boundary: POST run/comparison + Idempotency-Key
     Boundary->>Boundary: bound body, parse strict JSON, validate model
     Boundary->>Service: effective request with defaults
-    Service->>Store: resolve inputs and validate all preconditions
-    Service->>Store: begin job(key, semantic digest, resource ID)
+    Service->>Store: resolve and pin every available dependency
+    Service->>Store: insert job + canonical payload atomically
     alt existing identical submission
-        Store-->>Service: existing queued/running/terminal job
-        Service-->>Client: existing resource; no new invocation
+        Store-->>Service: existing job
+        Service-->>Client: 200 terminal or 202 nonterminal
     else key reused for changed semantics
         Store-->>Service: idempotency conflict
         Service-->>Client: 409 api-error/v1
     else unique insert winner
-        Store-->>Service: queued job + ownership
-        Service->>Store: compare-and-set queued to running
-        Service->>Execute: run or compare resolved immutable evidence
-        Execute-->>Service: RunResult or ReleaseDecision
-        Service->>Store: insert evidence + mark succeeded atomically
-        Service-->>Client: terminal job summary + Location
+        Store-->>Service: queued job
+        Service-->>Client: 202 job summary + Location
     end
+    Worker->>Store: claim available job with SKIP LOCKED
+    Store-->>Worker: payload + private lease token + attempt number
+    par Until execution finishes
+        Worker->>Store: heartbeat and extend lease
+    and Execute immutable payload
+        Worker->>Execute: run or compare pinned inputs
+        Execute-->>Worker: RunRecord or ReleaseDecisionRecord
+    end
+    Worker->>Store: fenced evidence publication
+    Store-->>Worker: succeeded, canceled, or lease lost
 ```
 
 The semantic digest is calculated from the validated request model with defaults
 materialized. JSON member order and omitted versus explicitly supplied defaults
 therefore do not create different submissions. The `Idempotency-Key` is stored
-and scoped with the job kind but is not included in that digest. Only the winner
-of the atomic insert invokes execution; an identical replay observes the stored
-job. This provides durable retry coordination, not exactly-once execution. The
-trade-offs are recorded in
-[ADR 0006](adr/0006-durable-idempotent-http-submissions.md).
+and scoped with the job kind but is not included in that digest. The job and its
+bounded canonical resolved payload are inserted in one transaction. Exact
+replays observe the original job and payload; changed semantics conflict. API
+processes never invoke execution. The idempotency boundary is recorded in
+[ADR 0006](adr/0006-durable-idempotent-http-submissions.md), and the worker
+protocol in [ADR 0007](adr/0007-leased-workers-and-fenced-publication.md).
 
-Job state is append-oriented: `queued` may transition only to `running`, and
-`running` may transition only to `succeeded` or `failed`. Successful completion
-inserts immutable run or release-decision evidence and performs the terminal
-transition in one database transaction. Stored failures contain only a stable
-safe error code. Dataset, run, and release-decision records accept canonically
-identical retries but reject changed content for an existing immutable identity.
+PostgreSQL is the coordination clock. A claim transaction selects one available
+queued job with `FOR UPDATE SKIP LOCKED`, changes it to `running`, increments its
+bounded attempt count, and creates an attempt with a private lease token. A
+heartbeat may extend only that active, unexpired attempt. Every retry, failure,
+cancellation, and completion verifies the job ID, attempt number, token, state,
+and lease inside the database transaction; a stale worker cannot publish.
 
-The current executor runs synchronously inside the API process and supports only
-the deterministic credential-free target and built-in evaluators. It performs no
-provider call; latency and token values are simulations. A process interruption
-after the job enters `running` can strand that durable state. Replaying the same
-submission returns the existing job and does not reinvoke it. Worker leasing,
-retry scheduling, and stranded-job recovery are Phase 5 concerns.
+Jobs may be `queued`, `running`, `cancel_requested`, `succeeded`, `failed`, or
+`canceled`. An explicitly transient failure returns work to `queued` at a
+database-calculated bounded backoff time. The reaper locks expired attempts in
+bounded batches. It reschedules work while an attempt remains, fails exhausted
+work with a safe code, and completes requested cancellation. Queued cancellation
+is immediate; running cancellation is cooperative and takes precedence over a
+late success transaction.
+
+Successful completion inserts the immutable run or release-decision evidence,
+finishes the active attempt, and changes its job to `succeeded` in one fenced
+transaction. This gives one durable evidence publication for a successful job.
+It does not give exactly-once external execution: a process may finish a target
+call and lose its lease before publication, after which recovery can invoke that
+target again. The implemented deterministic worker performs no provider call;
+its latency and token values remain simulations.
 
 The API returns versioned summaries instead of stored evidence documents. Run
 submission and detail summaries include identifiers, artifact and result
@@ -384,9 +407,10 @@ limit; `.env.example` contains only non-secret defaults and its path.
 
 The API is a local, unauthenticated service with a deterministic simulated
 executor. It has no TLS termination, tenant isolation, provider-backed API
-execution, or request-rate enforcement. Jobs execute inline; a crash can leave a
-job in `running`, and Phase 5 worker leasing and recovery are not present. The
-system consequently makes no exactly-once claim.
+execution, or request-rate enforcement. Crash recovery intentionally provides
+at-least-once invocation, so real external targets must tolerate duplicate calls
+or use their own idempotency support. A cancellation request cannot undo an
+external effect that already happened.
 
 A dashboard, OpenTelemetry, cloud infrastructure, Kubernetes, multi-cloud
 abstractions, billing, and arbitrary third-party Python plugins remain outside
