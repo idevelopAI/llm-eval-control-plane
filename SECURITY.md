@@ -37,6 +37,86 @@ Evaluation payloads are potentially sensitive. The project follows these rules:
 - Live evaluation is an explicit mode with separate configuration and evidence
   retention controls.
 
+## Control-plane API trust boundary
+
+The FastAPI service is a local development control plane. It has no user
+authentication, authorization, tenant isolation, or TLS termination. Compose
+binds it to `127.0.0.1` by default. Do not change that binding or place the
+service behind a public endpoint without adding an authenticated gateway,
+transport security, request-rate controls, and an explicit tenant model.
+
+API request handling is intentionally fail-closed:
+
+- mutating bodies must use `application/json` without content encoding;
+- strict parsing rejects invalid UTF-8, duplicate keys, BOMs, non-finite values,
+  malformed or excessively nested JSON, and bodies over the configured limit;
+- dataset size, slice fan-out, evaluator count, comparison gates, and derived
+  comparison work are bounded before a job is claimed;
+- caller request IDs are accepted only through a bounded safe alphabet;
+- validation details contain safe field locations and error types, never rejected
+  values, validator context, URLs, or raw exceptions; and
+- request and application errors use the versioned `api-error/v1` envelope and a
+  sanitized request ID. Readiness is the deliberate exception: a non-ready
+  service returns `503` with the versioned `health/v1` status contract.
+
+Run and comparison responses are summaries. They exclude case inputs,
+expectations, target outputs, SQL, rows, database configuration, idempotency
+keys, semantic request digests, and exception text. Complete run and release
+evidence remains in PostgreSQL and must be handled as sensitive evaluation data.
+Content digests prove integrity; they do not encrypt the stored document.
+
+`Idempotency-Key` is stored to coordinate retries. Treat it as an opaque routing
+identifier, not a place for credentials, emails, prompts, or customer data. The
+validated request semantics are hashed separately. An identical retry returns
+the existing durable job, while a changed request using the same key fails with
+a conflict.
+
+The API process executes the deterministic target inline. A crash can leave a
+job in `running`; the current service returns that state on retry and does not
+reinvoke it. There is no automated recovery worker yet, and the service makes no
+exactly-once execution claim.
+
+## Local PostgreSQL secret handling
+
+The Compose stack reads the PostgreSQL password from the gitignored file named
+by `CONTROL_PLANE_PASSWORD_FILE`. `.env.example` contains only non-secret
+settings and the secret-file path. Never place the password or a complete
+database URL in `.env`, Compose YAML, Git, issue text, command arguments, or
+shell history.
+
+Protect the containing directory from other host users, then make the file
+readable by the fixed non-root container UID. The directory's `0700` mode blocks
+host traversal even though the directly bind-mounted file uses mode `0444`:
+
+```bash
+(
+  umask 077
+  mkdir -p .secrets
+  chmod 0700 .secrets
+  touch .secrets/postgres-password.txt
+  chmod 0600 .secrets/postgres-password.txt
+  printf 'Local PostgreSQL password: '
+  IFS= read -r -s CONTROL_PLANE_LOCAL_PASSWORD
+  printf '\n'
+  printf '%s\n' "$CONTROL_PLANE_LOCAL_PASSWORD" \
+    > .secrets/postgres-password.txt
+  chmod 0444 .secrets/postgres-password.txt
+  unset CONTROL_PLANE_LOCAL_PASSWORD
+)
+```
+
+Compose mounts that file read-only under `/run/secrets/` for PostgreSQL, the
+migration process, and the API. Runtime configuration reads only a bounded
+regular file without following symlinks. SQLAlchemy engines hide parameter
+values. Migration and application errors must never render a database URL or
+password.
+
+Use a dedicated local control-plane database and role. The API runtime does not
+create or upgrade tables: the one-shot Alembic service applies migrations before
+startup, and readiness fails unless the database reports the exact expected
+revision. Backups of the named PostgreSQL volume contain sensitive evidence and
+must receive the same protection as the source evaluation data.
+
 ## DataBridge trust boundaries
 
 The checked-in DataBridge workflow uses deterministic mock target responses and

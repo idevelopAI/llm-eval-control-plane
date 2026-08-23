@@ -22,6 +22,13 @@
 | `GateCaseComparison` | Threshold-relative case transition for one configured gate | Implemented |
 | `GateResult` | Coverage, threshold, and regression checks for one gate | Implemented |
 | `ReleaseDecision` | Content-addressed pass/fail evidence for the whole policy | Implemented |
+| `DatasetRecord` | Immutable dataset revision plus its durable registration time | Implemented |
+| `JobRecord` | Durable submission identity, semantic digest, resource ID, and lifecycle state | Implemented |
+| `JobKind` | `run` or `comparison` idempotency namespace | Implemented |
+| `JobStatus` | `queued`, `running`, `succeeded`, or `failed` lifecycle state | Implemented |
+| `RunRecord` | Append-only run result plus its durable creation time | Implemented |
+| `ReleaseDecisionRecord` | Append-only release decision plus stable ID and creation time | Implemented |
+| `CursorPage` | Stable bounded page plus opaque continuation cursor | Implemented |
 | `SqlExpectation` | Reviewed query, clarification, or refusal oracle | Implemented |
 | `SqlTargetOutput` | Minimal normalized decision and generated-SQL evidence | Implemented |
 | `SqlReplayResult` | Bounded normalized PostgreSQL columns and rows | Implemented |
@@ -49,7 +56,9 @@ behavior revisions inside a run.
 
 - A target receives `case_id` and `input` only. It never receives `expected`,
   expected refusal state, schemas, tolerances, or slice labels.
-- Each case is invoked exactly once by the evaluation runner.
+- During one evaluation-runner invocation, each case is invoked exactly once.
+  Durable HTTP submission does not turn that local invariant into an
+  exactly-once execution guarantee across process crashes.
 - Target responses require structured refusal state and explicit non-negative
   input/output usage. Refusals are never inferred from wording.
 - Every run records its execution mode. Deterministic fake runs default to
@@ -126,7 +135,41 @@ behavior revisions inside a run.
   simulated. It does not establish deployed-model accuracy or performance. Live
   accuracy was not run for this release.
 
+## Durable submission invariants
+
+- A job has one stable ID, kind, status, opaque idempotency key, semantic request
+  digest, resource ID, creation time, and update time. All timestamps normalize
+  to UTC and the update time cannot precede creation.
+- The idempotency namespace is `(job kind, idempotency key)`. A run and a
+  comparison may use the same opaque key without identifying the same job.
+- The semantic digest covers the validated effective request with all defaults
+  materialized. It does not cover JSON member order, raw transport bytes, or the
+  separately stored idempotency key.
+- An atomic job claim has one insert winner. An identical request returns the
+  stored job and performs no new execution. Reusing the same kind and key with a
+  different semantic digest is a conflict.
+- Dataset lookup, adapter and evaluator validation, comparison alignment, and
+  derived-work bounds are checked before a new job is claimed whenever they can
+  be resolved without execution.
+- Legal transitions are only `queued` to `running`, then `running` to either
+  `succeeded` or `failed`. Terminal jobs never transition again. An exact-state
+  retry is accepted only when its safe error code also matches.
+- Only failed jobs contain an error code, and that value is a bounded stable
+  code. Raw exception text, database details, and local paths never enter a job
+  record.
+- Successful completion inserts the immutable `RunRecord` or
+  `ReleaseDecisionRecord` and transitions its job to `succeeded` in one database
+  transaction. A failed transaction publishes neither half.
+- A job's resource kind and ID must agree with the evidence completed through
+  it. A changed immutable resource at an existing identity is a conflict.
+- API execution is currently synchronous. If the process stops after claiming a
+  job, its durable `running` state can remain stranded. Identical replay returns
+  that state and does not reinvoke execution. Phase 5 must add worker leasing and
+  recovery; these invariants do not promise exactly-once execution.
+
 ## Persistence invariants
+
+### Local CLI artifact store
 
 - A run ID is validated before any path is built.
 - A domain-separated hash of the run ID is used as the storage filename; the raw
@@ -137,6 +180,51 @@ behavior revisions inside a run.
 - Reads accept regular files only, enforce a 64 MiB limit, validate strict JSON,
   reject unknown envelope fields, verify the embedded run ID, and require exact
   canonical bytes.
+
+### PostgreSQL control-plane store
+
+- Dataset, run, and release-decision records are append-only. An identical put is
+  idempotent; different canonical content at the same immutable identity is a
+  conflict. No operation overwrites completed evidence.
+- Job creation is protected by unique identities and the kind/key idempotency
+  namespace. State changes use compare-and-set semantics so concurrent writers
+  cannot skip or reverse lifecycle transitions.
+- Stored domain documents retain complete canonical evaluation evidence. Public
+  API models are separate redacted summaries; database records are not shaped by
+  the response contract.
+- List operations use a positive bounded limit and an opaque continuation cursor.
+  Cursor decoding, filtering, and ordering remain repository concerns; malformed
+  or out-of-range values fail without exposing database details.
+- Alembic is the only schema migration path. API readiness requires database
+  connectivity and the exact expected migration head.
+- Database connection configuration and credentials are runtime inputs, never
+  domain fields, artifact identities, semantic request input, or error evidence.
+
+## API resource invariants
+
+- Top-level public contracts carry a literal schema version. Breaking transport
+  changes require a new version instead of silently changing an existing shape.
+- Mutating bodies require strict UTF-8 `application/json` without content
+  encoding. Duplicate names, BOMs, non-finite numbers, malformed or excessively
+  nested input, and oversized bodies are rejected before application execution.
+- One registered dataset contains at most 1,000 cases. Slice fan-out, total
+  distinct slices, evaluators, comparison gates, metrics, case-comparison
+  records, and aggregate scan work have explicit upper bounds.
+- Collection pages contain at most 100 items. Filters accept documented exact
+  dataset-name selectors and enum values for job kind, job status, or release
+  status.
+- Run and release-decision submission/detail contracts contain safe identifiers,
+  digests, counts, aggregates, and gate results. Collection contracts use
+  bounded metadata projections—resource identifiers, kind or status, safe
+  failure codes, digests, timestamps, dataset identity and case count, execution
+  mode, and comparison run IDs where applicable—without loading canonical
+  evidence documents. All variants exclude raw inputs, expectations, target
+  outputs, SQL, rows, idempotency keys, semantic request digests, database URLs,
+  local paths, and exception text.
+- Request and application failures use a versioned safe envelope and bounded
+  request ID. Validation details include only sanitized locations and stable
+  error types, never rejected values, validator context, URLs, or exception
+  strings. Readiness uses the separate `health/v1` status contract.
 
 ## Evaluation-specification semantics
 

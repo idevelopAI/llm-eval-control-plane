@@ -3,29 +3,36 @@
 ## System objective
 
 LLM Eval Control Plane turns AI application behavior into reproducible evidence.
-The implemented Phase 3 slice loads a content-addressed dataset, invokes a
-versioned deterministic mock or explicitly enabled live target once per case,
-validates untrusted responses, applies versioned evaluators, preserves case-level
-outcomes, aggregates coverage-aware metrics, and atomically stores a complete
-immutable run. It also aligns candidate and baseline evidence, recomputes global
-and slice aggregates, applies release policy, and renders a content-addressed
-decision. The DataBridge vertical slice adds strict HTTP normalization, SQL
-safety policy, and bounded read-only PostgreSQL replay without weakening the
-provider-neutral application ports.
+The implemented Phase 4 slice registers immutable dataset revisions, accepts
+durable idempotent run and comparison submissions, executes deterministic
+evaluations, preserves append-only evidence in PostgreSQL, and exposes safe
+summaries through a versioned HTTP API. The same application core still supports
+the CLI evaluation, comparison, and DataBridge workflows. DataBridge adds strict
+HTTP normalization, SQL safety policy, and bounded read-only PostgreSQL replay
+without weakening the provider-neutral application ports.
 
 ## Architectural style
 
-The project is a modular monolith. The CLI is the composition root: it constructs
-concrete adapters and passes them into application-owned protocol ports.
+The project is a modular monolith. The CLI and API runtime are composition roots:
+each constructs concrete adapters and passes them into application-owned
+protocol ports.
 
 ```mermaid
 flowchart LR
     CLI["CLI composition root"] --> RUNNER["Application runner"]
     CLI --> COMPARE["Comparison + gate service"]
     CLI --> ADAPTERS["Concrete adapters"]
+    API["FastAPI composition root"] --> CONTROL["Control-plane service"]
+    API --> EXECUTOR["Deterministic API executor"]
+    API --> DB["PostgreSQL repository"]
+    CONTROL --> RUNNER
+    CONTROL --> COMPARE
     RUNNER --> PORTS["Target / evaluator / repository ports"]
     RUNNER --> DOMAIN["Immutable domain contracts"]
     COMPARE --> DOMAIN
+    CONTROL --> PORTS
+    CONTROL --> DOMAIN
+    DB -. implement .-> PORTS
     ADAPTERS -. implement .-> PORTS
     ADAPTERS --> DOMAIN
 ```
@@ -44,11 +51,20 @@ import CLI, persistence, network, telemetry, queue, database, or provider SDKs.
 ```text
 src/llm_eval_control_plane/
 ├── cli.py
+├── api/
+│   ├── app.py            # FastAPI routes and safe exception translation
+│   ├── contracts.py      # versioned request and redacted response models
+│   ├── execution.py      # credential-free deterministic API executor
+│   ├── middleware.py     # strict body and request-ID boundary
+│   ├── runtime.py        # environment-only API composition root
+│   └── settings.py       # bounded database and server configuration
 ├── application/
 │   ├── ports.py           # target, evaluator, and run-repository protocols
 │   ├── runner.py          # serial in-process orchestration and aggregation
-│   └── comparison.py      # alignment, slice aggregation, and gate decisions
+│   ├── comparison.py      # alignment, slice aggregation, and gate decisions
+│   └── control_plane.py   # durable submissions and repository protocol
 ├── adapters/
+│   ├── control_plane_db.py # SQLAlchemy PostgreSQL repository
 │   ├── databridge/        # strict v1.2.0 wire contracts + mock/HTTP targets
 │   ├── databridge_scorer.py # interaction, safety, and SQL result evaluation
 │   ├── fake_target.py     # deterministic offline target and synthetic clock
@@ -63,11 +79,14 @@ src/llm_eval_control_plane/
     ├── canonical.py       # strict parsing and RFC 8785 hashing
     ├── datasets.py        # reviewed cases and dataset versions
     ├── comparison.py      # release decision evidence and content digest
+    ├── control_plane.py   # dataset, job, run, and decision records
     ├── evaluation.py      # slice-aware release policy
     ├── execution.py       # target and evaluator result envelopes
     ├── models.py          # shared strict/frozen model behavior
     ├── results.py         # case evidence, modes, aggregates, and run digests
     └── sql.py             # strict SQL expectation/output/replay contracts
+
+migrations/                # Alembic environment and versioned PostgreSQL DDL
 ```
 
 ## Evaluation and release flow
@@ -131,6 +150,83 @@ Target expectations are never passed through the target port. Target and
 evaluator exceptions are converted to bounded failure codes; remaining cases
 continue. The runner catches ordinary exceptions but does not swallow process
 control exceptions such as cancellation or keyboard interruption.
+
+## Durable HTTP submission flow
+
+API v1 exposes liveness and readiness, dataset registration and lookup, run
+submission and retrieval, durable job inspection, comparison submission, and
+release-decision retrieval. Collection endpoints use bounded `limit` values,
+opaque keyset cursors, documented exact-name filters, and enumerated kind/status
+filters. Dataset names containing `/` use the slash-safe route
+`/v1/dataset-revisions/{revision}/{name:path}`. The complete, machine-readable
+contract is committed as
+[`openapi-v1.json`](openapi-v1.json).
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Boundary as API boundary
+    participant Service as Control-plane service
+    participant Store as PostgreSQL repository
+    participant Execute as Deterministic executor
+
+    Client->>Boundary: POST run/comparison + Idempotency-Key
+    Boundary->>Boundary: bound body, parse strict JSON, validate model
+    Boundary->>Service: effective request with defaults
+    Service->>Store: resolve inputs and validate all preconditions
+    Service->>Store: begin job(key, semantic digest, resource ID)
+    alt existing identical submission
+        Store-->>Service: existing queued/running/terminal job
+        Service-->>Client: existing resource; no new invocation
+    else key reused for changed semantics
+        Store-->>Service: idempotency conflict
+        Service-->>Client: 409 api-error/v1
+    else unique insert winner
+        Store-->>Service: queued job + ownership
+        Service->>Store: compare-and-set queued to running
+        Service->>Execute: run or compare resolved immutable evidence
+        Execute-->>Service: RunResult or ReleaseDecision
+        Service->>Store: insert evidence + mark succeeded atomically
+        Service-->>Client: terminal job summary + Location
+    end
+```
+
+The semantic digest is calculated from the validated request model with defaults
+materialized. JSON member order and omitted versus explicitly supplied defaults
+therefore do not create different submissions. The `Idempotency-Key` is stored
+and scoped with the job kind but is not included in that digest. Only the winner
+of the atomic insert invokes execution; an identical replay observes the stored
+job. This provides durable retry coordination, not exactly-once execution. The
+trade-offs are recorded in
+[ADR 0006](adr/0006-durable-idempotent-http-submissions.md).
+
+Job state is append-oriented: `queued` may transition only to `running`, and
+`running` may transition only to `succeeded` or `failed`. Successful completion
+inserts immutable run or release-decision evidence and performs the terminal
+transition in one database transaction. Stored failures contain only a stable
+safe error code. Dataset, run, and release-decision records accept canonically
+identical retries but reject changed content for an existing immutable identity.
+
+The current executor runs synchronously inside the API process and supports only
+the deterministic credential-free target and built-in evaluators. It performs no
+provider call; latency and token values are simulations. A process interruption
+after the job enters `running` can strand that durable state. Replaying the same
+submission returns the existing job and does not reinvoke it. Worker leasing,
+retry scheduling, and stranded-job recovery are Phase 5 concerns.
+
+The API returns versioned summaries instead of stored evidence documents. Run
+submission and detail summaries include identifiers, artifact and result
+digests, execution mode, case-status counts, and aggregate metrics.
+Release-decision submission and detail summaries include result digests and gate
+outcomes. Collection routes instead read indexed, lightweight metadata
+projections without loading canonical documents. Across resources, their items
+are limited to resource identifiers, kind or status, safe failure codes,
+digests, timestamps, dataset identity and case count, execution mode, and
+comparison run IDs where applicable. Neither surface returns raw cases, inputs,
+expectations, outputs, SQL, rows, idempotency keys, semantic request digests,
+database URLs, local paths, or exception text. Request and application failures
+use the stable `api-error/v1` envelope with a sanitized or generated request ID;
+non-ready health checks instead return `503` with `health/v1`.
 
 ## DataBridge vertical slice
 
@@ -216,6 +312,8 @@ release.
 
 ## Persistence contract
 
+### Local CLI artifacts
+
 One complete run is stored as an RFC 8785 envelope plus exactly one LF. Run IDs
 are validated before path construction and mapped to domain-separated SHA-256
 filenames, avoiding traversal, reserved-name, and case-insensitive collisions.
@@ -226,6 +324,25 @@ content is a conflict; corrupt or special files fail closed. Reads are bounded,
 reject symlinks and non-regular files where the platform supports those checks,
 revalidate the storage schema and domain digest, and require exact canonical
 bytes.
+
+### PostgreSQL control-plane records
+
+The API repository stores datasets, jobs, runs, and release decisions in
+PostgreSQL. Domain documents are serialized canonically; metadata columns support
+unique idempotency claims, legal compare-and-set transitions, resource lookup,
+and opaque keyset pagination. Evidence rows are append-only. There is no update
+path for a completed dataset, run, or release decision.
+
+Alembic owns schema creation and upgrade. The API runtime does not run DDL. In
+Compose, a one-shot migration service reaches the exact committed Alembic head
+before the API starts. `/health/ready` requires both database connectivity and
+that exact revision, so connectivity to an older or newer schema is not reported
+as ready.
+
+The Compose composition root builds the database connection from bounded
+non-secret components and a mounted password file. It does not render or log the
+assembled URL. The password is a regular, non-symlink file with a strict size
+limit; `.env.example` contains only non-secret defaults and its path.
 
 ## Trust boundaries
 
@@ -251,10 +368,26 @@ bytes.
 - DataBridge run artifacts retain generated SQL but not provider answers,
   returned rows/columns, request IDs, or provider timings. The artifact store is
   therefore still sensitive.
+- The HTTP API is unauthenticated and intended only for loopback development.
+  Compose binds it to `127.0.0.1`; exposing it requires an authenticated gateway,
+  transport security, rate controls, and a defined tenant boundary.
+- API parsing rejects unsupported media types and encodings, oversized or deeply
+  nested bodies, invalid UTF-8, duplicate JSON keys, BOMs, and non-finite values.
+  Request collection sizes and derived comparison work are also bounded.
+- PostgreSQL holds complete evidence even though API responses are redacted.
+  Database volumes and backups are sensitive and require access controls.
+- `Idempotency-Key` is an opaque retry identifier, not a secret container. It
+  must never contain credentials, prompts, customer identifiers, or other
+  sensitive content.
 
-## Deferred boundaries
+## Current limitations
 
-Durable queues, a control-plane HTTP API, a dashboard, OpenTelemetry,
-authentication, and cloud infrastructure remain deferred. Kubernetes,
-multi-cloud abstractions, billing, and arbitrary third-party Python plugins are
-outside the MVP.
+The API is a local, unauthenticated service with a deterministic simulated
+executor. It has no TLS termination, tenant isolation, provider-backed API
+execution, or request-rate enforcement. Jobs execute inline; a crash can leave a
+job in `running`, and Phase 5 worker leasing and recovery are not present. The
+system consequently makes no exactly-once claim.
+
+A dashboard, OpenTelemetry, cloud infrastructure, Kubernetes, multi-cloud
+abstractions, billing, and arbitrary third-party Python plugins remain outside
+the implemented scope.
