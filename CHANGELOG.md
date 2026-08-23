@@ -55,6 +55,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Pre/post normalized PostgreSQL content verification tied to the reviewed seed
   digest, plus an offline CI gate backed by a digest-pinned PostgreSQL image and
   a no-write, no-temporary-table role.
+- A versioned FastAPI control plane for registering dataset revisions,
+  submitting evaluation and comparison jobs, inspecting job state, and paging
+  redacted run and release-decision summaries.
+- Durable PostgreSQL records for datasets, jobs, runs, and release decisions,
+  with SQLAlchemy repository ports and an initial Alembic migration.
+- Atomic semantic idempotency claims for run and comparison submissions,
+  compare-and-set job transitions, and transactional evidence insertion with
+  terminal job completion.
+- A credential-free deterministic API executor, stable `api-error/v1`
+  responses, sanitized request IDs, strict JSON handling, and bounded derived
+  comparison work.
+- A deterministic committed OpenAPI v1 document and a drift-checking export
+  command that does not require a database or credentials.
+- A hardened local Compose stack with a one-shot migration service, exact-schema
+  readiness, loopback API binding, and file-mounted PostgreSQL secrets.
 
 ### Changed
 
@@ -66,6 +81,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   baseline/candidate comparison across different modes.
 - Documentation now distinguishes deterministic DataBridge mock evidence from
   local PostgreSQL replay and unexecuted live-model accuracy.
+- The API is now a second composition root alongside the CLI; both depend on
+  application protocols rather than concrete persistence or execution adapters.
+- Local service documentation now distinguishes simulated deterministic API
+  evidence from live-model measurements and records the current inline-execution
+  recovery limitation.
+- Dataset, run, and release-decision collection routes now read bounded indexed
+  metadata projections without loading complete canonical evidence documents;
+  detail reads continue to validate the stored document against its indexes.
+- Durable replay coordination is explicitly not an exactly-once guarantee:
+  interrupted inline execution can leave a job in `running` until a later worker
+  leasing and recovery phase.
 
 ### Security
 
@@ -85,3 +111,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Live configuration rejects a shared API-key/DSN environment reference;
   response manifests are size-bounded before allocation and must align exactly
   with the reviewed dataset.
+- API bodies require strict unencoded JSON and are bounded by raw size, nesting,
+  collection cardinality, slice fan-out, comparison gates, and derived work.
+- Default API summaries and errors omit raw cases, prompts, expectations,
+  outputs, SQL, rows, database URLs, semantic request digests, and exception
+  text.
+- Compose keeps the API on loopback, drops container capabilities, uses
+  read-only filesystems where practical, and obtains the database password from
+  a gitignored mounted file rather than an environment value.
+- The local API remains unauthenticated and has no tenant isolation, TLS
+  termination, or request-rate enforcement; it is not intended for exposure to
+  an untrusted network.

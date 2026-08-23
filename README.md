@@ -3,16 +3,138 @@
 [![CI](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/ci.yml/badge.svg)](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/ci.yml)
 [![Release Gate](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/release-gate.yml/badge.svg)](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/release-gate.yml)
 [![DataBridge Gate](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/databridge-gate.yml/badge.svg)](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/databridge-gate.yml)
+[![Control Plane API Gate](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/control-plane-api-gate.yml/badge.svg)](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/control-plane-api-gate.yml)
 
 A deterministic-first control plane for evaluating AI application behavior,
 preserving case-level evidence, and making quality, safety, latency, and usage
 changes measurable before release.
 
-> **Status:** Phase 3 DataBridge vertical slice. In addition to deterministic
-> baseline comparison and release gates, the repository now evaluates strict
-> DataBridge v1.2.0 query, clarification, and refusal decisions against a bounded
-> read-only PostgreSQL replay environment. Mock and live execution modes are
-> explicit, independently hashed evidence.
+> **Status:** Phase 4 durable control-plane API. The repository now exposes the
+> deterministic evaluation and comparison core through a versioned FastAPI
+> service backed by PostgreSQL records, Alembic migrations, immutable evidence,
+> and semantic idempotency. The DataBridge PostgreSQL evaluation remains
+> available through the CLI.
+
+## Durable HTTP control plane
+
+The local API registers immutable dataset revisions, submits deterministic
+evaluation runs, tracks durable jobs, and stores release decisions. API v1 uses
+only the credential-free deterministic executor: its latency and usage evidence
+are simulated and must not be presented as live-model measurements.
+
+### Local Compose quickstart
+
+The Compose stack mounts the database password from a gitignored secret file.
+Keep the value out of `.env`, command arguments, and shell history:
+
+```bash
+(
+  umask 077
+  mkdir -p .secrets
+  chmod 0700 .secrets
+  touch .secrets/postgres-password.txt
+  chmod 0600 .secrets/postgres-password.txt
+  printf 'Local PostgreSQL password: '
+  IFS= read -r -s CONTROL_PLANE_LOCAL_PASSWORD
+  printf '\n'
+  printf '%s\n' "$CONTROL_PLANE_LOCAL_PASSWORD" \
+    > .secrets/postgres-password.txt
+  chmod 0444 .secrets/postgres-password.txt
+  unset CONTROL_PLANE_LOCAL_PASSWORD
+)
+
+docker compose up --build --detach --wait
+docker compose ps
+curl --fail --silent http://127.0.0.1:8000/health/ready
+```
+
+The `migrate` service applies the exact Alembic head before the API starts. The
+readiness endpoint requires both database connectivity and that schema revision.
+The API port is bound to loopback by default.
+
+Register a small dataset, then submit a run with a caller-selected idempotency
+key:
+
+```bash
+curl --fail-with-body \
+  --header 'Content-Type: application/json' \
+  --request POST http://127.0.0.1:8000/v1/datasets \
+  --data-binary @- <<'JSON'
+{
+  "name": "demo/http",
+  "revision": 1,
+  "cases": [
+    {
+      "case_id": "echo-001",
+      "input": {"scenario": "echo", "value": "hello"},
+      "expected": "hello"
+    }
+  ]
+}
+JSON
+
+curl --include --fail-with-body \
+  --header 'Content-Type: application/json' \
+  --header 'Idempotency-Key: demo-run-v1' \
+  --request POST http://127.0.0.1:8000/v1/runs \
+  --data-binary @- <<'JSON'
+{
+  "dataset_name": "demo/http",
+  "dataset_revision": 1,
+  "target_name": "fake/http",
+  "target_revision": 1,
+  "evaluators": ["exact_match", "latency"]
+}
+JSON
+```
+
+The submission response contains a `Location: /v1/jobs/{job_id}` header. Run
+submission and detail responses contain identifiers, content digests, execution
+mode, case-status counts, and aggregate metrics; decision submission and detail
+responses also contain gate results. Collection pages use bounded indexed
+discovery projections and do not load the canonical evidence documents. Across
+resources, their fields are limited to resource identifiers, kind or status,
+safe failure codes, digests, timestamps, dataset identity and case count,
+execution mode, and comparison run IDs where applicable. No response returns
+case inputs, expectations, target outputs, SQL, rows, idempotency keys, request
+digests, database URLs, or exception text.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/health/live` | Process liveness |
+| `GET` | `/health/ready` | Database and exact-schema readiness |
+| `POST`, `GET` | `/v1/datasets` | Register or page dataset revisions |
+| `GET` | `/v1/dataset-revisions/{revision}/{name:path}` | Read one slash-safe dataset summary |
+| `POST`, `GET` | `/v1/runs` | Submit or page evaluation runs |
+| `GET` | `/v1/runs/{run_id}` | Read one redacted run summary |
+| `GET` | `/v1/jobs`, `/v1/jobs/{job_id}` | Page or inspect durable job state |
+| `POST` | `/v1/comparisons` | Submit a baseline/candidate comparison |
+| `GET` | `/v1/release-decisions` | Page release decisions |
+| `GET` | `/v1/release-decisions/{decision_id}` | Read one redacted decision |
+| `GET` | `/openapi.json`, `/docs` | Read the generated contract or local Swagger UI |
+
+The generated API contract is committed at
+[`docs/openapi-v1.json`](docs/openapi-v1.json). Regenerate or verify it with:
+
+```bash
+uv run python scripts/export_openapi.py
+uv run python scripts/export_openapi.py --check
+```
+
+Run and comparison submissions require `Idempotency-Key`. The service hashes the
+validated effective request with defaults materialized, not the raw JSON bytes.
+The same job kind, key, and semantic request returns the existing job without a
+second invocation; reusing a key for different semantics returns `409`. Evidence
+insertion and the terminal job transition occur in one database transaction. A
+new synchronously completed submission returns `201`, a terminal replay returns
+`200`, and an existing queued or running job returns `202`.
+
+This is an intentionally local, unauthenticated service. Do not expose it to an
+untrusted network. Execution currently occurs synchronously in the API process.
+A process interruption can leave a claimed job in `running`; replay returns that
+durable job and does not execute it again. Automated recovery and queued workers
+are not implemented in this phase, so the service does not claim exactly-once
+execution.
 
 ## DataBridge PostgreSQL evaluation
 
@@ -255,6 +377,14 @@ performed safely.
   bounded responses, sanitized failures, and environment-only secret lookup
 - PostgreSQL SQL parsing, allowlist policy, bounded read-only replay, reviewed
   reference validation, and interaction/safety/result-equivalence metrics
+- A strict FastAPI v1 surface with bounded JSON bodies, stable versioned error
+  envelopes, redacted summaries, opaque keyset pagination, and generated OpenAPI
+- SQLAlchemy PostgreSQL persistence for datasets, jobs, immutable run evidence,
+  and immutable release decisions, with Alembic schema compatibility checks
+- Atomic semantic job claims, legal queued/running/terminal transitions, and
+  transactional evidence completion without duplicate replay execution
+- A hardened local Compose stack with a one-shot migration service, loopback API
+  binding, read-only containers, dropped capabilities, and file-mounted secrets
 - Python 3.11–3.14 CI, strict typing, linting, branch coverage, packaging, and
   isolated wheel smoke tests
 
@@ -279,7 +409,7 @@ uv sync --locked
 uv lock --check
 uv run ruff format --check .
 uv run ruff check .
-uv run mypy src tests
+uv run mypy src tests scripts migrations
 uv run pytest --cov=llm_eval_control_plane --cov-branch
 uv build
 ```
@@ -298,9 +428,9 @@ uv run llm-eval validate examples/evaluation-spec.json
 - [Architecture decisions](docs/adr/)
 
 The project is a modular monolith with dependency direction
-`entrypoints/adapters → application → domain`. The CLI is the composition root;
-the application layer depends on target, evaluator, and repository protocols,
-not concrete adapters.
+`entrypoints/adapters → application → domain`. The CLI and API runtime are
+composition roots; the application layer depends on target, evaluator, and
+control-plane repository protocols, not concrete adapters.
 
 ## Contributing and security
 
