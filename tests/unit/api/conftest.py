@@ -151,11 +151,11 @@ class ReadyRepository:
         self.jobs[job_id] = changed
         return changed
 
-    def cancel_job(self, job_id: str, *, at: datetime) -> JobRecord:
+    def cancel_job(self, job_id: str) -> JobRecord:
         current = self.get_job(job_id)
         if current.status in {JobStatus.SUCCEEDED, JobStatus.FAILED}:
             raise StoreTransitionError("private terminal state")
-        changed = current.request_cancellation(at=at)
+        changed = current.request_cancellation(at=NOW)
         self.jobs[job_id] = changed
         return changed
 

@@ -203,13 +203,15 @@ class FakeRepository:
         self.claim = True
         self.claim_tokens: list[str] = []
         self.claim_worker_ids: list[str] = []
+        self.claim_lease_seconds: list[int] = []
         self.heartbeat_calls = 0
+        self.heartbeat_lease_seconds: list[int] = []
         self.heartbeat_status = JobStatus.RUNNING
         self.heartbeat_error: ControlPlaneStoreError | None = None
         self.heartbeat_seen = asyncio.Event()
         self.completed_run: RunRecord | None = None
         self.completed_decision: ReleaseDecisionRecord | None = None
-        self.retry_call: tuple[datetime, datetime, str] | None = None
+        self.retry_call: tuple[int, str] | None = None
         self.fail_code: str | None = None
         self.acknowledged = False
         self.cancel_during_mutation = False
@@ -219,20 +221,20 @@ class FakeRepository:
         *,
         worker_id: str,
         lease_token: str,
-        at: datetime,
-        lease_expires_at: datetime,
+        lease_seconds: int,
     ) -> ClaimedJob | None:
         self.claim_tokens.append(lease_token)
         self.claim_worker_ids.append(worker_id)
+        self.claim_lease_seconds.append(lease_seconds)
         if not self.claim:
             return None
         attempt = JobAttemptRecord(
             job_id=self.job.job_id,
             attempt_number=self.job.attempt_count,
             status=JobAttemptStatus.RUNNING,
-            started_at=at,
-            heartbeat_at=at,
-            lease_expires_at=lease_expires_at,
+            started_at=NOW,
+            heartbeat_at=NOW,
+            lease_expires_at=NOW + timedelta(seconds=lease_seconds),
         )
         return ClaimedJob(
             job=self.job,
@@ -247,10 +249,9 @@ class FakeRepository:
         _attempt_number: int,
         _lease_token: str,
         *,
-        at: datetime,
-        lease_expires_at: datetime,
+        lease_seconds: int,
     ) -> JobRecord:
-        del at, lease_expires_at
+        self.heartbeat_lease_seconds.append(lease_seconds)
         self.heartbeat_calls += 1
         self.heartbeat_seen.set()
         if self.heartbeat_error is not None:
@@ -279,17 +280,16 @@ class FakeRepository:
         _attempt_number: int,
         _lease_token: str,
         *,
-        at: datetime,
-        available_at: datetime,
+        delay_seconds: int,
         error_code: str,
     ) -> JobRecord:
         if self.cancel_during_mutation:
-            return self._cancel(at)
-        self.retry_call = (at, available_at, error_code)
+            return self._cancel()
+        self.retry_call = (delay_seconds, error_code)
         self.job = self.job.transition_to(
             JobStatus.QUEUED,
-            at=at,
-            available_at=available_at,
+            at=NOW,
+            available_at=NOW + timedelta(seconds=delay_seconds),
         )
         return self.job
 
@@ -299,15 +299,14 @@ class FakeRepository:
         _attempt_number: int,
         _lease_token: str,
         *,
-        at: datetime,
         error_code: str,
     ) -> JobRecord:
         if self.cancel_during_mutation:
-            return self._cancel(at)
+            return self._cancel()
         self.fail_code = error_code
         self.job = self.job.transition_to(
             JobStatus.FAILED,
-            at=at,
+            at=NOW,
             error_code=error_code,
         )
         return self.job
@@ -317,11 +316,9 @@ class FakeRepository:
         _job_id: str,
         _attempt_number: int,
         _lease_token: str,
-        *,
-        at: datetime,
     ) -> JobRecord:
         self.acknowledged = True
-        self.job = self.job.transition_to(JobStatus.CANCELED, at=at)
+        self.job = self.job.transition_to(JobStatus.CANCELED, at=NOW)
         return self.job
 
     def complete_run(
@@ -331,13 +328,12 @@ class FakeRepository:
         *,
         attempt_number: int,
         lease_token: str,
-        at: datetime,
     ) -> JobRecord:
         del attempt_number, lease_token
         if self.cancel_during_mutation:
-            return self._cancel(at)
+            return self._cancel()
         self.completed_run = record
-        self.job = self.job.transition_to(JobStatus.SUCCEEDED, at=at)
+        self.job = self.job.transition_to(JobStatus.SUCCEEDED, at=NOW)
         return self.job
 
     def complete_release_decision(
@@ -347,18 +343,17 @@ class FakeRepository:
         *,
         attempt_number: int,
         lease_token: str,
-        at: datetime,
     ) -> JobRecord:
         del attempt_number, lease_token
         if self.cancel_during_mutation:
-            return self._cancel(at)
+            return self._cancel()
         self.completed_decision = record
-        self.job = self.job.transition_to(JobStatus.SUCCEEDED, at=at)
+        self.job = self.job.transition_to(JobStatus.SUCCEEDED, at=NOW)
         return self.job
 
-    def _cancel(self, at: datetime) -> JobRecord:
-        self.job = self.job.transition_to(JobStatus.CANCEL_REQUESTED, at=at)
-        self.job = self.job.transition_to(JobStatus.CANCELED, at=at)
+    def _cancel(self) -> JobRecord:
+        self.job = self.job.transition_to(JobStatus.CANCEL_REQUESTED, at=NOW)
+        self.job = self.job.transition_to(JobStatus.CANCELED, at=NOW)
         return self.job
 
 
@@ -425,6 +420,8 @@ def test_run_attempt_claims_with_private_fence_and_publishes_once() -> None:
     assert repository.completed_run is not None
     assert repository.completed_run.run_id == "run-worker-001"
     assert repository.heartbeat_calls == 1
+    assert repository.claim_lease_seconds == [30]
+    assert repository.heartbeat_lease_seconds == [30]
     assert len(repository.claim_tokens[0]) >= 32
     assert "privateLeaseToken" not in repr(result)
     assert "private-worker-identity" not in repr(service)
@@ -510,11 +507,7 @@ def test_explicit_transient_failure_retries_with_bounded_exponential_backoff() -
     result = asyncio.run(service.run_once())
 
     assert result.status is WorkerResultStatus.RETRY_SCHEDULED
-    assert repository.retry_call == (
-        NOW,
-        NOW + timedelta(seconds=6),
-        "transient_execution_failure",
-    )
+    assert repository.retry_call == (6, "transient_execution_failure")
     assert repository.fail_code is None
 
 
@@ -644,7 +637,16 @@ def test_idle_claims_use_fresh_tokens_and_invalid_private_controls_are_safe() ->
     repository, executor, _unused = _run_context()
     repository.claim = False
     tokens = iter(("A" * 32, "B" * 32))
-    service = _service(repository, executor, lease_token_factory=lambda: next(tokens))
+
+    def unavailable_worker_clock() -> datetime:
+        raise AssertionError("worker clock must not timestamp a lease claim")
+
+    service = _service(
+        repository,
+        executor,
+        lease_token_factory=lambda: next(tokens),
+        clock=unavailable_worker_clock,
+    )
 
     first = asyncio.run(service.run_once())
     second = asyncio.run(service.run_once())

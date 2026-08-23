@@ -105,22 +105,12 @@ class ControlPlaneRepository(Protocol):
         status: JobStatus | None = None,
     ) -> CursorPage[JobRecord]: ...
 
-    def transition_job(
-        self,
-        job_id: str,
-        status: JobStatus,
-        *,
-        at: datetime,
-        error_code: str | None = None,
-    ) -> JobRecord: ...
-
     def claim_next_job(
         self,
         *,
         worker_id: WorkerId,
         lease_token: LeaseToken,
-        at: datetime,
-        lease_expires_at: datetime,
+        lease_seconds: int,
     ) -> ClaimedJob | None: ...
 
     def heartbeat_job(
@@ -129,8 +119,7 @@ class ControlPlaneRepository(Protocol):
         attempt_number: int,
         lease_token: LeaseToken,
         *,
-        at: datetime,
-        lease_expires_at: datetime,
+        lease_seconds: int,
     ) -> JobRecord: ...
 
     def retry_job(
@@ -139,8 +128,7 @@ class ControlPlaneRepository(Protocol):
         attempt_number: int,
         lease_token: LeaseToken,
         *,
-        at: datetime,
-        available_at: datetime,
+        delay_seconds: int,
         error_code: str,
     ) -> JobRecord: ...
 
@@ -150,28 +138,24 @@ class ControlPlaneRepository(Protocol):
         attempt_number: int,
         lease_token: LeaseToken,
         *,
-        at: datetime,
         error_code: str,
     ) -> JobRecord: ...
 
     def reap_expired_jobs(
         self,
         *,
-        at: datetime,
         limit: int,
         retry_base_seconds: int,
         retry_max_seconds: int,
     ) -> tuple[JobRecord, ...]: ...
 
-    def cancel_job(self, job_id: str, *, at: datetime) -> JobRecord: ...
+    def cancel_job(self, job_id: str) -> JobRecord: ...
 
     def acknowledge_cancellation(
         self,
         job_id: str,
         attempt_number: int,
         lease_token: LeaseToken,
-        *,
-        at: datetime,
     ) -> JobRecord: ...
 
     def list_job_attempts(self, job_id: str) -> tuple[JobAttemptRecord, ...]: ...
@@ -183,7 +167,6 @@ class ControlPlaneRepository(Protocol):
         *,
         attempt_number: int,
         lease_token: LeaseToken,
-        at: datetime,
     ) -> JobRecord: ...
 
     def get_run(self, run_id: str) -> RunRecord: ...
@@ -203,7 +186,6 @@ class ControlPlaneRepository(Protocol):
         *,
         attempt_number: int,
         lease_token: LeaseToken,
-        at: datetime,
     ) -> JobRecord: ...
 
     def get_release_decision(self, decision_id: str) -> ReleaseDecisionRecord: ...
@@ -591,7 +573,7 @@ class ControlPlaneService:
     def cancel_job(self, job_id: str) -> JobRecord:
         """Request idempotent cooperative cancellation for one durable job."""
         try:
-            return self._repository.cancel_job(job_id, at=self._clock())
+            return self._repository.cancel_job(job_id)
         except StoreNotFoundError as error:
             raise ResourceNotFoundError("Job was not found") from error
         except StoreTransitionError as error:
