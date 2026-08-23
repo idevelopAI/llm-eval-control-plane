@@ -4,29 +4,35 @@ from __future__ import annotations
 
 import secrets
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Protocol
 
-from llm_eval_control_plane.application.comparison import compare_runs
-from llm_eval_control_plane.domain.artifacts import ArtifactKind, ArtifactRef
 from llm_eval_control_plane.domain.canonical import JsonValue, sha256_digest
 from llm_eval_control_plane.domain.comparison import ReleaseStatus
 from llm_eval_control_plane.domain.control_plane import (
+    ComparisonJobPayload,
     CursorPage,
     DatasetListRecord,
     DatasetRecord,
+    ExecutionContract,
+    JobAttemptRecord,
     JobKind,
+    JobPayload,
     JobRecord,
     JobStatus,
+    LeaseToken,
     ReleaseDecisionListRecord,
     ReleaseDecisionRecord,
+    RunJobPayload,
     RunListRecord,
     RunRecord,
+    ScenarioOverride,
+    WorkerId,
 )
 from llm_eval_control_plane.domain.datasets import DatasetVersion
 from llm_eval_control_plane.domain.evaluation import EvaluationSpec
-from llm_eval_control_plane.domain.results import ExecutionMode, RunResult
+from llm_eval_control_plane.domain.results import RunResult
 
 
 class ControlPlaneStoreError(RuntimeError):
@@ -53,6 +59,20 @@ class StoreTransitionError(ControlPlaneStoreError):
     """A job status compare-and-set could not be applied."""
 
 
+class StoreLeaseLostError(StoreTransitionError):
+    """A worker no longer owns the bounded lease for an execution attempt."""
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimedJob:
+    """One private fenced worker claim and its immutable resolved payload."""
+
+    job: JobRecord
+    payload: JobPayload
+    attempt: JobAttemptRecord
+    lease_token: LeaseToken = field(repr=False)
+
+
 class ControlPlaneRepository(Protocol):
     """Persistence operations required by the application service."""
 
@@ -68,7 +88,11 @@ class ControlPlaneRepository(Protocol):
         name: str | None = None,
     ) -> CursorPage[DatasetListRecord]: ...
 
-    def begin_job(self, record: JobRecord) -> tuple[JobRecord, bool]: ...
+    def begin_job(
+        self,
+        record: JobRecord,
+        payload: JobPayload,
+    ) -> tuple[JobRecord, bool]: ...
 
     def get_job(self, job_id: str) -> JobRecord: ...
 
@@ -90,11 +114,75 @@ class ControlPlaneRepository(Protocol):
         error_code: str | None = None,
     ) -> JobRecord: ...
 
+    def claim_next_job(
+        self,
+        *,
+        worker_id: WorkerId,
+        lease_token: LeaseToken,
+        at: datetime,
+        lease_expires_at: datetime,
+    ) -> ClaimedJob | None: ...
+
+    def heartbeat_job(
+        self,
+        job_id: str,
+        attempt_number: int,
+        lease_token: LeaseToken,
+        *,
+        at: datetime,
+        lease_expires_at: datetime,
+    ) -> JobRecord: ...
+
+    def retry_job(
+        self,
+        job_id: str,
+        attempt_number: int,
+        lease_token: LeaseToken,
+        *,
+        at: datetime,
+        available_at: datetime,
+        error_code: str,
+    ) -> JobRecord: ...
+
+    def fail_job(
+        self,
+        job_id: str,
+        attempt_number: int,
+        lease_token: LeaseToken,
+        *,
+        at: datetime,
+        error_code: str,
+    ) -> JobRecord: ...
+
+    def reap_expired_jobs(
+        self,
+        *,
+        at: datetime,
+        limit: int,
+        retry_base_seconds: int,
+        retry_max_seconds: int,
+    ) -> tuple[JobRecord, ...]: ...
+
+    def cancel_job(self, job_id: str, *, at: datetime) -> JobRecord: ...
+
+    def acknowledge_cancellation(
+        self,
+        job_id: str,
+        attempt_number: int,
+        lease_token: LeaseToken,
+        *,
+        at: datetime,
+    ) -> JobRecord: ...
+
+    def list_job_attempts(self, job_id: str) -> tuple[JobAttemptRecord, ...]: ...
+
     def complete_run(
         self,
         job_id: str,
         record: RunRecord,
         *,
+        attempt_number: int,
+        lease_token: LeaseToken,
         at: datetime,
     ) -> JobRecord: ...
 
@@ -113,6 +201,8 @@ class ControlPlaneRepository(Protocol):
         job_id: str,
         record: ReleaseDecisionRecord,
         *,
+        attempt_number: int,
+        lease_token: LeaseToken,
         at: datetime,
     ) -> JobRecord: ...
 
@@ -183,35 +273,6 @@ class ComparisonSubmission:
             },
             "spec": self.spec.model_dump(mode="json"),
         }
-
-
-@dataclass(frozen=True, slots=True)
-class ExecutionContract:
-    """Resolved evidence identities promised by an execution adapter."""
-
-    adapter: str
-    evaluator_names: tuple[str, ...]
-    target: ArtifactRef
-    evaluators: tuple[ArtifactRef, ...]
-    execution_mode: ExecutionMode
-
-    def __post_init__(self) -> None:
-        if not self.adapter or not self.evaluator_names:
-            raise ValueError("execution contract identity is incomplete")
-        if self.target.kind is not ArtifactKind.TARGET or self.target.digest is None:
-            raise ValueError("execution contract target must be resolved")
-        if len(self.evaluators) != len(self.evaluator_names):
-            raise ValueError("execution contract evaluator count does not match")
-        if any(
-            evaluator.kind is not ArtifactKind.EVALUATOR or evaluator.digest is None
-            for evaluator in self.evaluators
-        ):
-            raise ValueError("execution contract evaluators must be resolved")
-        evaluator_keys = [evaluator.logical_key for evaluator in self.evaluators]
-        if len(evaluator_keys) != len(set(evaluator_keys)):
-            raise ValueError("execution contract evaluators must be unique")
-        if evaluator_keys != sorted(evaluator_keys):
-            raise ValueError("execution contract evaluators must be ordered")
 
 
 class EvaluationExecutor(Protocol):
@@ -298,7 +359,7 @@ def _identifier(prefix: str) -> str:
 
 
 class ControlPlaneService:
-    """Coordinate immutable metadata, synchronous execution, and release gates."""
+    """Coordinate immutable metadata and durable asynchronous submissions."""
 
     def __init__(
         self,
@@ -307,11 +368,15 @@ class ControlPlaneService:
         executor: EvaluationExecutor,
         clock: Clock = _utc_now,
         identifier_factory: IdentifierFactory = _identifier,
+        max_attempts: int = 3,
     ) -> None:
+        if type(max_attempts) is not int or not 1 <= max_attempts <= 10:
+            raise ValueError("maximum attempts must be between 1 and 10")
         self._repository = repository
         self._executor = executor
         self._clock = clock
         self._identifier_factory = identifier_factory
+        self._max_attempts = max_attempts
 
     def register_dataset(self, dataset: DatasetVersion) -> DatasetRecord:
         """Append one immutable dataset revision, allowing byte-identical retries."""
@@ -352,7 +417,7 @@ class ControlPlaneService:
             raise InvalidCursorError("Pagination cursor is invalid") from error
 
     async def submit_run(self, submission: RunSubmission) -> SubmissionResult:
-        """Claim one idempotent job and execute it only for the insert winner."""
+        """Validate and atomically enqueue one idempotent evaluation job."""
         try:
             dataset_record = self._repository.get_dataset(
                 submission.dataset_name,
@@ -368,7 +433,27 @@ class ControlPlaneService:
                 evaluator_names=submission.evaluator_names,
                 scenario_overrides=submission.scenario_overrides,
             )
-            self._validate_execution_contract(execution_contract, submission)
+            validate_execution_contract(
+                execution_contract,
+                target_name=submission.target_name,
+                target_revision=submission.target_revision,
+                adapter=submission.adapter,
+                evaluator_names=submission.evaluator_names,
+            )
+            payload = RunJobPayload(
+                dataset=dataset_record.dataset.artifact_ref,
+                target_name=submission.target_name,
+                target_revision=submission.target_revision,
+                adapter=submission.adapter,
+                evaluator_names=submission.evaluator_names,
+                scenario_overrides=tuple(
+                    ScenarioOverride(case_id=case_id, scenario=scenario)
+                    for case_id, scenario in sorted(
+                        submission.scenario_overrides.items()
+                    )
+                ),
+                execution_contract=execution_contract,
+            )
         except ValueError as error:
             raise InvalidSubmissionError("Run submission is invalid") from error
 
@@ -381,60 +466,21 @@ class ControlPlaneService:
             idempotency_key=submission.idempotency_key,
             request_digest=request_digest,
             resource_id=self._identifier_factory("run"),
+            attempt_count=0,
+            max_attempts=self._max_attempts,
+            available_at=now,
             created_at=now,
             updated_at=now,
         )
         try:
-            job, created = self._repository.begin_job(proposed)
+            job, created = self._repository.begin_job(proposed, payload)
         except StoreIdempotencyConflictError as error:
             raise IdempotencyConflictError(
                 "Idempotency key was used for a different request"
             ) from error
         except StoreConflictError as error:
             raise ResourceConflictError("Job identity already exists") from error
-        if not created:
-            return SubmissionResult(job=job, created=False)
-
-        running = self._repository.transition_job(
-            job.job_id,
-            JobStatus.RUNNING,
-            at=self._clock(),
-        )
-        try:
-            result = await self._executor.execute(
-                run_id=running.resource_id,
-                dataset=dataset_record.dataset,
-                target_name=submission.target_name,
-                target_revision=submission.target_revision,
-                adapter=submission.adapter,
-                evaluator_names=submission.evaluator_names,
-                scenario_overrides=submission.scenario_overrides,
-            )
-            self._validate_run(
-                result,
-                running,
-                dataset_record,
-                execution_contract,
-            )
-        except Exception:
-            return SubmissionResult(
-                job=self._fail_job(running, "execution_failed"),
-                created=True,
-            )
-
-        record = RunRecord(result=result, created_at=self._clock())
-        try:
-            completed = self._repository.complete_run(
-                running.job_id,
-                record,
-                at=self._clock(),
-            )
-        except StoreConflictError:
-            return SubmissionResult(
-                job=self._fail_job(running, "evidence_conflict"),
-                created=True,
-            )
-        return SubmissionResult(job=completed, created=True)
+        return SubmissionResult(job=job, created=created)
 
     def get_job(self, job_id: str) -> JobRecord:
         try:
@@ -486,7 +532,7 @@ class ControlPlaneService:
         self,
         submission: ComparisonSubmission,
     ) -> SubmissionResult:
-        """Claim and compute one idempotent release decision."""
+        """Validate and atomically enqueue one idempotent comparison job."""
         try:
             dataset = self._repository.get_dataset(
                 submission.dataset_name,
@@ -494,11 +540,23 @@ class ControlPlaneService:
             )
             baseline = self._repository.get_run(submission.baseline_run_id)
             candidate = self._repository.get_run(submission.candidate_run_id)
-            self._validate_comparison_submission(
-                submission,
+            validate_comparison_inputs(
+                dataset_name=submission.dataset_name,
+                dataset_revision=submission.dataset_revision,
+                baseline_run_id=submission.baseline_run_id,
+                candidate_run_id=submission.candidate_run_id,
+                spec=submission.spec,
                 dataset=dataset,
                 baseline=baseline,
                 candidate=candidate,
+            )
+            payload = ComparisonJobPayload(
+                dataset=dataset.dataset.artifact_ref,
+                baseline_run_id=baseline.result.run_id,
+                baseline_result_digest=baseline.result.result_digest,
+                candidate_run_id=candidate.result.run_id,
+                candidate_result_digest=candidate.result.result_digest,
+                spec=submission.spec,
             )
         except StoreNotFoundError as error:
             raise ResourceNotFoundError("Comparison evidence was not found") from error
@@ -514,55 +572,35 @@ class ControlPlaneService:
             idempotency_key=submission.idempotency_key,
             request_digest=request_digest,
             resource_id=self._identifier_factory("decision"),
+            attempt_count=0,
+            max_attempts=self._max_attempts,
+            available_at=now,
             created_at=now,
             updated_at=now,
         )
         try:
-            job, created = self._repository.begin_job(proposed)
+            job, created = self._repository.begin_job(proposed, payload)
         except StoreIdempotencyConflictError as error:
             raise IdempotencyConflictError(
                 "Idempotency key was used for a different request"
             ) from error
         except StoreConflictError as error:
             raise ResourceConflictError("Job identity already exists") from error
-        if not created:
-            return SubmissionResult(job=job, created=False)
+        return SubmissionResult(job=job, created=created)
 
-        running = self._repository.transition_job(
-            job.job_id,
-            JobStatus.RUNNING,
-            at=self._clock(),
-        )
+    def cancel_job(self, job_id: str) -> JobRecord:
+        """Request idempotent cooperative cancellation for one durable job."""
         try:
-            decision = compare_runs(
-                spec=submission.spec,
-                dataset=dataset.dataset,
-                baseline=baseline.result,
-                candidate=candidate.result,
-            )
-        except Exception:
-            return SubmissionResult(
-                job=self._fail_job(running, "comparison_failed"),
-                created=True,
-            )
+            return self._repository.cancel_job(job_id, at=self._clock())
+        except StoreNotFoundError as error:
+            raise ResourceNotFoundError("Job was not found") from error
+        except StoreTransitionError as error:
+            raise ResourceConflictError("Job cannot be canceled") from error
 
-        record = ReleaseDecisionRecord(
-            decision_id=running.resource_id,
-            decision=decision,
-            created_at=self._clock(),
-        )
-        try:
-            completed = self._repository.complete_release_decision(
-                running.job_id,
-                record,
-                at=self._clock(),
-            )
-        except StoreConflictError:
-            return SubmissionResult(
-                job=self._fail_job(running, "evidence_conflict"),
-                created=True,
-            )
-        return SubmissionResult(job=completed, created=True)
+    def list_job_attempts(self, job_id: str) -> tuple[JobAttemptRecord, ...]:
+        """Return bounded attempt history after proving that the job exists."""
+        self.get_job(job_id)
+        return self._repository.list_job_attempts(job_id)
 
     def get_release_decision(self, decision_id: str) -> ReleaseDecisionRecord:
         try:
@@ -596,107 +634,6 @@ class ControlPlaneService:
             return False
         return True
 
-    def _fail_job(self, job: JobRecord, error_code: str) -> JobRecord:
-        return self._repository.transition_job(
-            job.job_id,
-            JobStatus.FAILED,
-            at=self._clock(),
-            error_code=error_code,
-        )
-
-    @staticmethod
-    def _validate_run(
-        result: RunResult,
-        job: JobRecord,
-        dataset: DatasetRecord,
-        contract: ExecutionContract,
-    ) -> None:
-        if result.run_id != job.resource_id:
-            raise ValueError("executor returned an unexpected run identity")
-        if result.dataset != dataset.dataset.artifact_ref:
-            raise ValueError("executor returned an unexpected dataset identity")
-        if result.target != contract.target:
-            raise ValueError("executor returned an unexpected target identity")
-        if result.evaluators != contract.evaluators:
-            raise ValueError("executor returned unexpected evaluator identities")
-        allowed_evaluators = set(contract.evaluators)
-        if any(
-            summary.evaluator not in allowed_evaluators for summary in result.metrics
-        ):
-            raise ValueError("executor returned an unexpected metric evaluator")
-        if any(
-            observation.evaluator not in allowed_evaluators
-            for case in result.cases
-            for observation in case.observations
-        ):
-            raise ValueError("executor returned an unexpected observation evaluator")
-        if any(
-            failure.evaluator is not None
-            and failure.evaluator not in allowed_evaluators
-            for case in result.cases
-            for failure in case.evaluator_failures
-        ):
-            raise ValueError("executor returned an unexpected failure evaluator")
-        if result.execution_mode is not contract.execution_mode:
-            raise ValueError("executor returned an unexpected execution mode")
-        expected_case_ids = tuple(case.case_id for case in dataset.dataset.cases)
-        actual_case_ids = tuple(case.case_id for case in result.cases)
-        if actual_case_ids != expected_case_ids:
-            raise ValueError("executor returned an unexpected case set")
-
-    @staticmethod
-    def _validate_execution_contract(
-        contract: ExecutionContract,
-        submission: RunSubmission,
-    ) -> None:
-        if contract.adapter != submission.adapter:
-            raise ValueError("executor resolved a different adapter")
-        if contract.evaluator_names != submission.evaluator_names:
-            raise ValueError("executor resolved different evaluators")
-        if (
-            contract.target.name != submission.target_name
-            or contract.target.revision != submission.target_revision
-        ):
-            raise ValueError("executor resolved a different target")
-
-    @staticmethod
-    def _validate_comparison_submission(
-        submission: ComparisonSubmission,
-        *,
-        dataset: DatasetRecord,
-        baseline: RunRecord,
-        candidate: RunRecord,
-    ) -> None:
-        spec = submission.spec
-        ControlPlaneService._validate_dataset_bounds(dataset.dataset)
-        if len(spec.gates) > _MAX_COMPARISON_GATES:
-            raise ValueError("comparison contains too many gates")
-        metric_count = len(baseline.result.metrics)
-        if metric_count > _MAX_COMPARISON_METRICS:
-            raise ValueError("comparison contains too many metrics")
-        slices = {label for case in dataset.dataset.cases for label in case.slices}
-        aggregate_work = metric_count * (len(slices) + 1) * len(dataset.dataset.cases)
-        if aggregate_work > _MAX_COMPARISON_AGGREGATE_WORK:
-            raise ValueError("comparison aggregate work exceeds service limits")
-        case_records = sum(
-            len(dataset.dataset.cases)
-            if gate.slice is None
-            else sum(gate.slice in case.slices for case in dataset.dataset.cases)
-            for gate in spec.gates
-        )
-        if case_records > _MAX_COMPARISON_CASE_RECORDS:
-            raise ValueError("comparison evidence exceeds service limits")
-        if spec.dataset != dataset.dataset.artifact_ref:
-            raise ValueError("spec references a different dataset revision")
-        if baseline.result.run_id != submission.baseline_run_id:
-            raise ValueError("baseline run identity does not match")
-        if candidate.result.run_id != submission.candidate_run_id:
-            raise ValueError("candidate run identity does not match")
-        if spec.baseline != baseline.result.target:
-            raise ValueError("spec baseline does not match baseline run")
-        if spec.candidate != candidate.result.target:
-            raise ValueError("spec candidate does not match candidate run")
-
     @staticmethod
     def _validate_dataset_bounds(dataset: DatasetVersion) -> None:
         if len(dataset.cases) > _MAX_DATASET_CASES:
@@ -708,7 +645,114 @@ class ControlPlaneService:
             raise ValueError("dataset contains too many unique slices")
 
 
+def validate_execution_contract(
+    contract: ExecutionContract,
+    *,
+    target_name: str,
+    target_revision: int,
+    adapter: str,
+    evaluator_names: tuple[str, ...],
+) -> None:
+    """Verify that a resolved executor contract matches durable worker input."""
+    if contract.adapter != adapter:
+        raise ValueError("executor resolved a different adapter")
+    if contract.evaluator_names != evaluator_names:
+        raise ValueError("executor resolved different evaluators")
+    if (
+        contract.target.name != target_name
+        or contract.target.revision != target_revision
+    ):
+        raise ValueError("executor resolved a different target")
+
+
+def validate_run_result(
+    result: RunResult,
+    *,
+    resource_id: str,
+    dataset: DatasetRecord,
+    contract: ExecutionContract,
+) -> None:
+    """Reject executor evidence that escapes its pinned durable contract."""
+    if result.run_id != resource_id:
+        raise ValueError("executor returned an unexpected run identity")
+    if result.dataset != dataset.dataset.artifact_ref:
+        raise ValueError("executor returned an unexpected dataset identity")
+    if result.target != contract.target:
+        raise ValueError("executor returned an unexpected target identity")
+    if result.evaluators != contract.evaluators:
+        raise ValueError("executor returned unexpected evaluator identities")
+    allowed_evaluators = set(contract.evaluators)
+    if any(summary.evaluator not in allowed_evaluators for summary in result.metrics):
+        raise ValueError("executor returned an unexpected metric evaluator")
+    if any(
+        observation.evaluator not in allowed_evaluators
+        for case in result.cases
+        for observation in case.observations
+    ):
+        raise ValueError("executor returned an unexpected observation evaluator")
+    if any(
+        failure.evaluator is not None and failure.evaluator not in allowed_evaluators
+        for case in result.cases
+        for failure in case.evaluator_failures
+    ):
+        raise ValueError("executor returned an unexpected failure evaluator")
+    if result.execution_mode is not contract.execution_mode:
+        raise ValueError("executor returned an unexpected execution mode")
+    expected_case_ids = tuple(case.case_id for case in dataset.dataset.cases)
+    actual_case_ids = tuple(case.case_id for case in result.cases)
+    if actual_case_ids != expected_case_ids:
+        raise ValueError("executor returned an unexpected case set")
+
+
+def validate_comparison_inputs(
+    *,
+    dataset_name: str,
+    dataset_revision: int,
+    baseline_run_id: str,
+    candidate_run_id: str,
+    spec: EvaluationSpec,
+    dataset: DatasetRecord,
+    baseline: RunRecord,
+    candidate: RunRecord,
+) -> None:
+    """Validate immutable comparison inputs before enqueueing or executing."""
+    ControlPlaneService._validate_dataset_bounds(dataset.dataset)
+    if len(spec.gates) > _MAX_COMPARISON_GATES:
+        raise ValueError("comparison contains too many gates")
+    metric_count = len(baseline.result.metrics)
+    if metric_count > _MAX_COMPARISON_METRICS:
+        raise ValueError("comparison contains too many metrics")
+    slices = {label for case in dataset.dataset.cases for label in case.slices}
+    aggregate_work = metric_count * (len(slices) + 1) * len(dataset.dataset.cases)
+    if aggregate_work > _MAX_COMPARISON_AGGREGATE_WORK:
+        raise ValueError("comparison aggregate work exceeds service limits")
+    case_records = sum(
+        len(dataset.dataset.cases)
+        if gate.slice is None
+        else sum(gate.slice in case.slices for case in dataset.dataset.cases)
+        for gate in spec.gates
+    )
+    if case_records > _MAX_COMPARISON_CASE_RECORDS:
+        raise ValueError("comparison evidence exceeds service limits")
+    if (
+        dataset.dataset.name != dataset_name
+        or dataset.dataset.revision != dataset_revision
+    ):
+        raise ValueError("comparison dataset identity does not match")
+    if spec.dataset != dataset.dataset.artifact_ref:
+        raise ValueError("spec references a different dataset revision")
+    if baseline.result.run_id != baseline_run_id:
+        raise ValueError("baseline run identity does not match")
+    if candidate.result.run_id != candidate_run_id:
+        raise ValueError("candidate run identity does not match")
+    if spec.baseline != baseline.result.target:
+        raise ValueError("spec baseline does not match baseline run")
+    if spec.candidate != candidate.result.target:
+        raise ValueError("spec candidate does not match candidate run")
+
+
 __all__ = [
+    "ClaimedJob",
     "ComparisonSubmission",
     "ControlPlaneRepository",
     "ControlPlaneService",
@@ -725,7 +769,11 @@ __all__ = [
     "StoreConflictError",
     "StoreIdempotencyConflictError",
     "StoreInvalidCursorError",
+    "StoreLeaseLostError",
     "StoreNotFoundError",
     "StoreTransitionError",
     "SubmissionResult",
+    "validate_comparison_inputs",
+    "validate_execution_contract",
+    "validate_run_result",
 ]

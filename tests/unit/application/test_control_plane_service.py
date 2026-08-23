@@ -1,22 +1,15 @@
 import asyncio
-from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from itertools import count
-from typing import Never
+from typing import cast
 
-from pytest import MonkeyPatch, fixture, raises
-from sqlalchemy import create_engine
-from sqlalchemy.engine import Engine
-from sqlalchemy.pool import StaticPool
+from pytest import raises
 
-from llm_eval_control_plane.adapters.control_plane_db import (
-    CONTROL_PLANE_METADATA,
-    SqlAlchemyControlPlaneRepository,
-)
 from llm_eval_control_plane.api.execution import DeterministicEvaluationExecutor
 from llm_eval_control_plane.application.control_plane import (
     ComparisonSubmission,
+    ControlPlaneRepository,
     ControlPlaneService,
     ExecutionContract,
     IdempotencyConflictError,
@@ -26,6 +19,10 @@ from llm_eval_control_plane.application.control_plane import (
     ResourceNotFoundError,
     RunSubmission,
     StoreConflictError,
+    StoreIdempotencyConflictError,
+    StoreInvalidCursorError,
+    StoreNotFoundError,
+    StoreTransitionError,
 )
 from llm_eval_control_plane.domain import (
     ArtifactKind,
@@ -36,43 +33,35 @@ from llm_eval_control_plane.domain import (
     EvaluationSpec,
     MetricDirection,
     MetricGate,
+    sha256_digest,
 )
-from llm_eval_control_plane.domain.control_plane import JobStatus
-from llm_eval_control_plane.domain.results import ExecutionMode, RunResult
+from llm_eval_control_plane.domain.comparison import ReleaseStatus
+from llm_eval_control_plane.domain.control_plane import (
+    ComparisonJobPayload,
+    CursorPage,
+    DatasetListRecord,
+    DatasetRecord,
+    JobAttemptRecord,
+    JobKind,
+    JobPayload,
+    JobRecord,
+    JobStatus,
+    ReleaseDecisionListRecord,
+    ReleaseDecisionRecord,
+    RunJobPayload,
+    RunListRecord,
+    RunRecord,
+)
+from llm_eval_control_plane.domain.results import RunResult
+
+NOW = datetime(2026, 8, 23, 12, tzinfo=UTC)
 
 
-class ReadyRepository(SqlAlchemyControlPlaneRepository):
-    def schema_is_current(self) -> bool:
-        return True
+class CountingExecutor(DeterministicEvaluationExecutor):
+    """Count execution calls while retaining real deterministic validation."""
 
-
-class FailingExecutor(DeterministicEvaluationExecutor):
-    async def execute(
-        self,
-        *,
-        run_id: str,
-        dataset: DatasetVersion,
-        target_name: str,
-        target_revision: int,
-        adapter: str,
-        evaluator_names: tuple[str, ...],
-        scenario_overrides: Mapping[str, str],
-    ) -> RunResult:
-        del (
-            run_id,
-            dataset,
-            target_name,
-            target_revision,
-            adapter,
-            evaluator_names,
-            scenario_overrides,
-        )
-        raise RuntimeError("private-sentinel")
-
-
-class InvalidResultExecutor(DeterministicEvaluationExecutor):
-    def __init__(self, mode: str) -> None:
-        self._mode = mode
+    def __init__(self) -> None:
+        self.calls = 0
 
     async def execute(
         self,
@@ -85,7 +74,8 @@ class InvalidResultExecutor(DeterministicEvaluationExecutor):
         evaluator_names: tuple[str, ...],
         scenario_overrides: Mapping[str, str],
     ) -> RunResult:
-        result = await super().execute(
+        self.calls += 1
+        return await super().execute(
             run_id=run_id,
             dataset=dataset,
             target_name=target_name,
@@ -94,54 +84,6 @@ class InvalidResultExecutor(DeterministicEvaluationExecutor):
             evaluator_names=evaluator_names,
             scenario_overrides=scenario_overrides,
         )
-        if self._mode == "run_id":
-            return result.model_copy(update={"run_id": "unexpected-run"})
-        if self._mode == "dataset":
-            different_dataset = ArtifactRef(
-                kind=ArtifactKind.DATASET,
-                name="different",
-                revision=1,
-                digest=result.dataset.digest,
-            )
-            return result.model_copy(update={"dataset": different_dataset})
-        if self._mode == "target":
-            different_target = ArtifactRef(
-                kind=ArtifactKind.TARGET,
-                name="fake/different",
-                revision=9,
-                digest=result.target.digest,
-            )
-            return result.model_copy(update={"target": different_target})
-        if self._mode == "evaluators":
-            different_evaluator = ArtifactRef(
-                kind=ArtifactKind.EVALUATOR,
-                name="builtin/different",
-                revision=1,
-                digest=result.evaluators[0].digest,
-            )
-            return result.model_copy(update={"evaluators": (different_evaluator,)})
-        if self._mode in {"metric_evaluator", "observation_evaluator"}:
-            different_evaluator = ArtifactRef(
-                kind=ArtifactKind.EVALUATOR,
-                name="builtin/different",
-                revision=1,
-                digest=result.evaluators[0].digest,
-            )
-            if self._mode == "metric_evaluator":
-                summary = result.metrics[0].model_copy(
-                    update={"evaluator": different_evaluator}
-                )
-                return result.model_copy(update={"metrics": (summary,)})
-            observation = (
-                result.cases[0]
-                .observations[0]
-                .model_copy(update={"evaluator": different_evaluator})
-            )
-            case = result.cases[0].model_copy(update={"observations": (observation,)})
-            return result.model_copy(update={"cases": (case,)})
-        if self._mode == "mode":
-            return result.model_copy(update={"execution_mode": ExecutionMode.LIVE})
-        return result.model_copy(update={"cases": ()})
 
 
 class InvalidContractExecutor(DeterministicEvaluationExecutor):
@@ -161,67 +103,178 @@ class InvalidContractExecutor(DeterministicEvaluationExecutor):
             evaluator_names=evaluator_names,
             scenario_overrides=scenario_overrides,
         )
-        return replace(contract, adapter="different-adapter")
+        return contract.model_copy(update={"adapter": "different_adapter"})
 
 
-@dataclass(frozen=True, slots=True)
-class ServiceContext:
-    engine: Engine
-    repository: ReadyRepository
-    service: ControlPlaneService
+class MemoryRepository:
+    """Application test double for immutable records and atomic job/payload claims."""
+
+    def __init__(self) -> None:
+        self.datasets: dict[tuple[str, int], DatasetRecord] = {}
+        self.jobs: dict[str, JobRecord] = {}
+        self.payloads: dict[str, JobPayload] = {}
+        self.runs: dict[str, RunRecord] = {}
+        self.decisions: dict[str, ReleaseDecisionRecord] = {}
+        self.attempts: dict[str, tuple[JobAttemptRecord, ...]] = {}
+        self.begin_error: Exception | None = None
+        self.cancel_error: Exception | None = None
+        self.healthy = True
+
+    def put_dataset(self, record: DatasetRecord) -> DatasetRecord:
+        key = (record.dataset.name, record.dataset.revision)
+        existing = self.datasets.get(key)
+        if existing is not None and existing.dataset != record.dataset:
+            raise StoreConflictError("private dataset details")
+        self.datasets[key] = existing or record
+        return self.datasets[key]
+
+    def get_dataset(self, name: str, revision: int) -> DatasetRecord:
+        try:
+            return self.datasets[(name, revision)]
+        except KeyError:
+            raise StoreNotFoundError("private dataset details") from None
+
+    def list_datasets(
+        self,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        name: str | None = None,
+    ) -> CursorPage[DatasetListRecord]:
+        if cursor is not None:
+            raise StoreInvalidCursorError("private cursor details")
+        items = tuple(
+            DatasetListRecord(
+                name=record.dataset.name,
+                revision=record.dataset.revision,
+                digest=record.dataset.digest,
+                case_count=len(record.dataset.cases),
+                created_at=record.created_at,
+            )
+            for record in self.datasets.values()
+            if name is None or record.dataset.name == name
+        )
+        return CursorPage(items=items[:limit])
+
+    def begin_job(
+        self,
+        record: JobRecord,
+        payload: JobPayload,
+    ) -> tuple[JobRecord, bool]:
+        if self.begin_error is not None:
+            raise self.begin_error
+        for existing in self.jobs.values():
+            if (
+                existing.kind is record.kind
+                and existing.idempotency_key == record.idempotency_key
+            ):
+                if existing.request_digest != record.request_digest:
+                    raise StoreIdempotencyConflictError("private digest details")
+                return existing, False
+            if (
+                existing.kind is record.kind
+                and existing.resource_id == record.resource_id
+            ):
+                raise StoreConflictError("private identity details")
+        if record.job_id in self.jobs:
+            raise StoreConflictError("private identity details")
+        self.jobs[record.job_id] = record
+        self.payloads[record.job_id] = payload
+        return record, True
+
+    def get_job(self, job_id: str) -> JobRecord:
+        try:
+            return self.jobs[job_id]
+        except KeyError:
+            raise StoreNotFoundError("private job details") from None
+
+    def list_jobs(
+        self,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        kind: JobKind | None = None,
+        status: JobStatus | None = None,
+    ) -> CursorPage[JobRecord]:
+        if cursor is not None:
+            raise StoreInvalidCursorError("private cursor details")
+        items = tuple(
+            record
+            for record in self.jobs.values()
+            if (kind is None or record.kind is kind)
+            and (status is None or record.status is status)
+        )
+        return CursorPage(items=items[:limit])
+
+    def cancel_job(self, job_id: str, *, at: datetime) -> JobRecord:
+        if self.cancel_error is not None:
+            raise self.cancel_error
+        changed = self.get_job(job_id).request_cancellation(at=at)
+        self.jobs[job_id] = changed
+        return changed
+
+    def list_job_attempts(self, job_id: str) -> tuple[JobAttemptRecord, ...]:
+        return self.attempts.get(job_id, ())
+
+    def get_run(self, run_id: str) -> RunRecord:
+        try:
+            return self.runs[run_id]
+        except KeyError:
+            raise StoreNotFoundError("private run details") from None
+
+    def list_runs(
+        self,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        dataset_name: str | None = None,
+    ) -> CursorPage[RunListRecord]:
+        if cursor is not None:
+            raise StoreInvalidCursorError("private cursor details")
+        items = tuple(
+            RunListRecord(
+                run_id=record.result.run_id,
+                status=record.result.status,
+                execution_mode=record.result.execution_mode,
+                dataset_name=record.result.dataset.name,
+                dataset_revision=record.result.dataset.revision,
+                result_digest=record.result.result_digest,
+                created_at=record.created_at,
+            )
+            for record in self.runs.values()
+            if dataset_name is None or record.result.dataset.name == dataset_name
+        )
+        return CursorPage(items=items[:limit])
+
+    def get_release_decision(self, decision_id: str) -> ReleaseDecisionRecord:
+        try:
+            return self.decisions[decision_id]
+        except KeyError:
+            raise StoreNotFoundError("private decision details") from None
+
+    def list_release_decisions(
+        self,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        status: ReleaseStatus | None = None,
+    ) -> CursorPage[ReleaseDecisionListRecord]:
+        del limit, status
+        if cursor is not None:
+            raise StoreInvalidCursorError("private cursor details")
+        return CursorPage(items=())
+
+    def check_health(self) -> None:
+        if not self.healthy:
+            raise RuntimeError("private persistence details")
+
+    def schema_is_current(self) -> bool:
+        return True
 
 
-def _service(
-    repository: ReadyRepository,
-    *,
-    executor: DeterministicEvaluationExecutor | None = None,
-    identifier_factory: Callable[[str], str] | None = None,
-) -> ControlPlaneService:
-    identifiers = count(1)
-
-    def next_identifier(prefix: str) -> str:
-        return f"{prefix}_{next(identifiers):04d}"
-
-    selected_factory = (
-        next_identifier if identifier_factory is None else identifier_factory
-    )
-    return ControlPlaneService(
-        repository=repository,
-        executor=executor or DeterministicEvaluationExecutor(),
-        clock=lambda: datetime(2026, 8, 20, 12, tzinfo=UTC),
-        identifier_factory=selected_factory,
-    )
-
-
-def _prefixed_factory(namespace: str) -> Callable[[str], str]:
-    identifiers = count(1)
-
-    def factory(prefix: str) -> str:
-        return f"{prefix}_{namespace}_{next(identifiers):04d}"
-
-    return factory
-
-
-@fixture
-def context() -> Iterator[ServiceContext]:
-    engine = create_engine(
-        "sqlite+pysqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    CONTROL_PLANE_METADATA.create_all(engine)
-    repository = ReadyRepository(engine)
-    yield ServiceContext(
-        engine=engine,
-        repository=repository,
-        service=_service(repository),
-    )
-    engine.dispose()
-
-
-def _dataset(name: str = "fixture") -> DatasetVersion:
+def _dataset() -> DatasetVersion:
     return DatasetVersion.create(
-        name=name,
+        name="fixture",
         revision=1,
         cases=(
             EvaluationCase(
@@ -248,195 +301,184 @@ def _run_submission(
         target_revision=target_revision,
         adapter=adapter,
         evaluator_names=("exact_match",),
-        scenario_overrides={},
+        scenario_overrides={"case-001": "uppercase"},
     )
 
 
-def _submit(service: ControlPlaneService, submission: RunSubmission) -> object:
-    return asyncio.run(service.submit_run(submission))
+def _service(
+    repository: MemoryRepository,
+    *,
+    executor: DeterministicEvaluationExecutor | None = None,
+    identifier_factory: Callable[[str], str] | None = None,
+) -> ControlPlaneService:
+    identifiers = count(1)
 
+    def next_identifier(prefix: str) -> str:
+        return f"{prefix}_{next(identifiers):04d}"
 
-def test_read_methods_translate_missing_records_and_invalid_cursors(
-    context: ServiceContext,
-) -> None:
-    service = context.service
-    service.register_dataset(_dataset())
-    assert service.get_dataset("fixture", 1).dataset.name == "fixture"
-    assert service.list_datasets(limit=1).items[0].name == "fixture"
-
-    with raises(ResourceNotFoundError):
-        service.get_dataset("missing", 1)
-    with raises(ResourceNotFoundError):
-        service.get_job("missing")
-    with raises(ResourceNotFoundError):
-        service.get_run("missing")
-    with raises(ResourceNotFoundError):
-        service.get_release_decision("missing")
-    with raises(InvalidCursorError):
-        service.list_datasets(limit=1, cursor="invalid")
-    with raises(InvalidCursorError):
-        service.list_jobs(limit=1, cursor="invalid")
-    with raises(InvalidCursorError):
-        service.list_runs(limit=1, cursor="invalid")
-    with raises(InvalidCursorError):
-        service.list_release_decisions(limit=1, cursor="invalid")
-
-
-def test_run_preflight_rejects_missing_dataset_and_invalid_adapter(
-    context: ServiceContext,
-) -> None:
-    with raises(ResourceNotFoundError):
-        _submit(context.service, _run_submission("missing"))
-
-    context.service.register_dataset(_dataset())
-    with raises(InvalidSubmissionError):
-        _submit(
-            context.service,
-            _run_submission("bad-adapter", adapter="private-adapter"),
-        )
-    assert context.service.list_jobs(limit=10).items == ()
-
-    excessive = DatasetVersion.create(
-        name="too-many-slices",
-        revision=1,
-        cases=(
-            EvaluationCase(
-                case_id="case-001",
-                input=CanonicalJson.from_value({"scenario": "echo"}),
-                slices=tuple(f"slice-{index}" for index in range(33)),
-            ),
-        ),
+    return ControlPlaneService(
+        repository=cast(ControlPlaneRepository, repository),
+        executor=executor or DeterministicEvaluationExecutor(),
+        clock=lambda: NOW,
+        identifier_factory=identifier_factory or next_identifier,
     )
-    with raises(InvalidSubmissionError):
-        context.service.register_dataset(excessive)
 
 
-def test_run_failures_are_safe_terminal_jobs_and_never_replayed(
-    context: ServiceContext,
-) -> None:
-    service = _service(context.repository, executor=FailingExecutor())
+def test_run_submission_enqueues_pinned_payload_without_execution() -> None:
+    repository = MemoryRepository()
+    executor = CountingExecutor()
+    service = _service(repository, executor=executor)
+    dataset = _dataset()
+    service.register_dataset(dataset)
+    submission = _run_submission("run-key")
+
+    outcome = asyncio.run(service.submit_run(submission))
+
+    assert outcome.created is True
+    assert outcome.job.status is JobStatus.QUEUED
+    assert outcome.job.attempt_count == 0
+    assert outcome.job.max_attempts == 3
+    assert outcome.job.available_at == NOW
+    assert outcome.job.request_digest == sha256_digest(submission.digest_record())
+    assert executor.calls == 0
+
+    payload = repository.payloads[outcome.job.job_id]
+    assert isinstance(payload, RunJobPayload)
+    assert payload.dataset == dataset.artifact_ref
+    assert payload.execution_contract.target.digest is not None
+    assert payload.execution_contract.evaluators[0].digest is not None
+    assert payload.scenario_overrides[0].case_id == "case-001"
+    assert submission.idempotency_key not in payload.model_dump_json()
+
+
+def test_run_replay_keeps_one_job_payload_and_zero_execution_calls() -> None:
+    repository = MemoryRepository()
+    executor = CountingExecutor()
+    service = _service(repository, executor=executor)
     service.register_dataset(_dataset())
+    submission = _run_submission("same-key")
 
-    first = asyncio.run(service.submit_run(_run_submission("failed-run")))
-    replay = asyncio.run(service.submit_run(_run_submission("failed-run")))
+    first = asyncio.run(service.submit_run(submission))
+    replay = asyncio.run(service.submit_run(submission))
 
     assert first.created is True
-    assert first.job.status is JobStatus.FAILED
-    assert first.job.error_code == "execution_failed"
     assert replay.created is False
     assert replay.job == first.job
-    assert "private-sentinel" not in first.job.model_dump_json()
+    assert len(repository.jobs) == 1
+    assert len(repository.payloads) == 1
+    assert executor.calls == 0
 
 
-def test_invalid_executor_evidence_is_rejected_before_persistence(
-    context: ServiceContext,
-) -> None:
-    context.service.register_dataset(_dataset())
-    modes = (
-        "run_id",
-        "dataset",
-        "target",
-        "evaluators",
-        "metric_evaluator",
-        "observation_evaluator",
-        "mode",
-        "cases",
-    )
-    for index, mode in enumerate(modes, start=1):
-        service = _service(
-            context.repository,
-            executor=InvalidResultExecutor(mode),
-            identifier_factory=_prefixed_factory(mode),
+def test_run_preflight_and_repository_errors_are_content_safe() -> None:
+    repository = MemoryRepository()
+    service = _service(repository)
+    with raises(ResourceNotFoundError) as missing:
+        asyncio.run(service.submit_run(_run_submission("missing")))
+    assert "private" not in str(missing.value)
+
+    service.register_dataset(_dataset())
+    with raises(InvalidSubmissionError) as invalid:
+        asyncio.run(
+            service.submit_run(
+                _run_submission("invalid", adapter="private_adapter"),
+            )
         )
-        result = asyncio.run(
-            service.submit_run(_run_submission(f"invalid-result-{index}"))
+    assert "private_adapter" not in str(invalid.value)
+    assert repository.jobs == {}
+
+    repository.begin_error = StoreIdempotencyConflictError("private digest")
+    with raises(IdempotencyConflictError) as conflict:
+        asyncio.run(service.submit_run(_run_submission("conflict")))
+    assert "private" not in str(conflict.value)
+
+    repository.begin_error = StoreConflictError("private identity")
+    with raises(ResourceConflictError) as identity:
+        asyncio.run(service.submit_run(_run_submission("identity")))
+    assert "private" not in str(identity.value)
+
+
+def test_changed_semantics_conflict_under_the_same_key() -> None:
+    repository = MemoryRepository()
+    service = _service(repository)
+    service.register_dataset(_dataset())
+    asyncio.run(service.submit_run(_run_submission("same-key")))
+
+    with raises(IdempotencyConflictError):
+        asyncio.run(
+            service.submit_run(
+                _run_submission("same-key", target_revision=3),
+            )
         )
-        assert result.job.status is JobStatus.FAILED
-        assert result.job.error_code == "execution_failed"
-        with raises(ResourceNotFoundError):
-            service.get_run(result.job.resource_id)
 
 
-def test_executor_contract_must_match_submission_before_job_claim(
-    context: ServiceContext,
-) -> None:
-    service = _service(context.repository, executor=InvalidContractExecutor())
+def test_invalid_resolved_contract_is_rejected_before_claim() -> None:
+    repository = MemoryRepository()
+    service = _service(repository, executor=InvalidContractExecutor())
     service.register_dataset(_dataset())
 
     with raises(InvalidSubmissionError):
         asyncio.run(service.submit_run(_run_submission("invalid-contract")))
-
-    assert service.list_jobs(limit=10).items == ()
-
-
-def test_run_completion_conflict_fails_job_atomically(
-    context: ServiceContext,
-    monkeypatch: MonkeyPatch,
-) -> None:
-    context.service.register_dataset(_dataset())
-
-    def conflict(*_args: object, **_kwargs: object) -> Never:
-        raise StoreConflictError("private-sentinel")
-
-    monkeypatch.setattr(context.repository, "complete_run", conflict)
-    result = asyncio.run(
-        context.service.submit_run(_run_submission("evidence-conflict"))
-    )
-
-    assert result.job.status is JobStatus.FAILED
-    assert result.job.error_code == "evidence_conflict"
+    assert repository.jobs == {}
+    assert repository.payloads == {}
 
 
-def test_job_identity_and_idempotency_conflicts_are_distinct(
-    context: ServiceContext,
-) -> None:
-    context.service.register_dataset(_dataset())
-    first = _submit(context.service, _run_submission("same-key"))
-    assert first is not None
-    with raises(IdempotencyConflictError):
-        _submit(
-            context.service,
-            _run_submission("same-key", target_revision=3),
-        )
-
-    collision_service = _service(
-        context.repository,
-        identifier_factory=lambda _prefix: "collision",
-    )
-    _submit(collision_service, _run_submission("collision-one"))
-    with raises(ResourceConflictError):
-        _submit(collision_service, _run_submission("collision-two"))
-
-
-def test_readiness_sanitizes_connectivity_failures(
-    context: ServiceContext,
-    monkeypatch: MonkeyPatch,
-) -> None:
-    assert context.service.ready() is True
-
-    def unavailable() -> Never:
-        raise RuntimeError("private-sentinel")
-
-    monkeypatch.setattr(context.repository, "check_health", unavailable)
-    assert context.service.ready() is False
-
-
-def _comparison_spec(
-    dataset: DatasetVersion,
+async def _result(
     *,
+    run_id: str,
+    dataset: DatasetVersion,
+    target_name: str,
+    target_revision: int,
+) -> RunResult:
+    return await DeterministicEvaluationExecutor().execute(
+        run_id=run_id,
+        dataset=dataset,
+        target_name=target_name,
+        target_revision=target_revision,
+        adapter="deterministic_fake",
+        evaluator_names=("exact_match",),
+        scenario_overrides={},
+    )
+
+
+def _seed_runs(
+    repository: MemoryRepository,
+) -> tuple[DatasetVersion, RunResult, RunResult]:
+    dataset = _dataset()
+    repository.put_dataset(DatasetRecord(dataset=dataset, created_at=NOW))
+    baseline = asyncio.run(
+        _result(
+            run_id="run-baseline",
+            dataset=dataset,
+            target_name="fake/baseline",
+            target_revision=1,
+        )
+    )
+    candidate = asyncio.run(
+        _result(
+            run_id="run-candidate",
+            dataset=dataset,
+            target_name="fake/candidate",
+            target_revision=2,
+        )
+    )
+    repository.runs[baseline.run_id] = RunRecord(result=baseline, created_at=NOW)
+    repository.runs[candidate.run_id] = RunRecord(result=candidate, created_at=NOW)
+    return dataset, baseline, candidate
+
+
+def _spec(
+    dataset: DatasetVersion,
     baseline: RunResult,
     candidate: RunResult,
-    metric: str = "quality.exact_match",
-    candidate_ref: ArtifactRef | None = None,
 ) -> EvaluationSpec:
     return EvaluationSpec(
         name="release-policy",
         dataset=dataset.artifact_ref,
         baseline=baseline.target,
-        candidate=candidate_ref or candidate.target,
+        candidate=candidate.target,
         gates=(
             MetricGate(
-                metric=metric,
+                metric="quality.exact_match",
                 direction=MetricDirection.HIGHER_IS_BETTER,
                 threshold=1.0,
             ),
@@ -444,39 +486,8 @@ def _comparison_spec(
     )
 
 
-def _comparison_evidence(
-    service: ControlPlaneService,
-) -> tuple[DatasetVersion, RunResult, RunResult]:
-    dataset = _dataset()
-    service.register_dataset(dataset)
-    baseline_job = asyncio.run(
-        service.submit_run(
-            _run_submission(
-                "baseline",
-                target_name="fake/baseline",
-                target_revision=1,
-            )
-        )
-    ).job
-    candidate_job = asyncio.run(
-        service.submit_run(
-            _run_submission(
-                "candidate",
-                target_name="fake/candidate",
-                target_revision=2,
-            )
-        )
-    ).job
-    return (
-        dataset,
-        service.get_run(baseline_job.resource_id).result,
-        service.get_run(candidate_job.resource_id).result,
-    )
-
-
 def _comparison_submission(
     key: str,
-    *,
     dataset: DatasetVersion,
     baseline: RunResult,
     candidate: RunResult,
@@ -492,135 +503,136 @@ def _comparison_submission(
     )
 
 
-def test_comparison_preflight_and_execution_failures_are_typed(
-    context: ServiceContext,
-) -> None:
-    dataset, baseline, candidate = _comparison_evidence(context.service)
-    wrong_candidate = ArtifactRef(
+def test_comparison_enqueues_immutable_result_digests_and_replays() -> None:
+    repository = MemoryRepository()
+    dataset, baseline, candidate = _seed_runs(repository)
+    executor = CountingExecutor()
+    service = _service(repository, executor=executor)
+    submission = _comparison_submission(
+        "comparison",
+        dataset,
+        baseline,
+        candidate,
+        _spec(dataset, baseline, candidate),
+    )
+
+    first = asyncio.run(service.submit_comparison(submission))
+    replay = asyncio.run(service.submit_comparison(submission))
+
+    assert first.created is True
+    assert first.job.status is JobStatus.QUEUED
+    assert replay.created is False
+    assert executor.calls == 0
+    payload = repository.payloads[first.job.job_id]
+    assert isinstance(payload, ComparisonJobPayload)
+    assert payload.dataset == dataset.artifact_ref
+    assert payload.baseline_result_digest == baseline.result_digest
+    assert payload.candidate_result_digest == candidate.result_digest
+    assert payload.spec == submission.spec
+
+
+def test_comparison_preflight_and_idempotency_conflicts_are_safe() -> None:
+    repository = MemoryRepository()
+    dataset, baseline, candidate = _seed_runs(repository)
+    service = _service(repository)
+    spec = _spec(dataset, baseline, candidate)
+    submission = _comparison_submission(
+        "comparison",
+        dataset,
+        baseline,
+        candidate,
+        spec,
+    )
+    asyncio.run(service.submit_comparison(submission))
+
+    changed = spec.model_copy(update={"name": "changed-policy"})
+    with raises(IdempotencyConflictError):
+        asyncio.run(
+            service.submit_comparison(
+                _comparison_submission(
+                    "comparison",
+                    dataset,
+                    baseline,
+                    candidate,
+                    changed,
+                )
+            )
+        )
+
+    wrong = ArtifactRef(
         kind=ArtifactKind.TARGET,
         name="fake/other",
         revision=9,
         digest=candidate.target.digest,
     )
-    with raises(InvalidSubmissionError):
+    invalid_spec = spec.model_copy(update={"candidate": wrong})
+    with raises(InvalidSubmissionError) as invalid:
         asyncio.run(
-            context.service.submit_comparison(
+            service.submit_comparison(
                 _comparison_submission(
-                    "bad-preflight",
-                    dataset=dataset,
-                    baseline=baseline,
-                    candidate=candidate,
-                    spec=_comparison_spec(
-                        dataset,
-                        baseline=baseline,
-                        candidate=candidate,
-                        candidate_ref=wrong_candidate,
-                    ),
-                )
-            )
-        )
-
-    too_many_gates = EvaluationSpec(
-        name="large-policy",
-        dataset=dataset.artifact_ref,
-        baseline=baseline.target,
-        candidate=candidate.target,
-        gates=tuple(
-            MetricGate(
-                metric=f"quality.metric_{index}",
-                direction=MetricDirection.HIGHER_IS_BETTER,
-                threshold=1.0,
-            )
-            for index in range(65)
-        ),
-    )
-    with raises(InvalidSubmissionError):
-        asyncio.run(
-            context.service.submit_comparison(
-                _comparison_submission(
-                    "too-many-gates",
-                    dataset=dataset,
-                    baseline=baseline,
-                    candidate=candidate,
-                    spec=too_many_gates,
-                )
-            )
-        )
-
-    failed = asyncio.run(
-        context.service.submit_comparison(
-            _comparison_submission(
-                "bad-gate",
-                dataset=dataset,
-                baseline=baseline,
-                candidate=candidate,
-                spec=_comparison_spec(
+                    "invalid-comparison",
                     dataset,
-                    baseline=baseline,
-                    candidate=candidate,
-                    metric="quality.absent",
-                ),
-            )
-        )
-    )
-    assert failed.job.status is JobStatus.FAILED
-    assert failed.job.error_code == "comparison_failed"
-
-
-def test_comparison_idempotency_and_completion_conflicts(
-    context: ServiceContext,
-    monkeypatch: MonkeyPatch,
-) -> None:
-    dataset, baseline, candidate = _comparison_evidence(context.service)
-    spec = _comparison_spec(
-        dataset,
-        baseline=baseline,
-        candidate=candidate,
-    )
-    submission = _comparison_submission(
-        "comparison",
-        dataset=dataset,
-        baseline=baseline,
-        candidate=candidate,
-        spec=spec,
-    )
-    first = asyncio.run(context.service.submit_comparison(submission))
-    replay = asyncio.run(context.service.submit_comparison(submission))
-    assert first.created is True
-    assert replay.created is False
-
-    changed_spec = spec.model_copy(update={"name": "changed-policy"})
-    with raises(IdempotencyConflictError):
-        asyncio.run(
-            context.service.submit_comparison(
-                _comparison_submission(
-                    "comparison",
-                    dataset=dataset,
-                    baseline=baseline,
-                    candidate=candidate,
-                    spec=changed_spec,
+                    baseline,
+                    candidate,
+                    invalid_spec,
                 )
             )
         )
+    assert "fake/other" not in str(invalid.value)
 
-    def conflict(*_args: object, **_kwargs: object) -> Never:
-        raise StoreConflictError("private-sentinel")
 
-    monkeypatch.setattr(
-        context.repository,
-        "complete_release_decision",
-        conflict,
+def test_cancellation_delegates_and_translates_conflicts_safely() -> None:
+    repository = MemoryRepository()
+    service = _service(repository)
+    service.register_dataset(_dataset())
+    queued = asyncio.run(service.submit_run(_run_submission("cancel"))).job
+
+    canceled = service.cancel_job(queued.job_id)
+    assert canceled.status is JobStatus.CANCELED
+    assert service.cancel_job(queued.job_id) == canceled
+
+    repository.cancel_error = StoreTransitionError("private lease state")
+    with raises(ResourceConflictError) as conflict:
+        service.cancel_job(queued.job_id)
+    assert "private" not in str(conflict.value)
+
+    repository.cancel_error = StoreNotFoundError("private row")
+    with raises(ResourceNotFoundError) as missing:
+        service.cancel_job("missing")
+    assert "private" not in str(missing.value)
+
+
+def test_attempt_listing_and_cursor_errors_remain_repository_owned() -> None:
+    repository = MemoryRepository()
+    service = _service(repository)
+    service.register_dataset(_dataset())
+    job = asyncio.run(service.submit_run(_run_submission("attempts"))).job
+
+    assert service.list_job_attempts(job.job_id) == ()
+    with raises(ResourceNotFoundError):
+        service.list_job_attempts("missing")
+    with raises(InvalidCursorError):
+        service.list_jobs(limit=1, cursor="private")
+    with raises(InvalidCursorError):
+        service.list_datasets(limit=1, cursor="private")
+    with raises(InvalidCursorError):
+        service.list_runs(limit=1, cursor="private")
+    with raises(InvalidCursorError):
+        service.list_release_decisions(limit=1, cursor="private")
+
+
+def test_job_identity_collision_and_readiness_failure_are_safe() -> None:
+    repository = MemoryRepository()
+    service = _service(
+        repository,
+        identifier_factory=lambda _prefix: "collision",
     )
-    failed = asyncio.run(
-        context.service.submit_comparison(
-            _comparison_submission(
-                "comparison-conflict",
-                dataset=dataset,
-                baseline=baseline,
-                candidate=candidate,
-                spec=spec,
-            )
-        )
-    )
-    assert failed.job.status is JobStatus.FAILED
-    assert failed.job.error_code == "evidence_conflict"
+    service.register_dataset(_dataset())
+    asyncio.run(service.submit_run(_run_submission("first")))
+
+    with raises(ResourceConflictError):
+        asyncio.run(service.submit_run(_run_submission("second")))
+
+    assert service.ready() is True
+    repository.healthy = False
+    assert service.ready() is False
