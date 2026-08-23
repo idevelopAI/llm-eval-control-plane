@@ -6,6 +6,7 @@ import os
 import stat
 from collections.abc import Mapping
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 
 from sqlalchemy.engine import URL, make_url
@@ -22,10 +23,58 @@ _MAX_SECRET_BYTES = 4 * 1024
 _MAX_URL_CHARS = 4 * 1024
 _DEFAULT_MAX_BODY_BYTES = 4 * 1024 * 1024
 _MAX_BODY_BYTES = 16 * 1024 * 1024
+_MAX_HEALTH_FILE_BYTES = 4 * 1024
+
+_WORKER_MAX_ATTEMPTS = "CONTROL_PLANE_WORKER_MAX_ATTEMPTS"
+_WORKER_LEASE_SECONDS = "CONTROL_PLANE_WORKER_LEASE_SECONDS"
+_WORKER_HEARTBEAT_SECONDS = "CONTROL_PLANE_WORKER_HEARTBEAT_SECONDS"
+_WORKER_POLL_MILLISECONDS = "CONTROL_PLANE_WORKER_POLL_MILLISECONDS"
+_WORKER_REAPER_BATCH = "CONTROL_PLANE_WORKER_REAPER_BATCH"
+_WORKER_BACKOFF_BASE_SECONDS = "CONTROL_PLANE_WORKER_BACKOFF_BASE_SECONDS"
+_WORKER_BACKOFF_MAX_SECONDS = "CONTROL_PLANE_WORKER_BACKOFF_MAX_SECONDS"
+_WORKER_HEALTH_FILE = "CONTROL_PLANE_WORKER_HEALTH_FILE"
 
 
 class RuntimeConfigurationError(RuntimeError):
     """A content-safe runtime configuration failure."""
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerSettings:
+    """Bounded, non-secret settings shared by workers and the lease reaper."""
+
+    max_attempts: int = 3
+    lease_seconds: int = 30
+    heartbeat_seconds: int = 10
+    poll_milliseconds: int = 500
+    reaper_batch: int = 50
+    backoff_base_seconds: int = 1
+    backoff_max_seconds: int = 60
+    health_file: Path = Path("/tmp/control-plane-worker.ready")
+
+    def __post_init__(self) -> None:
+        bounds = (
+            (self.max_attempts, 1, 10),
+            (self.lease_seconds, 5, 3_600),
+            (self.heartbeat_seconds, 1, 1_800),
+            (self.poll_milliseconds, 50, 60_000),
+            (self.reaper_batch, 1, 100),
+            (self.backoff_base_seconds, 1, 300),
+            (self.backoff_max_seconds, 1, 3_600),
+        )
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not lower <= value <= upper
+            for value, lower, upper in bounds
+        ):
+            raise RuntimeConfigurationError("Worker configuration is invalid")
+        if self.heartbeat_seconds * 2 > self.lease_seconds:
+            raise RuntimeConfigurationError("Worker configuration is invalid")
+        if self.backoff_max_seconds < self.backoff_base_seconds:
+            raise RuntimeConfigurationError("Worker configuration is invalid")
+        if not _valid_health_file(self.health_file):
+            raise RuntimeConfigurationError("Worker configuration is invalid")
 
 
 def database_url_from_environment(
@@ -64,6 +113,116 @@ def max_body_bytes_from_environment(
     if not 1 <= value <= _MAX_BODY_BYTES:
         raise RuntimeConfigurationError("Request body limit is invalid")
     return value
+
+
+def worker_settings_from_environment(
+    environ: Mapping[str, str] = os.environ,
+) -> WorkerSettings:
+    """Resolve bounded worker controls without reading or retaining secrets."""
+    return WorkerSettings(
+        max_attempts=_bounded_worker_decimal(
+            environ.get(_WORKER_MAX_ATTEMPTS),
+            default=3,
+            lower=1,
+            upper=10,
+        ),
+        lease_seconds=_bounded_worker_decimal(
+            environ.get(_WORKER_LEASE_SECONDS),
+            default=30,
+            lower=5,
+            upper=3_600,
+        ),
+        heartbeat_seconds=_bounded_worker_decimal(
+            environ.get(_WORKER_HEARTBEAT_SECONDS),
+            default=10,
+            lower=1,
+            upper=1_800,
+        ),
+        poll_milliseconds=_bounded_worker_decimal(
+            environ.get(_WORKER_POLL_MILLISECONDS),
+            default=500,
+            lower=50,
+            upper=60_000,
+        ),
+        reaper_batch=_bounded_worker_decimal(
+            environ.get(_WORKER_REAPER_BATCH),
+            default=50,
+            lower=1,
+            upper=100,
+        ),
+        backoff_base_seconds=_bounded_worker_decimal(
+            environ.get(_WORKER_BACKOFF_BASE_SECONDS),
+            default=1,
+            lower=1,
+            upper=300,
+        ),
+        backoff_max_seconds=_bounded_worker_decimal(
+            environ.get(_WORKER_BACKOFF_MAX_SECONDS),
+            default=60,
+            lower=1,
+            upper=3_600,
+        ),
+        health_file=_worker_health_file(environ.get(_WORKER_HEALTH_FILE)),
+    )
+
+
+def _bounded_worker_decimal(
+    raw: object | None,
+    *,
+    default: int,
+    lower: int,
+    upper: int,
+) -> int:
+    if raw is None:
+        return default
+    if not isinstance(raw, str) or not raw or not raw.isascii() or not raw.isdecimal():
+        raise RuntimeConfigurationError("Worker configuration is invalid")
+    value = int(raw)
+    if not lower <= value <= upper:
+        raise RuntimeConfigurationError("Worker configuration is invalid")
+    return value
+
+
+def _worker_health_file(raw: object | None) -> Path:
+    if raw is None:
+        return Path("/tmp/control-plane-worker.ready")
+    if not isinstance(raw, str):
+        raise RuntimeConfigurationError("Worker configuration is invalid")
+    try:
+        encoded = raw.encode("utf-8")
+    except UnicodeEncodeError:
+        raise RuntimeConfigurationError("Worker configuration is invalid") from None
+    path = Path(raw)
+    if (
+        not raw
+        or len(encoded) > _MAX_HEALTH_FILE_BYTES
+        or any(character in raw for character in ("\x00", "\r", "\n"))
+        or not path.is_absolute()
+        or not path.name
+        or raw != str(path)
+        or any(part in {".", ".."} for part in path.parts)
+    ):
+        raise RuntimeConfigurationError("Worker configuration is invalid")
+    return path
+
+
+def _valid_health_file(path: object) -> bool:
+    if not isinstance(path, Path):
+        return False
+    raw = str(path)
+    try:
+        encoded = raw.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return (
+        bool(raw)
+        and len(encoded) <= _MAX_HEALTH_FILE_BYTES
+        and not any(character in raw for character in ("\x00", "\r", "\n"))
+        and path.is_absolute()
+        and bool(path.name)
+        and raw == str(path)
+        and not any(part in {".", ".."} for part in path.parts)
+    )
 
 
 def _validated_url(value: str, *, allow_sqlite: bool) -> URL:
@@ -167,6 +326,8 @@ def _read_password(path: Path) -> str:
 
 __all__ = [
     "RuntimeConfigurationError",
+    "WorkerSettings",
     "database_url_from_environment",
     "max_body_bytes_from_environment",
+    "worker_settings_from_environment",
 ]
