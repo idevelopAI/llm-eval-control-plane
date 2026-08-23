@@ -48,12 +48,15 @@ from llm_eval_control_plane.domain.canonical import (
 from llm_eval_control_plane.domain.comparison import ReleaseDecision, ReleaseStatus
 from llm_eval_control_plane.domain.control_plane import (
     CursorPage,
+    DatasetListRecord,
     DatasetRecord,
     JobKind,
     JobRecord,
     JobStatus,
     JobTransitionError,
+    ReleaseDecisionListRecord,
     ReleaseDecisionRecord,
+    RunListRecord,
     RunRecord,
 )
 from llm_eval_control_plane.domain.datasets import DatasetVersion
@@ -67,9 +70,11 @@ datasets_table = Table(
     Column("name", String(128), nullable=False),
     Column("revision", Integer, nullable=False),
     Column("digest", String(71), nullable=False),
+    Column("case_count", Integer, nullable=False),
     Column("document", Text, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
     CheckConstraint("revision > 0", name="ck_control_plane_datasets_revision"),
+    CheckConstraint("case_count > 0", name="ck_control_plane_datasets_case_count"),
     CheckConstraint(
         "length(digest) = 71", name="ck_control_plane_datasets_digest_length"
     ),
@@ -155,6 +160,8 @@ runs_table = Table(
     Column("result_digest", String(71), nullable=False),
     Column("dataset_name", String(128), nullable=False),
     Column("dataset_revision", Integer, nullable=False),
+    Column("status", String(32), nullable=False),
+    Column("execution_mode", String(32), nullable=False),
     Column("document", Text, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
     ForeignKeyConstraint(
@@ -168,6 +175,14 @@ runs_table = Table(
     ),
     CheckConstraint(
         "dataset_revision > 0", name="ck_control_plane_runs_dataset_revision"
+    ),
+    CheckConstraint(
+        "status IN ('completed', 'completed_with_failures')",
+        name="ck_control_plane_runs_status",
+    ),
+    CheckConstraint(
+        "execution_mode IN ('offline_deterministic_fixture', 'offline_mock', 'live')",
+        name="ck_control_plane_runs_execution_mode",
     ),
     PrimaryKeyConstraint("run_id", name="pk_control_plane_runs"),
     CheckConstraint(
@@ -477,6 +492,7 @@ class SqlAlchemyControlPlaneRepository:
             "name": record.dataset.name,
             "revision": record.dataset.revision,
             "digest": record.dataset.digest,
+            "case_count": len(record.dataset.cases),
             "document": document,
             "created_at": record.created_at,
         }
@@ -530,10 +546,16 @@ class SqlAlchemyControlPlaneRepository:
         limit: int,
         cursor: str | None = None,
         name: str | None = None,
-    ) -> CursorPage[DatasetRecord]:
+    ) -> CursorPage[DatasetListRecord]:
         page_limit = _limit(limit)
         filters: dict[str, JsonValue] = {"name": name}
-        statement = select(datasets_table)
+        statement = select(
+            datasets_table.c.name,
+            datasets_table.c.revision,
+            datasets_table.c.digest,
+            datasets_table.c.case_count,
+            datasets_table.c.created_at,
+        )
         if name is not None:
             statement = statement.where(datasets_table.c.name == name)
         if cursor is not None:
@@ -570,10 +592,10 @@ class SqlAlchemyControlPlaneRepository:
             raise ControlPlaneRepositoryError(
                 "Could not list dataset revisions"
             ) from error
-        records = tuple(self._dataset_record(row) for row in rows[:page_limit])
+        records = tuple(self._dataset_list_record(row) for row in rows[:page_limit])
         next_cursor = None
         if len(rows) > page_limit:
-            last = records[-1].dataset
+            last = records[-1]
             next_cursor = _encode_cursor(
                 stream="datasets",
                 filters=filters,
@@ -779,6 +801,8 @@ class SqlAlchemyControlPlaneRepository:
             "result_digest": record.result.result_digest,
             "dataset_name": record.result.dataset.name,
             "dataset_revision": record.result.dataset.revision,
+            "status": record.result.status.value,
+            "execution_mode": record.result.execution_mode.value,
             "document": document,
             "created_at": record.created_at,
         }
@@ -976,6 +1000,8 @@ class SqlAlchemyControlPlaneRepository:
             "result_digest": record.result.result_digest,
             "dataset_name": record.result.dataset.name,
             "dataset_revision": record.result.dataset.revision,
+            "status": record.result.status.value,
+            "execution_mode": record.result.execution_mode.value,
             "document": document,
             "created_at": record.created_at,
         }
@@ -1020,10 +1046,18 @@ class SqlAlchemyControlPlaneRepository:
         limit: int,
         cursor: str | None = None,
         dataset_name: str | None = None,
-    ) -> CursorPage[RunRecord]:
+    ) -> CursorPage[RunListRecord]:
         page_limit = _limit(limit)
         filters: dict[str, JsonValue] = {"dataset_name": dataset_name}
-        statement = select(runs_table)
+        statement = select(
+            runs_table.c.run_id,
+            runs_table.c.status,
+            runs_table.c.execution_mode,
+            runs_table.c.dataset_name,
+            runs_table.c.dataset_revision,
+            runs_table.c.result_digest,
+            runs_table.c.created_at,
+        )
         if dataset_name is not None:
             statement = statement.where(runs_table.c.dataset_name == dataset_name)
         if cursor is not None:
@@ -1046,7 +1080,7 @@ class SqlAlchemyControlPlaneRepository:
                 rows = connection.execute(statement).mappings().all()
         except SQLAlchemyError as error:
             raise ControlPlaneRepositoryError("Could not list runs") from error
-        records = tuple(self._run_record(row) for row in rows[:page_limit])
+        records = tuple(self._run_list_record(row) for row in rows[:page_limit])
         next_cursor = None
         if len(rows) > page_limit:
             next_cursor = _encode_cursor(
@@ -1117,12 +1151,19 @@ class SqlAlchemyControlPlaneRepository:
         limit: int,
         cursor: str | None = None,
         status: ReleaseStatus | None = None,
-    ) -> CursorPage[ReleaseDecisionRecord]:
+    ) -> CursorPage[ReleaseDecisionListRecord]:
         page_limit = _limit(limit)
         filters: dict[str, JsonValue] = {
             "status": None if status is None else status.value
         }
-        statement = select(release_decisions_table)
+        statement = select(
+            release_decisions_table.c.decision_id,
+            release_decisions_table.c.status,
+            release_decisions_table.c.baseline_run_id,
+            release_decisions_table.c.candidate_run_id,
+            release_decisions_table.c.decision_digest,
+            release_decisions_table.c.created_at,
+        )
         if status is not None:
             statement = statement.where(
                 release_decisions_table.c.status == status.value
@@ -1150,7 +1191,9 @@ class SqlAlchemyControlPlaneRepository:
             raise ControlPlaneRepositoryError(
                 "Could not list release decisions"
             ) from error
-        records = tuple(self._release_decision_record(row) for row in rows[:page_limit])
+        records = tuple(
+            self._release_decision_list_record(row) for row in rows[:page_limit]
+        )
         next_cursor = None
         if len(rows) > page_limit:
             next_cursor = _encode_cursor(
@@ -1169,10 +1212,16 @@ class SqlAlchemyControlPlaneRepository:
             DatasetVersion,
             max_document_bytes=self._max_document_bytes,
         )
-        if (row["name"], row["revision"], row["digest"]) != (
+        if (
+            row["name"],
+            row["revision"],
+            row["digest"],
+            row["case_count"],
+        ) != (
             dataset.name,
             dataset.revision,
             dataset.digest,
+            len(dataset.cases),
         ):
             raise CorruptRecordError(
                 "Stored dataset indexes do not match canonical evidence"
@@ -1185,6 +1234,21 @@ class SqlAlchemyControlPlaneRepository:
         except (KeyError, TypeError, ValidationError, ValueError) as error:
             raise CorruptRecordError(
                 "Stored control-plane dataset is invalid"
+            ) from error
+
+    @staticmethod
+    def _dataset_list_record(row: RowMapping) -> DatasetListRecord:
+        try:
+            return DatasetListRecord(
+                name=row["name"],
+                revision=row["revision"],
+                digest=row["digest"],
+                case_count=row["case_count"],
+                created_at=_aware(row["created_at"]),
+            )
+        except (KeyError, TypeError, ValidationError, ValueError) as error:
+            raise CorruptRecordError(
+                "Stored control-plane dataset projection is invalid"
             ) from error
 
     @staticmethod
@@ -1215,11 +1279,15 @@ class SqlAlchemyControlPlaneRepository:
             row["result_digest"],
             row["dataset_name"],
             row["dataset_revision"],
+            row["status"],
+            row["execution_mode"],
         ) != (
             result.run_id,
             result.result_digest,
             result.dataset.name,
             result.dataset.revision,
+            result.status.value,
+            result.execution_mode.value,
         ):
             raise CorruptRecordError(
                 "Stored run indexes do not match canonical evidence"
@@ -1231,6 +1299,23 @@ class SqlAlchemyControlPlaneRepository:
             )
         except (KeyError, TypeError, ValidationError, ValueError) as error:
             raise CorruptRecordError("Stored control-plane run is invalid") from error
+
+    @staticmethod
+    def _run_list_record(row: RowMapping) -> RunListRecord:
+        try:
+            return RunListRecord(
+                run_id=row["run_id"],
+                status=row["status"],
+                execution_mode=row["execution_mode"],
+                dataset_name=row["dataset_name"],
+                dataset_revision=row["dataset_revision"],
+                result_digest=row["result_digest"],
+                created_at=_aware(row["created_at"]),
+            )
+        except (KeyError, TypeError, ValidationError, ValueError) as error:
+            raise CorruptRecordError(
+                "Stored control-plane run projection is invalid"
+            ) from error
 
     def _release_decision_record(self, row: RowMapping) -> ReleaseDecisionRecord:
         decision = _validated_model(
@@ -1261,4 +1346,22 @@ class SqlAlchemyControlPlaneRepository:
         except (KeyError, TypeError, ValidationError, ValueError) as error:
             raise CorruptRecordError(
                 "Stored control-plane decision is invalid"
+            ) from error
+
+    @staticmethod
+    def _release_decision_list_record(
+        row: RowMapping,
+    ) -> ReleaseDecisionListRecord:
+        try:
+            return ReleaseDecisionListRecord(
+                decision_id=row["decision_id"],
+                status=row["status"],
+                baseline_run_id=row["baseline_run_id"],
+                candidate_run_id=row["candidate_run_id"],
+                decision_digest=row["decision_digest"],
+                created_at=_aware(row["created_at"]),
+            )
+        except (KeyError, TypeError, ValidationError, ValueError) as error:
+            raise CorruptRecordError(
+                "Stored control-plane decision projection is invalid"
             ) from error

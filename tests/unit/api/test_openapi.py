@@ -46,13 +46,16 @@ def test_openapi_pins_versioned_redacted_response_contracts(
     expected_versions = {
         "ApiErrorDocument": "api-error/v1",
         "ComparisonSubmissionResponse": "comparison-submission/v1",
+        "DatasetListItemResponse": "dataset-list-item/v1",
         "DatasetPage": "dataset-page/v1",
         "DatasetResponse": "dataset-summary/v1",
         "HealthResponse": "health/v1",
         "JobPage": "job-page/v1",
         "JobResponse": "job/v1",
+        "ReleaseDecisionListItemResponse": "release-decision-list-item/v1",
         "ReleaseDecisionPage": "release-decision-page/v1",
         "ReleaseDecisionResponse": "release-decision-summary/v1",
+        "RunListItemResponse": "run-list-item/v1",
         "RunPage": "run-page/v1",
         "RunResponse": "run-summary/v1",
         "RunSubmissionResponse": "run-submission/v1",
@@ -67,6 +70,13 @@ def test_openapi_pins_versioned_redacted_response_contracts(
     assert "cases" not in decision_properties
     assert "baseline_result_digest" in decision_properties
     assert "candidate_result_digest" in decision_properties
+
+    run_list_properties = schemas["RunListItemResponse"]["properties"]
+    decision_list_properties = schemas["ReleaseDecisionListItemResponse"]["properties"]
+    assert "metrics" not in run_list_properties
+    assert "case_status_counts" not in run_list_properties
+    assert "aggregates" not in decision_list_properties
+    assert "gates" not in decision_list_properties
 
 
 def test_openapi_documents_required_idempotency_header_and_bounds(

@@ -6,14 +6,14 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Annotated, Generic, Self, TypeVar
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, PositiveInt, field_validator, model_validator
 
-from llm_eval_control_plane.domain.artifacts import Sha256Digest
-from llm_eval_control_plane.domain.comparison import ReleaseDecision
+from llm_eval_control_plane.domain.artifacts import ArtifactName, Sha256Digest
+from llm_eval_control_plane.domain.comparison import ReleaseDecision, ReleaseStatus
 from llm_eval_control_plane.domain.datasets import DatasetVersion
 from llm_eval_control_plane.domain.execution import RunId, SafeCode
 from llm_eval_control_plane.domain.models import FrozenModel
-from llm_eval_control_plane.domain.results import RunResult
+from llm_eval_control_plane.domain.results import ExecutionMode, RunResult, RunStatus
 
 StableId = Annotated[
     str,
@@ -44,6 +44,18 @@ class DatasetRecord(FrozenModel):
     """One immutable dataset revision and its registration time."""
 
     dataset: DatasetVersion
+    created_at: datetime
+
+    _normalize_created_at = field_validator("created_at")(_utc)
+
+
+class DatasetListRecord(FrozenModel):
+    """Validated metadata projection for a dataset collection item."""
+
+    name: ArtifactName
+    revision: PositiveInt
+    digest: Sha256Digest
+    case_count: PositiveInt
     created_at: datetime
 
     _normalize_created_at = field_validator("created_at")(_utc)
@@ -139,11 +151,38 @@ class RunRecord(FrozenModel):
         return self.result.run_id
 
 
+class RunListRecord(FrozenModel):
+    """Validated metadata projection for a run collection item."""
+
+    run_id: RunId
+    status: RunStatus
+    execution_mode: ExecutionMode
+    dataset_name: ArtifactName
+    dataset_revision: PositiveInt
+    result_digest: Sha256Digest
+    created_at: datetime
+
+    _normalize_created_at = field_validator("created_at")(_utc)
+
+
 class ReleaseDecisionRecord(FrozenModel):
     """Append-only canonical evidence for one baseline comparison decision."""
 
     decision_id: StableId
     decision: ReleaseDecision
+    created_at: datetime
+
+    _normalize_created_at = field_validator("created_at")(_utc)
+
+
+class ReleaseDecisionListRecord(FrozenModel):
+    """Validated metadata projection for a release-decision collection item."""
+
+    decision_id: StableId
+    status: ReleaseStatus
+    baseline_run_id: RunId
+    candidate_run_id: RunId
+    decision_digest: Sha256Digest
     created_at: datetime
 
     _normalize_created_at = field_validator("created_at")(_utc)

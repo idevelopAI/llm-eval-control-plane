@@ -43,7 +43,12 @@ def test_dataset_registration_and_slash_safe_retrieval_are_redacted(
     listed = api_harness.client.get("/v1/datasets?name=release-gate/offline&limit=1")
     assert loaded.status_code == 200
     assert loaded.json() == response.json()
-    assert listed.json()["items"] == [response.json()]
+    assert listed.json()["items"] == [
+        {
+            **response.json(),
+            "schema_version": "dataset-list-item/v1",
+        }
+    ]
 
 
 def test_immutable_dataset_retry_and_conflict(
@@ -266,7 +271,17 @@ def test_comparison_submission_persists_redacted_decision_and_replays(
     listed = api_harness.client.get("/v1/release-decisions?status=passed")
     assert loaded.json() == document["decision"]
     assert listed.json()["schema_version"] == "release-decision-page/v1"
-    assert listed.json()["items"] == [document["decision"]]
+    assert listed.json()["items"] == [
+        {
+            "schema_version": "release-decision-list-item/v1",
+            "decision_id": decision_id,
+            "status": "passed",
+            "baseline_run_id": baseline["run_id"],
+            "candidate_run_id": candidate["run_id"],
+            "decision_digest": document["decision"]["decision_digest"],
+            "created_at": "2026-08-20T12:00:00Z",
+        }
+    ]
 
     failed_body = json.loads(json.dumps(body))
     failed_body["spec"]["name"] = "invalid-gate-policy"
@@ -338,6 +353,11 @@ def test_job_and_run_lists_validate_filters_and_cursors(
     assert jobs.status_code == runs.status_code == 200
     assert jobs.json()["schema_version"] == "job-page/v1"
     assert runs.json()["schema_version"] == "run-page/v1"
+    run_item = runs.json()["items"][0]
+    assert run_item["schema_version"] == "run-list-item/v1"
+    assert run_item["dataset_name"] == "release-gate/offline"
+    assert "metrics" not in run_item
+    assert "case_status_counts" not in run_item
     assert bad_enum.status_code == 422
     assert "private-sentinel" not in bad_enum.text
     assert bad_cursor.status_code == 400
