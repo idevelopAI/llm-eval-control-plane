@@ -7,7 +7,7 @@ import re
 import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from enum import StrEnum
 
 from llm_eval_control_plane.application.comparison import compare_runs
@@ -182,13 +182,11 @@ class WorkerService:
             or _LEASE_TOKEN_PATTERN.fullmatch(lease_token) is None
         ):
             raise WorkerConfigurationError
-        now = self._now()
         try:
             claim = self._repository.claim_next_job(
                 worker_id=self._worker_id,
                 lease_token=lease_token,
-                at=now,
-                lease_expires_at=now + timedelta(seconds=self._lease_seconds),
+                lease_seconds=self._lease_seconds,
             )
         except ControlPlaneStoreError:
             raise WorkerUnavailableError from None
@@ -331,14 +329,12 @@ class WorkerService:
                 return signal
 
     def _heartbeat(self, claim: ClaimedJob) -> _HeartbeatSignal:
-        now = self._now()
         try:
             job = self._repository.heartbeat_job(
                 claim.job.job_id,
                 claim.attempt.attempt_number,
                 claim.lease_token,
-                at=now,
-                lease_expires_at=now + timedelta(seconds=self._lease_seconds),
+                lease_seconds=self._lease_seconds,
             )
         except StoreLeaseLostError:
             return _HeartbeatSignal.LEASE_LOST
@@ -361,7 +357,6 @@ class WorkerService:
                     claim.job.job_id,
                     claim.attempt.attempt_number,
                     claim.lease_token,
-                    at=self._now(),
                 )
             except StoreLeaseLostError:
                 return self._result(claim, WorkerResultStatus.LEASE_LOST)
@@ -384,7 +379,6 @@ class WorkerService:
                     evidence,
                     attempt_number=claim.attempt.attempt_number,
                     lease_token=claim.lease_token,
-                    at=self._now(),
                 )
             else:
                 completed = self._repository.complete_release_decision(
@@ -392,7 +386,6 @@ class WorkerService:
                     evidence,
                     attempt_number=claim.attempt.attempt_number,
                     lease_token=claim.lease_token,
-                    at=self._now(),
                 )
         except StoreLeaseLostError:
             return self._result(claim, WorkerResultStatus.LEASE_LOST)
@@ -413,14 +406,12 @@ class WorkerService:
             self._backoff_base_seconds * 2 ** (claim.job.attempt_count - 1),
             self._backoff_max_seconds,
         )
-        now = self._now()
         try:
             retried = self._repository.retry_job(
                 claim.job.job_id,
                 claim.attempt.attempt_number,
                 claim.lease_token,
-                at=now,
-                available_at=now + timedelta(seconds=delay_seconds),
+                delay_seconds=delay_seconds,
                 error_code="transient_execution_failure",
             )
         except StoreLeaseLostError:
@@ -439,7 +430,6 @@ class WorkerService:
                 claim.job.job_id,
                 claim.attempt.attempt_number,
                 claim.lease_token,
-                at=self._now(),
                 error_code=error_code,
             )
         except StoreLeaseLostError:

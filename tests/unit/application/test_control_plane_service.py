@@ -206,10 +206,10 @@ class MemoryRepository:
         )
         return CursorPage(items=items[:limit])
 
-    def cancel_job(self, job_id: str, *, at: datetime) -> JobRecord:
+    def cancel_job(self, job_id: str) -> JobRecord:
         if self.cancel_error is not None:
             raise self.cancel_error
-        changed = self.get_job(job_id).request_cancellation(at=at)
+        changed = self.get_job(job_id).request_cancellation(at=NOW)
         self.jobs[job_id] = changed
         return changed
 
@@ -587,6 +587,10 @@ def test_cancellation_delegates_and_translates_conflicts_safely() -> None:
     service.register_dataset(_dataset())
     queued = asyncio.run(service.submit_run(_run_submission("cancel"))).job
 
+    def unavailable_api_clock() -> datetime:
+        raise AssertionError("API clock must not timestamp cancellation")
+
+    service._clock = unavailable_api_clock
     canceled = service.cancel_job(queued.job_id)
     assert canceled.status is JobStatus.CANCELED
     assert service.cancel_job(queued.job_id) == canceled
