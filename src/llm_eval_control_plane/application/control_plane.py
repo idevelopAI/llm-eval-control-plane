@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 from llm_eval_control_plane.application.comparison import compare_runs
+from llm_eval_control_plane.domain.artifacts import ArtifactKind, ArtifactRef
 from llm_eval_control_plane.domain.canonical import JsonValue, sha256_digest
 from llm_eval_control_plane.domain.comparison import ReleaseStatus
 from llm_eval_control_plane.domain.control_plane import (
@@ -22,7 +23,7 @@ from llm_eval_control_plane.domain.control_plane import (
 )
 from llm_eval_control_plane.domain.datasets import DatasetVersion
 from llm_eval_control_plane.domain.evaluation import EvaluationSpec
-from llm_eval_control_plane.domain.results import RunResult
+from llm_eval_control_plane.domain.results import ExecutionMode, RunResult
 
 
 class ControlPlaneStoreError(RuntimeError):
@@ -181,6 +182,35 @@ class ComparisonSubmission:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class ExecutionContract:
+    """Resolved evidence identities promised by an execution adapter."""
+
+    adapter: str
+    evaluator_names: tuple[str, ...]
+    target: ArtifactRef
+    evaluators: tuple[ArtifactRef, ...]
+    execution_mode: ExecutionMode
+
+    def __post_init__(self) -> None:
+        if not self.adapter or not self.evaluator_names:
+            raise ValueError("execution contract identity is incomplete")
+        if self.target.kind is not ArtifactKind.TARGET or self.target.digest is None:
+            raise ValueError("execution contract target must be resolved")
+        if len(self.evaluators) != len(self.evaluator_names):
+            raise ValueError("execution contract evaluator count does not match")
+        if any(
+            evaluator.kind is not ArtifactKind.EVALUATOR or evaluator.digest is None
+            for evaluator in self.evaluators
+        ):
+            raise ValueError("execution contract evaluators must be resolved")
+        evaluator_keys = [evaluator.logical_key for evaluator in self.evaluators]
+        if len(evaluator_keys) != len(set(evaluator_keys)):
+            raise ValueError("execution contract evaluators must be unique")
+        if evaluator_keys != sorted(evaluator_keys):
+            raise ValueError("execution contract evaluators must be ordered")
+
+
 class EvaluationExecutor(Protocol):
     """Resolve adapters and run one evaluation without owning persistence."""
 
@@ -192,7 +222,7 @@ class EvaluationExecutor(Protocol):
         adapter: str,
         evaluator_names: tuple[str, ...],
         scenario_overrides: Mapping[str, str],
-    ) -> None: ...
+    ) -> ExecutionContract: ...
 
     async def execute(
         self,
@@ -328,13 +358,14 @@ class ControlPlaneService:
         except StoreNotFoundError as error:
             raise ResourceNotFoundError("Dataset revision was not found") from error
         try:
-            self._executor.validate(
+            execution_contract = self._executor.validate(
                 target_name=submission.target_name,
                 target_revision=submission.target_revision,
                 adapter=submission.adapter,
                 evaluator_names=submission.evaluator_names,
                 scenario_overrides=submission.scenario_overrides,
             )
+            self._validate_execution_contract(execution_contract, submission)
         except ValueError as error:
             raise InvalidSubmissionError("Run submission is invalid") from error
 
@@ -376,7 +407,12 @@ class ControlPlaneService:
                 evaluator_names=submission.evaluator_names,
                 scenario_overrides=submission.scenario_overrides,
             )
-            self._validate_run(result, running, dataset_record)
+            self._validate_run(
+                result,
+                running,
+                dataset_record,
+                execution_contract,
+            )
         except Exception:
             return SubmissionResult(
                 job=self._fail_job(running, "execution_failed"),
@@ -570,11 +606,55 @@ class ControlPlaneService:
         result: RunResult,
         job: JobRecord,
         dataset: DatasetRecord,
+        contract: ExecutionContract,
     ) -> None:
         if result.run_id != job.resource_id:
             raise ValueError("executor returned an unexpected run identity")
         if result.dataset != dataset.dataset.artifact_ref:
             raise ValueError("executor returned an unexpected dataset identity")
+        if result.target != contract.target:
+            raise ValueError("executor returned an unexpected target identity")
+        if result.evaluators != contract.evaluators:
+            raise ValueError("executor returned unexpected evaluator identities")
+        allowed_evaluators = set(contract.evaluators)
+        if any(
+            summary.evaluator not in allowed_evaluators for summary in result.metrics
+        ):
+            raise ValueError("executor returned an unexpected metric evaluator")
+        if any(
+            observation.evaluator not in allowed_evaluators
+            for case in result.cases
+            for observation in case.observations
+        ):
+            raise ValueError("executor returned an unexpected observation evaluator")
+        if any(
+            failure.evaluator is not None
+            and failure.evaluator not in allowed_evaluators
+            for case in result.cases
+            for failure in case.evaluator_failures
+        ):
+            raise ValueError("executor returned an unexpected failure evaluator")
+        if result.execution_mode is not contract.execution_mode:
+            raise ValueError("executor returned an unexpected execution mode")
+        expected_case_ids = tuple(case.case_id for case in dataset.dataset.cases)
+        actual_case_ids = tuple(case.case_id for case in result.cases)
+        if actual_case_ids != expected_case_ids:
+            raise ValueError("executor returned an unexpected case set")
+
+    @staticmethod
+    def _validate_execution_contract(
+        contract: ExecutionContract,
+        submission: RunSubmission,
+    ) -> None:
+        if contract.adapter != submission.adapter:
+            raise ValueError("executor resolved a different adapter")
+        if contract.evaluator_names != submission.evaluator_names:
+            raise ValueError("executor resolved different evaluators")
+        if (
+            contract.target.name != submission.target_name
+            or contract.target.revision != submission.target_revision
+        ):
+            raise ValueError("executor resolved a different target")
 
     @staticmethod
     def _validate_comparison_submission(
@@ -632,6 +712,7 @@ __all__ = [
     "ControlPlaneServiceError",
     "ControlPlaneStoreError",
     "EvaluationExecutor",
+    "ExecutionContract",
     "IdempotencyConflictError",
     "InvalidCursorError",
     "InvalidSubmissionError",
