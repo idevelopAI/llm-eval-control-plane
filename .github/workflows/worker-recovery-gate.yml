@@ -1,0 +1,96 @@
+name: Worker Recovery Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: worker-recovery-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  worker-recovery-gate:
+    name: Worker Recovery Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
+        env:
+          POSTGRES_DB: control_plane
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d control_plane"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      CONTROL_PLANE_DATABASE_URL: postgresql+psycopg://postgres@127.0.0.1:5432/control_plane
+      CONTROL_PLANE_PASSWORD_FILE: ${{ runner.temp }}/worker-recovery-postgres-password
+      COMPOSE_PROJECT_NAME: worker-recovery-gate
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          python-version: "3.11"
+          enable-cache: true
+
+      - name: Install locked dependencies
+        run: uv sync --locked
+
+      - name: Migrate the recovery database
+        run: uv run alembic upgrade head
+
+      - name: Check migration metadata drift
+        run: uv run alembic check
+
+      - name: Prove PostgreSQL lease and crash recovery
+        run: >-
+          uv run pytest -q
+          tests/integration/test_control_plane_postgres_workflow.py
+
+      - name: Create an ephemeral Compose secret
+        shell: bash
+        run: |
+          install -m 0600 /dev/null "$CONTROL_PLANE_PASSWORD_FILE"
+          openssl rand -hex 32 > "$CONTROL_PLANE_PASSWORD_FILE"
+          chmod 0444 "$CONTROL_PLANE_PASSWORD_FILE"
+
+      - name: Validate the worker Compose topology
+        run: docker compose --env-file .env.example config --quiet
+
+      - name: Smoke-test two hardened workers
+        shell: bash
+        run: |
+          docker compose up \
+            --build \
+            --detach \
+            --wait \
+            --scale worker=2 \
+            worker
+          worker_count="$(docker compose ps --quiet worker | sed '/^$/d' | wc -l | tr -d ' ')"
+          if [[ "$worker_count" -ne 2 ]]; then
+            echo "Expected two healthy worker containers"
+            exit 1
+          fi
+
+      - name: Remove worker smoke-test resources
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f compose.yaml && -f "$CONTROL_PLANE_PASSWORD_FILE" ]]; then
+            docker compose down --volumes --remove-orphans
+          fi
