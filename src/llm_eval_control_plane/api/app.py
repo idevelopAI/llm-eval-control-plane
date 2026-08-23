@@ -17,15 +17,18 @@ from llm_eval_control_plane.api.contracts import (
     ComparisonCreateRequest,
     ComparisonSubmissionResponse,
     DatasetCreateRequest,
+    DatasetListItemResponse,
     DatasetPage,
     DatasetResponse,
     ErrorDetail,
     HealthResponse,
     JobPage,
     JobResponse,
+    ReleaseDecisionListItemResponse,
     ReleaseDecisionPage,
     ReleaseDecisionResponse,
     RunCreateRequest,
+    RunListItemResponse,
     RunPage,
     RunResponse,
     RunSubmissionResponse,
@@ -286,7 +289,9 @@ def create_app(
     ) -> DatasetPage:
         page = service.list_datasets(limit=limit, cursor=cursor, name=name)
         return DatasetPage(
-            items=tuple(DatasetResponse.from_record(item) for item in page.items),
+            items=tuple(
+                DatasetListItemResponse.from_record(item) for item in page.items
+            ),
             next_cursor=page.next_cursor,
         )
 
@@ -419,7 +424,7 @@ def create_app(
             dataset_name=dataset_name,
         )
         return RunPage(
-            items=tuple(RunResponse.from_record(item) for item in page.items),
+            items=tuple(RunListItemResponse.from_record(item) for item in page.items),
             next_cursor=page.next_cursor,
         )
 
@@ -513,7 +518,7 @@ def create_app(
         )
         return ReleaseDecisionPage(
             items=tuple(
-                ReleaseDecisionResponse.from_record(item) for item in page.items
+                ReleaseDecisionListItemResponse.from_record(item) for item in page.items
             ),
             next_cursor=page.next_cursor,
         )

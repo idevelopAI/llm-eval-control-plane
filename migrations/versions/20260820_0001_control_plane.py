@@ -17,11 +17,15 @@ def upgrade() -> None:
         sa.Column("name", sa.String(length=128), nullable=False),
         sa.Column("revision", sa.Integer(), nullable=False),
         sa.Column("digest", sa.String(length=71), nullable=False),
+        sa.Column("case_count", sa.Integer(), nullable=False),
         sa.Column("document", sa.Text(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint(
             "length(digest) = 71",
             name="ck_control_plane_datasets_digest_length",
+        ),
+        sa.CheckConstraint(
+            "case_count > 0", name="ck_control_plane_datasets_case_count"
         ),
         sa.CheckConstraint("revision > 0", name="ck_control_plane_datasets_revision"),
         sa.PrimaryKeyConstraint("name", "revision", name="pk_control_plane_datasets"),
@@ -118,6 +122,8 @@ def upgrade() -> None:
         sa.Column("result_digest", sa.String(length=71), nullable=False),
         sa.Column("dataset_name", sa.String(length=128), nullable=False),
         sa.Column("dataset_revision", sa.Integer(), nullable=False),
+        sa.Column("status", sa.String(length=32), nullable=False),
+        sa.Column("execution_mode", sa.String(length=32), nullable=False),
         sa.Column("document", sa.Text(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint(
@@ -127,6 +133,15 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "length(result_digest) = 71",
             name="ck_control_plane_runs_result_digest_length",
+        ),
+        sa.CheckConstraint(
+            "execution_mode IN "
+            "('offline_deterministic_fixture', 'offline_mock', 'live')",
+            name="ck_control_plane_runs_execution_mode",
+        ),
+        sa.CheckConstraint(
+            "status IN ('completed', 'completed_with_failures')",
+            name="ck_control_plane_runs_status",
         ),
         sa.ForeignKeyConstraint(
             ("dataset_name", "dataset_revision"),

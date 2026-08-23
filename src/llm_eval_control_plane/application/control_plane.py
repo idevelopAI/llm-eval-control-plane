@@ -14,11 +14,14 @@ from llm_eval_control_plane.domain.canonical import JsonValue, sha256_digest
 from llm_eval_control_plane.domain.comparison import ReleaseStatus
 from llm_eval_control_plane.domain.control_plane import (
     CursorPage,
+    DatasetListRecord,
     DatasetRecord,
     JobKind,
     JobRecord,
     JobStatus,
+    ReleaseDecisionListRecord,
     ReleaseDecisionRecord,
+    RunListRecord,
     RunRecord,
 )
 from llm_eval_control_plane.domain.datasets import DatasetVersion
@@ -63,7 +66,7 @@ class ControlPlaneRepository(Protocol):
         limit: int,
         cursor: str | None = None,
         name: str | None = None,
-    ) -> CursorPage[DatasetRecord]: ...
+    ) -> CursorPage[DatasetListRecord]: ...
 
     def begin_job(self, record: JobRecord) -> tuple[JobRecord, bool]: ...
 
@@ -103,7 +106,7 @@ class ControlPlaneRepository(Protocol):
         limit: int,
         cursor: str | None = None,
         dataset_name: str | None = None,
-    ) -> CursorPage[RunRecord]: ...
+    ) -> CursorPage[RunListRecord]: ...
 
     def complete_release_decision(
         self,
@@ -121,7 +124,7 @@ class ControlPlaneRepository(Protocol):
         limit: int,
         cursor: str | None = None,
         status: ReleaseStatus | None = None,
-    ) -> CursorPage[ReleaseDecisionRecord]: ...
+    ) -> CursorPage[ReleaseDecisionListRecord]: ...
 
     def check_health(self) -> None: ...
 
@@ -338,7 +341,7 @@ class ControlPlaneService:
         limit: int,
         cursor: str | None = None,
         name: str | None = None,
-    ) -> CursorPage[DatasetRecord]:
+    ) -> CursorPage[DatasetListRecord]:
         try:
             return self._repository.list_datasets(
                 limit=limit,
@@ -469,7 +472,7 @@ class ControlPlaneService:
         limit: int,
         cursor: str | None = None,
         dataset_name: str | None = None,
-    ) -> CursorPage[RunRecord]:
+    ) -> CursorPage[RunListRecord]:
         try:
             return self._repository.list_runs(
                 limit=limit,
@@ -573,7 +576,7 @@ class ControlPlaneService:
         limit: int,
         cursor: str | None = None,
         status: ReleaseStatus | None = None,
-    ) -> CursorPage[ReleaseDecisionRecord]:
+    ) -> CursorPage[ReleaseDecisionListRecord]:
         try:
             return self._repository.list_release_decisions(
                 limit=limit,

@@ -29,11 +29,14 @@ from llm_eval_control_plane.domain.comparison import (
     ReleaseStatus,
 )
 from llm_eval_control_plane.domain.control_plane import (
+    DatasetListRecord,
     DatasetRecord,
     JobKind,
     JobRecord,
     JobStatus,
+    ReleaseDecisionListRecord,
     ReleaseDecisionRecord,
+    RunListRecord,
     RunRecord,
 )
 from llm_eval_control_plane.domain.datasets import DatasetVersion, EvaluationCase
@@ -156,9 +159,22 @@ class DatasetResponse(ApiModel):
         )
 
 
+class DatasetListItemResponse(ApiModel):
+    schema_version: Literal["dataset-list-item/v1"] = "dataset-list-item/v1"
+    name: str
+    revision: int
+    digest: str
+    case_count: int
+    created_at: datetime
+
+    @classmethod
+    def from_record(cls, record: DatasetListRecord) -> Self:
+        return cls(**record.model_dump())
+
+
 class DatasetPage(ApiModel):
     schema_version: Literal["dataset-page/v1"] = "dataset-page/v1"
-    items: tuple[DatasetResponse, ...]
+    items: tuple[DatasetListItemResponse, ...]
     next_cursor: str | None = None
 
 
@@ -285,9 +301,24 @@ class RunResponse(ApiModel):
         )
 
 
+class RunListItemResponse(ApiModel):
+    schema_version: Literal["run-list-item/v1"] = "run-list-item/v1"
+    run_id: str
+    status: RunStatus
+    execution_mode: ExecutionMode
+    dataset_name: str
+    dataset_revision: int
+    result_digest: str
+    created_at: datetime
+
+    @classmethod
+    def from_record(cls, record: RunListRecord) -> Self:
+        return cls(**record.model_dump())
+
+
 class RunPage(ApiModel):
     schema_version: Literal["run-page/v1"] = "run-page/v1"
-    items: tuple[RunResponse, ...]
+    items: tuple[RunListItemResponse, ...]
     next_cursor: str | None = None
 
 
@@ -404,9 +435,25 @@ class ReleaseDecisionResponse(ApiModel):
         )
 
 
+class ReleaseDecisionListItemResponse(ApiModel):
+    schema_version: Literal["release-decision-list-item/v1"] = (
+        "release-decision-list-item/v1"
+    )
+    decision_id: str
+    status: ReleaseStatus
+    baseline_run_id: str
+    candidate_run_id: str
+    decision_digest: str
+    created_at: datetime
+
+    @classmethod
+    def from_record(cls, record: ReleaseDecisionListRecord) -> Self:
+        return cls(**record.model_dump())
+
+
 class ReleaseDecisionPage(ApiModel):
     schema_version: Literal["release-decision-page/v1"] = "release-decision-page/v1"
-    items: tuple[ReleaseDecisionResponse, ...]
+    items: tuple[ReleaseDecisionListItemResponse, ...]
     next_cursor: str | None = None
 
 
@@ -443,6 +490,7 @@ __all__ = [
     "ComparisonCreateRequest",
     "ComparisonSubmissionResponse",
     "DatasetCreateRequest",
+    "DatasetListItemResponse",
     "DatasetPage",
     "DatasetResponse",
     "ErrorDetail",
@@ -450,10 +498,12 @@ __all__ = [
     "HealthResponse",
     "JobPage",
     "JobResponse",
+    "ReleaseDecisionListItemResponse",
     "ReleaseDecisionPage",
     "ReleaseDecisionResponse",
     "ResolvedArtifactRefInput",
     "RunCreateRequest",
+    "RunListItemResponse",
     "RunPage",
     "RunResponse",
     "RunSubmissionResponse",

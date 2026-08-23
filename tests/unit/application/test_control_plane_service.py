@@ -262,7 +262,7 @@ def test_read_methods_translate_missing_records_and_invalid_cursors(
     service = context.service
     service.register_dataset(_dataset())
     assert service.get_dataset("fixture", 1).dataset.name == "fixture"
-    assert service.list_datasets(limit=1).items[0].dataset.name == "fixture"
+    assert service.list_datasets(limit=1).items[0].name == "fixture"
 
     with raises(ResourceNotFoundError):
         service.get_dataset("missing", 1)
