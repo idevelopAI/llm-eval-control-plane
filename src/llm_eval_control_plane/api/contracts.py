@@ -17,7 +17,11 @@ from pydantic import (
 )
 
 from llm_eval_control_plane.adapters.scorers import BuiltInEvaluatorKind
-from llm_eval_control_plane.domain.artifacts import ArtifactRef
+from llm_eval_control_plane.domain.artifacts import (
+    ArtifactKind,
+    ArtifactRef,
+    Sha256Digest,
+)
 from llm_eval_control_plane.domain.canonical import CanonicalJson
 from llm_eval_control_plane.domain.comparison import (
     AggregateComparison,
@@ -293,13 +297,45 @@ class RunSubmissionResponse(ApiModel):
     run: RunResponse | None = None
 
 
-class EvaluationSpecInput(EvaluationSpec):
-    """Public comparison policy with an explicit bounded gate collection."""
+class ResolvedArtifactRefInput(ApiModel):
+    """Public artifact reference that cannot omit its content identity."""
 
+    kind: ArtifactKind
+    name: ArtifactNameInput
+    revision: PositiveIntInput
+    digest: Sha256Digest
+
+    def to_domain(self) -> ArtifactRef:
+        return ArtifactRef.model_validate(self.model_dump())
+
+
+class EvaluationSpecInput(ApiModel):
+    """Public comparison policy over fully resolved immutable evidence."""
+
+    schema_version: Literal["1"] = "1"
+    name: ArtifactNameInput
+    dataset: ResolvedArtifactRefInput
+    candidate: ResolvedArtifactRefInput
+    baseline: ResolvedArtifactRefInput
     gates: Annotated[
         tuple[MetricGate, ...],
         Field(min_length=1, max_length=64),
     ]
+
+    @model_validator(mode="after")
+    def validate_references(self) -> Self:
+        self.to_domain()
+        return self
+
+    def to_domain(self) -> EvaluationSpec:
+        return EvaluationSpec(
+            schema_version=self.schema_version,
+            name=self.name,
+            dataset=self.dataset.to_domain(),
+            candidate=self.candidate.to_domain(),
+            baseline=self.baseline.to_domain(),
+            gates=self.gates,
+        )
 
 
 class ComparisonCreateRequest(ApiModel):
@@ -416,6 +452,7 @@ __all__ = [
     "JobResponse",
     "ReleaseDecisionPage",
     "ReleaseDecisionResponse",
+    "ResolvedArtifactRefInput",
     "RunCreateRequest",
     "RunPage",
     "RunResponse",
