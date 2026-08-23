@@ -6,6 +6,7 @@ x-control-plane-environment: &control-plane-environment
   CONTROL_PLANE_DATABASE_NAME: ${CONTROL_PLANE_DATABASE_NAME:-control_plane}
   CONTROL_PLANE_DATABASE_USER: ${CONTROL_PLANE_DATABASE_USER:-control_plane}
   CONTROL_PLANE_DATABASE_PASSWORD_FILE: /run/secrets/control_plane_database_password
+  CONTROL_PLANE_WORKER_MAX_ATTEMPTS: ${CONTROL_PLANE_WORKER_MAX_ATTEMPTS:-3}
 
 x-control-plane-service: &control-plane-service
   image: llm-eval-control-plane:local
@@ -88,6 +89,43 @@ services:
       start_period: 5s
     init: true
     restart: unless-stopped
+
+  worker:
+    <<: *control-plane-service
+    command:
+      - python
+      - -m
+      - llm_eval_control_plane.worker
+    environment:
+      <<: *control-plane-environment
+      CONTROL_PLANE_WORKER_LEASE_SECONDS: ${CONTROL_PLANE_WORKER_LEASE_SECONDS:-30}
+      CONTROL_PLANE_WORKER_HEARTBEAT_SECONDS: ${CONTROL_PLANE_WORKER_HEARTBEAT_SECONDS:-10}
+      CONTROL_PLANE_WORKER_POLL_MILLISECONDS: ${CONTROL_PLANE_WORKER_POLL_MILLISECONDS:-500}
+      CONTROL_PLANE_WORKER_REAPER_BATCH: ${CONTROL_PLANE_WORKER_REAPER_BATCH:-50}
+      CONTROL_PLANE_WORKER_BACKOFF_BASE_SECONDS: ${CONTROL_PLANE_WORKER_BACKOFF_BASE_SECONDS:-1}
+      CONTROL_PLANE_WORKER_BACKOFF_MAX_SECONDS: ${CONTROL_PLANE_WORKER_BACKOFF_MAX_SECONDS:-60}
+      CONTROL_PLANE_WORKER_HEALTH_FILE: /tmp/control-plane-worker.ready
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - control-plane
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          from pathlib import Path;
+          raise SystemExit(0 if
+          Path('/tmp/control-plane-worker.ready').is_file() else 1)
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 45s
 
 secrets:
   control_plane_database_password:
