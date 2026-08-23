@@ -31,6 +31,8 @@ from llm_eval_control_plane.domain.comparison import (
 from llm_eval_control_plane.domain.control_plane import (
     DatasetListRecord,
     DatasetRecord,
+    JobAttemptRecord,
+    JobAttemptStatus,
     JobKind,
     JobRecord,
     JobStatus,
@@ -217,11 +219,14 @@ class RunCreateRequest(ApiModel):
 
 
 class JobResponse(ApiModel):
-    schema_version: Literal["job/v1"] = "job/v1"
+    schema_version: Literal["job/v2"] = "job/v2"
     job_id: str
     kind: JobKind
     status: JobStatus
     resource_id: str
+    attempt_count: int
+    max_attempts: int
+    available_at: datetime
     error_code: str | None = None
     created_at: datetime
     updated_at: datetime
@@ -233,6 +238,9 @@ class JobResponse(ApiModel):
             kind=record.kind,
             status=record.status,
             resource_id=record.resource_id,
+            attempt_count=record.attempt_count,
+            max_attempts=record.max_attempts,
+            available_at=record.available_at,
             error_code=record.error_code,
             created_at=record.created_at,
             updated_at=record.updated_at,
@@ -240,9 +248,43 @@ class JobResponse(ApiModel):
 
 
 class JobPage(ApiModel):
-    schema_version: Literal["job-page/v1"] = "job-page/v1"
+    schema_version: Literal["job-page/v2"] = "job-page/v2"
     items: tuple[JobResponse, ...]
     next_cursor: str | None = None
+
+
+class JobAttemptResponse(ApiModel):
+    """Public attempt metadata with worker and lease identities excluded."""
+
+    schema_version: Literal["job-attempt/v1"] = "job-attempt/v1"
+    attempt_number: int
+    status: JobAttemptStatus
+    error_code: str | None = None
+    started_at: datetime
+    heartbeat_at: datetime
+    lease_expires_at: datetime
+    finished_at: datetime | None = None
+
+    @classmethod
+    def from_record(cls, record: JobAttemptRecord) -> Self:
+        return cls(
+            attempt_number=record.attempt_number,
+            status=record.status,
+            error_code=record.error_code,
+            started_at=record.started_at,
+            heartbeat_at=record.heartbeat_at,
+            lease_expires_at=record.lease_expires_at,
+            finished_at=record.finished_at,
+        )
+
+
+class JobAttemptListResponse(ApiModel):
+    schema_version: Literal["job-attempt-list/v1"] = "job-attempt-list/v1"
+    items: tuple[JobAttemptResponse, ...]
+
+
+class JobCancellationRequest(ApiModel):
+    """Strict empty command body reserved for future compatible versions."""
 
 
 class MetricSummaryResponse(ApiModel):
@@ -323,7 +365,7 @@ class RunPage(ApiModel):
 
 
 class RunSubmissionResponse(ApiModel):
-    schema_version: Literal["run-submission/v1"] = "run-submission/v1"
+    schema_version: Literal["run-submission/v2"] = "run-submission/v2"
     job: JobResponse
     run: RunResponse | None = None
 
@@ -458,7 +500,7 @@ class ReleaseDecisionPage(ApiModel):
 
 
 class ComparisonSubmissionResponse(ApiModel):
-    schema_version: Literal["comparison-submission/v1"] = "comparison-submission/v1"
+    schema_version: Literal["comparison-submission/v2"] = "comparison-submission/v2"
     job: JobResponse
     decision: ReleaseDecisionResponse | None = None
 
@@ -496,6 +538,9 @@ __all__ = [
     "ErrorDetail",
     "EvaluationSpecInput",
     "HealthResponse",
+    "JobAttemptListResponse",
+    "JobAttemptResponse",
+    "JobCancellationRequest",
     "JobPage",
     "JobResponse",
     "ReleaseDecisionListItemResponse",

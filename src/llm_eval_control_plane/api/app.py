@@ -22,6 +22,9 @@ from llm_eval_control_plane.api.contracts import (
     DatasetResponse,
     ErrorDetail,
     HealthResponse,
+    JobAttemptListResponse,
+    JobAttemptResponse,
+    JobCancellationRequest,
     JobPage,
     JobResponse,
     ReleaseDecisionListItemResponse,
@@ -139,7 +142,7 @@ def create_app(
     app = FastAPI(
         title="LLM Evaluation Control Plane",
         summary="Durable, content-addressed evaluation and release decisions",
-        version="1.0.0",
+        version="1.1.0",
         openapi_url="/openapi.json",
         docs_url="/docs",
         redoc_url=None,
@@ -323,21 +326,16 @@ def create_app(
                 "description": "Terminal replay",
                 "headers": _JOB_LOCATION_HEADERS,
             },
-            201: {
-                "model": RunSubmissionResponse,
-                "description": "Synchronously completed new job",
-                "headers": _JOB_LOCATION_HEADERS,
-            },
             202: {
                 "model": RunSubmissionResponse,
-                "description": "Existing queued or running job",
+                "description": "Accepted new or nonterminal job",
                 "headers": _JOB_LOCATION_HEADERS,
             },
         },
         tags=["runs"],
         description=(
-            "The unique idempotency winner executes synchronously in-process in API "
-            "v1. Existing queued or running jobs are returned without re-invocation."
+            "The API validates and durably enqueues immutable worker input. Execution "
+            "is performed asynchronously by leased workers."
         ),
     )
     async def submit_run(
@@ -407,6 +405,43 @@ def create_app(
         return JobResponse.from_record(service.get_job(job_id))
 
     @app.get(
+        "/v1/jobs/{job_id}/attempts",
+        response_model=JobAttemptListResponse,
+        operation_id="list_job_attempts",
+        responses=_ERROR_RESPONSES,
+        tags=["jobs"],
+    )
+    async def list_job_attempts(
+        job_id: Annotated[
+            str,
+            Path(min_length=1, max_length=128, pattern=_STABLE_ID_PATTERN),
+        ],
+    ) -> JobAttemptListResponse:
+        return JobAttemptListResponse(
+            items=tuple(
+                JobAttemptResponse.from_record(record)
+                for record in service.list_job_attempts(job_id)
+            )
+        )
+
+    @app.post(
+        "/v1/jobs/{job_id}/cancellation",
+        response_model=JobResponse,
+        operation_id="request_job_cancellation",
+        responses=_ERROR_RESPONSES,
+        tags=["jobs"],
+    )
+    async def request_job_cancellation(
+        body: JobCancellationRequest,
+        job_id: Annotated[
+            str,
+            Path(min_length=1, max_length=128, pattern=_STABLE_ID_PATTERN),
+        ],
+    ) -> JobResponse:
+        del body
+        return JobResponse.from_record(service.cancel_job(job_id))
+
+    @app.get(
         "/v1/runs",
         response_model=RunPage,
         operation_id="list_evaluation_runs",
@@ -455,21 +490,16 @@ def create_app(
                 "description": "Terminal replay",
                 "headers": _JOB_LOCATION_HEADERS,
             },
-            201: {
-                "model": ComparisonSubmissionResponse,
-                "description": "Synchronously completed new job",
-                "headers": _JOB_LOCATION_HEADERS,
-            },
             202: {
                 "model": ComparisonSubmissionResponse,
-                "description": "Existing queued or running job",
+                "description": "Accepted new or nonterminal job",
                 "headers": _JOB_LOCATION_HEADERS,
             },
         },
         tags=["release decisions"],
         description=(
-            "The unique idempotency winner compares stored immutable runs "
-            "synchronously in API v1."
+            "The API pins stored run evidence and durably enqueues an asynchronous "
+            "release comparison."
         ),
     )
     async def submit_comparison(
@@ -544,14 +574,13 @@ def create_app(
 
 
 def _submission_status(outcome: SubmissionResult) -> int:
-    if outcome.created and outcome.job.status in {
+    if not outcome.created and outcome.job.status in {
         JobStatus.SUCCEEDED,
         JobStatus.FAILED,
+        JobStatus.CANCELED,
     }:
-        return 201
-    if outcome.job.status in {JobStatus.QUEUED, JobStatus.RUNNING}:
-        return 202
-    return 200
+        return 200
+    return 202
 
 
 def _safe_location(value: object) -> str | int:
