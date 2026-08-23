@@ -25,7 +25,9 @@
 | `DatasetRecord` | Immutable dataset revision plus its durable registration time | Implemented |
 | `JobRecord` | Durable submission identity, semantic digest, resource ID, and lifecycle state | Implemented |
 | `JobKind` | `run` or `comparison` idempotency namespace | Implemented |
-| `JobStatus` | `queued`, `running`, `succeeded`, or `failed` lifecycle state | Implemented |
+| `JobStatus` | `queued`, `running`, `cancel_requested`, `succeeded`, `failed`, or `canceled` lifecycle state | Implemented |
+| `JobPayload` | Canonical resolved run or comparison input pinned at submission | Implemented |
+| `JobAttemptRecord` | Redacted timing, outcome, and safe failure metadata for one leased attempt | Implemented |
 | `RunRecord` | Append-only run result plus its durable creation time | Implemented |
 | `ReleaseDecisionRecord` | Append-only release decision plus stable ID and creation time | Implemented |
 | `CursorPage` | Stable bounded page plus opaque continuation cursor | Implemented |
@@ -57,8 +59,8 @@ behavior revisions inside a run.
 - A target receives `case_id` and `input` only. It never receives `expected`,
   expected refusal state, schemas, tolerances, or slice labels.
 - During one evaluation-runner invocation, each case is invoked exactly once.
-  Durable HTTP submission does not turn that local invariant into an
-  exactly-once execution guarantee across process crashes.
+  Worker crash recovery may repeat the whole invocation after an external effect
+  but before durable publication; execution is therefore at least once.
 - Target responses require structured refusal state and explicit non-negative
   input/output usage. Refusals are never inferred from wording.
 - Every run records its execution mode. Deterministic fake runs default to
@@ -138,34 +140,51 @@ behavior revisions inside a run.
 ## Durable submission invariants
 
 - A job has one stable ID, kind, status, opaque idempotency key, semantic request
-  digest, resource ID, creation time, and update time. All timestamps normalize
-  to UTC and the update time cannot precede creation.
+  digest, resource ID, bounded attempt count, maximum attempts, availability
+  time, creation time, and update time. Public job models exclude the key and
+  semantic digest. All timestamps normalize to UTC and cannot move backwards.
 - The idempotency namespace is `(job kind, idempotency key)`. A run and a
   comparison may use the same opaque key without identifying the same job.
 - The semantic digest covers the validated effective request with all defaults
   materialized. It does not cover JSON member order, raw transport bytes, or the
   separately stored idempotency key.
-- An atomic job claim has one insert winner. An identical request returns the
-  stored job and performs no new execution. Reusing the same kind and key with a
+- An atomic submission insert has one winner. It stores the job and canonical
+  resolved payload in one transaction. An identical request returns the original
+  job and payload without another enqueue. Reusing the same kind and key with a
   different semantic digest is a conflict.
 - Dataset lookup, adapter and evaluator validation, comparison alignment, and
   derived-work bounds are checked before a new job is claimed whenever they can
   be resolved without execution.
-- Legal transitions are only `queued` to `running`, then `running` to either
-  `succeeded` or `failed`. Terminal jobs never transition again. An exact-state
-  retry is accepted only when its safe error code also matches.
+- A queued job may be claimed as `running` or canceled immediately. Running work
+  may be rescheduled as `queued`, receive `cancel_requested`, or end as
+  `succeeded` or `failed`. A cancellation request ends as `canceled`. The three
+  terminal states never transition again, and queued work always has an attempt
+  remaining.
 - Only failed jobs contain an error code, and that value is a bounded stable
   code. Raw exception text, database details, and local paths never enter a job
   record.
+- A claim increments the job attempt count and creates exactly one corresponding
+  running attempt. Attempt numbers are positive, ordered, and never exceed the
+  job maximum. Public attempt models omit worker identities and lease tokens.
+- The database clock decides claim eligibility, lease expiry, heartbeat expiry,
+  retry availability, cancellation time, and terminal time. Worker clocks do not
+  decide ownership.
+- Heartbeat, retry, failure, cancellation, and completion operations are fenced
+  by the active job ID, attempt number, private token, status, and unexpired
+  lease. A stale or superseded attempt cannot mutate the job or publish evidence.
+- An explicitly transient failure or an expired lease is rescheduled with
+  bounded backoff while another attempt remains. Exhaustion records a safe
+  terminal failure. Cancellation takes precedence over retry or success.
 - Successful completion inserts the immutable `RunRecord` or
-  `ReleaseDecisionRecord` and transitions its job to `succeeded` in one database
-  transaction. A failed transaction publishes neither half.
+  `ReleaseDecisionRecord`, completes the active attempt, and transitions its job
+  to `succeeded` in one database transaction. A failed transaction publishes no
+  partial state; an exact response-lost retry may confirm identical evidence.
 - A job's resource kind and ID must agree with the evidence completed through
   it. A changed immutable resource at an existing identity is a conflict.
-- API execution is currently synchronous. If the process stops after claiming a
-  job, its durable `running` state can remain stranded. Identical replay returns
-  that state and does not reinvoke execution. Phase 5 must add worker leasing and
-  recovery; these invariants do not promise exactly-once execution.
+- The API only validates and enqueues. Leased workers execute immutable payloads,
+  heartbeat, and publish through fenced transactions. This guarantees at most
+  one durable evidence resource for a job, not exactly-once provider invocation
+  or exactly-once external side effects.
 
 ## Persistence invariants
 
@@ -187,8 +206,15 @@ behavior revisions inside a run.
   idempotent; different canonical content at the same immutable identity is a
   conflict. No operation overwrites completed evidence.
 - Job creation is protected by unique identities and the kind/key idempotency
-  namespace. State changes use compare-and-set semantics so concurrent writers
-  cannot skip or reverse lifecycle transitions.
+  namespace. Each nonterminal job has one bounded canonical payload whose kind,
+  digest, and resource dependencies are validated when it is loaded.
+- PostgreSQL workers select claimable jobs and expired attempts with row locks
+  and `SKIP LOCKED`. Competing workers can make progress without sharing one job.
+  Lease operations use database time and compare-and-set fencing so concurrent
+  writers cannot skip or reverse lifecycle transitions.
+- Attempt history is append-only per `(job_id, attempt_number)`. Terminal attempt
+  metadata retains bounded timing and safe error codes while private worker and
+  lease identities remain persistence-only coordination data.
 - Stored domain documents retain complete canonical evaluation evidence. Public
   API models are separate redacted summaries; database records are not shaped by
   the response contract.
@@ -221,6 +247,10 @@ behavior revisions inside a run.
   evidence documents. All variants exclude raw inputs, expectations, target
   outputs, SQL, rows, idempotency keys, semantic request digests, database URLs,
   local paths, and exception text.
+- Job summaries expose status, attempt counts, availability, safe failures, and
+  timestamps. Attempt summaries expose only attempt number, status, safe failure,
+  and timing; neither surface exposes the resolved payload, worker identity, or
+  lease token.
 - Request and application failures use a versioned safe envelope and bounded
   request ID. Validation details include only sanitized locations and stable
   error types, never rejected values, validator context, URLs, or exception

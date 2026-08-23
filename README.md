@@ -4,23 +4,26 @@
 [![Release Gate](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/release-gate.yml/badge.svg)](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/release-gate.yml)
 [![DataBridge Gate](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/databridge-gate.yml/badge.svg)](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/databridge-gate.yml)
 [![Control Plane API Gate](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/control-plane-api-gate.yml/badge.svg)](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/control-plane-api-gate.yml)
+[![Worker Recovery Gate](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/worker-recovery-gate.yml/badge.svg)](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/worker-recovery-gate.yml)
 
 A deterministic-first control plane for evaluating AI application behavior,
 preserving case-level evidence, and making quality, safety, latency, and usage
 changes measurable before release.
 
-> **Status:** Phase 4 durable control-plane API. The repository now exposes the
-> deterministic evaluation and comparison core through a versioned FastAPI
-> service backed by PostgreSQL records, Alembic migrations, immutable evidence,
-> and semantic idempotency. The DataBridge PostgreSQL evaluation remains
-> available through the CLI.
+> **Status:** Phase 5 leased workers and crash recovery. The versioned FastAPI
+> service durably enqueues resolved evaluation and comparison payloads;
+> PostgreSQL-backed workers claim them with expiring leases, heartbeat while
+> running, retry transient failures with bounded backoff, recover expired work,
+> and publish immutable evidence through a fencing token. The DataBridge
+> PostgreSQL evaluation remains available through the CLI.
 
 ## Durable HTTP control plane
 
 The local API registers immutable dataset revisions, submits deterministic
-evaluation runs, tracks durable jobs, and stores release decisions. API v1 uses
-only the credential-free deterministic executor: its latency and usage evidence
-are simulated and must not be presented as live-model measurements.
+evaluation runs, tracks durable jobs and attempts, accepts cancellation
+requests, and stores release decisions. API v1 uses only the credential-free
+deterministic executor: its latency and usage evidence are simulated and must
+not be presented as live-model measurements.
 
 ### Local Compose quickstart
 
@@ -49,8 +52,14 @@ curl --fail --silent http://127.0.0.1:8000/health/ready
 ```
 
 The `migrate` service applies the exact Alembic head before the API starts. The
-readiness endpoint requires both database connectivity and that schema revision.
-The API port is bound to loopback by default.
+API and worker start only after migration succeeds. The readiness endpoint
+requires both database connectivity and that schema revision. The API port is
+bound to loopback by default; the worker has no host port. To exercise competing
+claims locally, scale only the worker service:
+
+```bash
+docker compose up --build --detach --wait --scale worker=2
+```
 
 Register a small dataset, then submit a run with a caller-selected idempotency
 key:
@@ -108,6 +117,8 @@ digests, database URLs, or exception text.
 | `POST`, `GET` | `/v1/runs` | Submit or page evaluation runs |
 | `GET` | `/v1/runs/{run_id}` | Read one redacted run summary |
 | `GET` | `/v1/jobs`, `/v1/jobs/{job_id}` | Page or inspect durable job state |
+| `GET` | `/v1/jobs/{job_id}/attempts` | Inspect redacted attempt history |
+| `POST` | `/v1/jobs/{job_id}/cancellation` | Cancel queued work or request running cancellation |
 | `POST` | `/v1/comparisons` | Submit a baseline/candidate comparison |
 | `GET` | `/v1/release-decisions` | Page release decisions |
 | `GET` | `/v1/release-decisions/{decision_id}` | Read one redacted decision |
@@ -124,17 +135,24 @@ uv run python scripts/export_openapi.py --check
 Run and comparison submissions require `Idempotency-Key`. The service hashes the
 validated effective request with defaults materialized, not the raw JSON bytes.
 The same job kind, key, and semantic request returns the existing job without a
-second invocation; reusing a key for different semantics returns `409`. Evidence
-insertion and the terminal job transition occur in one database transaction. A
-new synchronously completed submission returns `201`, a terminal replay returns
-`200`, and an existing queued or running job returns `202`.
+second enqueue; reusing a key for different semantics returns `409`. A new or
+nonterminal submission returns `202`; a replay of a terminal job returns `200`.
+Both responses carry the job `Location` header. Submission handlers never invoke
+the target, an evaluator, or the comparison engine.
 
 This is an intentionally local, unauthenticated service. Do not expose it to an
-untrusted network. Execution currently occurs synchronously in the API process.
-A process interruption can leave a claimed job in `running`; replay returns that
-durable job and does not execute it again. Automated recovery and queued workers
-are not implemented in this phase, so the service does not claim exactly-once
-execution.
+untrusted network. Jobs progress through `queued`, `running`,
+`cancel_requested`, `succeeded`, `failed`, or `canceled`. Each claim creates a
+redacted attempt record and a private expiring lease. Workers heartbeat active
+leases; the reaper either reschedules an expired attempt with bounded backoff or
+fails it after the configured attempt limit. Queued cancellation is immediate,
+while running cancellation is cooperative and wins any later publication race.
+
+Provider or target invocation is at least once: a worker can lose its lease
+after an external call and another worker may retry it. Fencing provides
+exactly-once durable evidence publication for a job, not exactly-once external
+side effects. Attempt lease tokens, worker identities, idempotency keys, semantic
+request digests, and resolved payloads are never returned by the API.
 
 ## DataBridge PostgreSQL evaluation
 
@@ -381,10 +399,15 @@ performed safely.
   envelopes, redacted summaries, opaque keyset pagination, and generated OpenAPI
 - SQLAlchemy PostgreSQL persistence for datasets, jobs, immutable run evidence,
   and immutable release decisions, with Alembic schema compatibility checks
-- Atomic semantic job claims, legal queued/running/terminal transitions, and
-  transactional evidence completion without duplicate replay execution
-- A hardened local Compose stack with a one-shot migration service, loopback API
-  binding, read-only containers, dropped capabilities, and file-mounted secrets
+- Enqueue-only semantic submissions with immutable resolved payloads, six-state
+  job lifecycles, redacted attempt history, and cooperative cancellation
+- PostgreSQL worker claims using database time and `FOR UPDATE SKIP LOCKED`,
+  expiring leases, heartbeats, bounded retry backoff, and expired-lease recovery
+- Fenced transactional completion that publishes immutable evidence at most once
+  while explicitly preserving at-least-once target invocation semantics
+- A hardened local Compose stack with one-shot migration, scalable portless
+  workers, loopback API binding, read-only containers, dropped capabilities, and
+  file-mounted secrets
 - Python 3.11–3.14 CI, strict typing, linting, branch coverage, packaging, and
   isolated wheel smoke tests
 

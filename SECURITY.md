@@ -65,16 +65,32 @@ keys, semantic request digests, and exception text. Complete run and release
 evidence remains in PostgreSQL and must be handled as sensitive evaluation data.
 Content digests prove integrity; they do not encrypt the stored document.
 
+Job and attempt responses additionally exclude resolved worker payloads, worker
+identities, and lease tokens. Those values are private database coordination
+data and must not enter logs, health files, metrics, traces, errors, or command
+arguments. Canonical worker payloads can contain prompts, expectations, policy,
+and other evaluation inputs; protect them like complete evidence.
+
 `Idempotency-Key` is stored to coordinate retries. Treat it as an opaque routing
 identifier, not a place for credentials, emails, prompts, or customer data. The
 validated request semantics are hashed separately. An identical retry returns
 the existing durable job, while a changed request using the same key fails with
 a conflict.
 
-The API process executes the deterministic target inline. A crash can leave a
-job in `running`; the current service returns that state on retry and does not
-reinvoke it. There is no automated recovery worker yet, and the service makes no
-exactly-once execution claim.
+The API process validates and durably enqueues work but never invokes a target,
+evaluator, or comparison. A separate internal worker uses private expiring leases
+and heartbeats. Every retry, cancellation, failure, and evidence publication is
+fenced against the active attempt in PostgreSQL. The reaper reschedules expired
+leases within a bounded attempt budget and fails exhausted work with a safe code.
+
+This recovery contract is at least once for target or provider invocation. A
+worker can complete an external call and crash before fenced publication, so a
+later attempt may repeat that call. The database transaction prevents stale
+workers from publishing duplicate or changed evidence, but it cannot roll back
+external effects. Cancellation is cooperative and likewise cannot undo an
+effect that occurred before the worker observed the request. Real providers must
+use their own idempotency or deduplication controls when duplicate effects are
+unsafe.
 
 ## Local PostgreSQL secret handling
 
@@ -106,16 +122,18 @@ host traversal even though the directly bind-mounted file uses mode `0444`:
 ```
 
 Compose mounts that file read-only under `/run/secrets/` for PostgreSQL, the
-migration process, and the API. Runtime configuration reads only a bounded
+migration process, the API, and workers. Runtime configuration reads only a bounded
 regular file without following symlinks. SQLAlchemy engines hide parameter
 values. Migration and application errors must never render a database URL or
 password.
 
-Use a dedicated local control-plane database and role. The API runtime does not
-create or upgrade tables: the one-shot Alembic service applies migrations before
-startup, and readiness fails unless the database reports the exact expected
-revision. Backups of the named PostgreSQL volume contain sensitive evidence and
-must receive the same protection as the source evaluation data.
+Use a dedicated local control-plane database and role. API and worker runtimes do
+not create or upgrade tables: the one-shot Alembic service applies migrations
+before startup, and readiness fails unless the database reports the exact
+expected revision. The worker is attached only to the internal Compose network
+and publishes no host port. Backups of the named PostgreSQL volume contain
+sensitive payloads and evidence and must receive the same protection as the
+source evaluation data.
 
 ## DataBridge trust boundaries
 

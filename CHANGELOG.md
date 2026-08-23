@@ -70,6 +70,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   command that does not require a database or credentials.
 - A hardened local Compose stack with a one-shot migration service, exact-schema
   readiness, loopback API binding, and file-mounted PostgreSQL secrets.
+- Immutable resolved run and comparison payloads stored atomically with queued
+  jobs, plus a six-state lifecycle with bounded attempt budgets and availability.
+- PostgreSQL leased-worker claims using database time and
+  `FOR UPDATE SKIP LOCKED`, durable redacted attempt history, heartbeats, bounded
+  transient retry backoff, and concurrent expired-lease recovery.
+- Fenced transactional run and release-decision publication, cooperative
+  cancellation, and response-lost completion retry without stale-worker writes.
+- A production worker runtime with graceful shutdown, a private fixed-content
+  readiness file, a recovery loop, scale-safe identity, and hardened Compose
+  deployment with no exposed worker port.
+- A credential-free PostgreSQL worker recovery gate covering competing claims,
+  crash recovery, cancellation races, attempt exhaustion, and evidence fencing.
 
 ### Changed
 
@@ -83,15 +95,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   local PostgreSQL replay and unexecuted live-model accuracy.
 - The API is now a second composition root alongside the CLI; both depend on
   application protocols rather than concrete persistence or execution adapters.
-- Local service documentation now distinguishes simulated deterministic API
-  evidence from live-model measurements and records the current inline-execution
-  recovery limitation.
+- Local service documentation now distinguishes simulated deterministic worker
+  evidence from live-model measurements and documents the at-least-once external
+  invocation boundary.
 - Dataset, run, and release-decision collection routes now read bounded indexed
   metadata projections without loading complete canonical evidence documents;
   detail reads continue to validate the stored document against its indexes.
-- Durable replay coordination is explicitly not an exactly-once guarantee:
-  interrupted inline execution can leave a job in `running` until a later worker
-  leasing and recovery phase.
+- Run and comparison submission handlers now validate and enqueue only. New or
+  nonterminal submissions return `202`, terminal replays return `200`, and
+  leased workers execute the pinned payload asynchronously.
+- Durable replay coordination now combines semantic HTTP idempotency with
+  exactly-once successful evidence publication while explicitly retaining
+  at-least-once target or provider invocation.
 
 ### Security
 
@@ -116,6 +131,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Default API summaries and errors omit raw cases, prompts, expectations,
   outputs, SQL, rows, database URLs, semantic request digests, and exception
   text.
+- Public job and attempt contracts also omit canonical payloads, worker
+  identities, lease tokens, idempotency keys, and private coordination metadata.
+- Worker errors, readiness state, and configuration validation use fixed safe
+  content; database engines hide parameters, and payloads or lease credentials
+  never enter logs or health files.
 - Compose keeps the API on loopback, drops container capabilities, uses
   read-only filesystems where practical, and obtains the database password from
   a gitignored mounted file rather than an environment value.
