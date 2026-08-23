@@ -1,6 +1,6 @@
 # ADR 0006: Coordinate HTTP Submissions with Durable Semantic Idempotency
 
-- Status: Accepted
+- Status: Accepted; execution ownership extended by ADR 0007
 - Date: 2026-08-20
 
 ## Context
@@ -17,10 +17,12 @@ restart. Separately writing job state and completed evidence can also publish an
 impossible partial outcome: a succeeded job without evidence, or evidence whose
 job still appears to be running.
 
-The Phase 4 executor runs inline in the API process. A crash may therefore occur
-after ownership is claimed and before a terminal state is recorded. The design
-must preserve that uncertainty instead of guessing whether an invocation
-finished.
+When this decision was accepted in Phase 4, the executor ran inline in the API
+process. A crash could occur after ownership was claimed and before a terminal
+state was recorded. That historical limitation motivated the leased execution
+protocol now specified by
+[ADR 0007](0007-leased-workers-and-fenced-publication.md); the semantic
+idempotency boundary in this decision remains in force.
 
 ## Decision
 
@@ -36,37 +38,37 @@ the key is independently stored and uniquely constrained. Equivalent JSON with
 different member order, or with a default omitted versus explicitly supplied,
 produces the same digest.
 
-The PostgreSQL repository atomically begins a job under the unique `(kind,
-idempotency_key)` namespace:
+The PostgreSQL repository atomically begins a job and stores its canonical
+resolved payload under the unique `(kind, idempotency_key)` namespace:
 
-1. The insert winner receives ownership and is the only caller permitted to
-   invoke the executor or comparator.
+1. The insert winner creates exactly one queued job and immutable payload. The API
+   does not invoke the executor or comparator.
 2. An existing key with the same semantic digest returns the stored job and does
-   not invoke work again.
+   not enqueue another payload.
 3. An existing key with a different semantic digest returns a stable conflict.
 4. A distinct collision in the proposed job or resource identity also returns a
    conflict rather than attaching work to an unrelated record.
 
-A new job starts as `queued`, transitions by compare-and-set to `running`, and
-then transitions from `running` to either `succeeded` or `failed`. No other
-transition is legal. Only a failed job contains a bounded safe error code. Raw
-exceptions and persistence details are not stored in the job.
+A new job starts as `queued`. Its leased attempt lifecycle, cancellation states,
+bounded retries, and recovery transitions are defined by ADR 0007. Only a failed
+job contains a bounded safe error code. Raw exceptions and persistence details
+are not stored in the job.
 
-Successful completion uses one database transaction to insert the immutable run
-or release-decision record and move the associated job to `succeeded`. The
-transaction verifies job kind, resource identity, and expected `running` state.
-An exact completion retry may succeed only when the already stored canonical
-evidence matches; changed evidence is an immutable conflict.
+Successful completion uses one fenced database transaction to insert the
+immutable run or release-decision record and move the associated job to
+`succeeded`. The transaction verifies job kind, resource identity, active
+attempt, private lease token, and expected state. An exact response-lost retry
+may succeed only when the already stored canonical evidence matches; changed
+evidence is an immutable conflict.
 
 API responses expose versioned safe summaries and a job `Location` header.
-Queued or running replays return the stored job rather than starting new work.
-Terminal replays return the already completed state. The durable evidence itself
-remains append-only in PostgreSQL.
+Nonterminal replays return `202` with the stored job rather than enqueueing new
+work. Terminal replays return `200` with the completed state. The durable
+payload and evidence remain private, append-oriented PostgreSQL records.
 
 ## Consequences
 
-- Client timeouts can be retried without a second invocation after the original
-  request has durably claimed its job.
+- Client timeouts can be retried without enqueueing a second job or payload.
 - Equivalent request forms share one idempotency result, while changed semantics
   cannot be hidden behind the same key.
 - Concurrent API processes coordinate through a database uniqueness boundary and
@@ -74,15 +76,13 @@ remains append-only in PostgreSQL.
 - Evidence publication and successful job completion are atomic.
 - Idempotency metadata and full evidence are sensitive database content even
   though default API responses are redacted.
-- The scheme does not provide exactly-once execution. The insert winner can stop
-  while the durable job is `running`; an identical replay reports that state and
-  deliberately does not invoke the work again.
-- Phase 5 must add leased workers, expiry policy, and explicit recovery for
-  stranded jobs. Recovery must preserve the same semantic digest and immutable
-  evidence rules.
-- The current deterministic executor is synchronous, credential-free, and
-  simulated. This decision does not make its latency or usage values equivalent
-  to live-provider measurements.
+- Semantic idempotency does not provide exactly-once execution. ADR 0007 adds
+  recovery with at-least-once invocation and fenced, transactional evidence
+  publication while preserving the same semantic digest and immutable evidence
+  rules.
+- The implemented deterministic executor is credential-free and simulated.
+  This decision does not make its latency or usage values equivalent to
+  live-provider measurements.
 
 ## Rejected alternatives
 
@@ -107,6 +107,7 @@ immutable resource.
 ### Reinvoke a stranded running job on replay
 
 Without a lease and recovery protocol, the API cannot prove that the previous
-invocation stopped before producing an external effect. Automatic reinvocation
-would turn uncertainty into a likely duplicate. Phase 4 preserves the running
-state for later operator or worker recovery instead.
+invocation stopped before producing an external effect. Phase 4 therefore
+preserved the running state. ADR 0007 replaces that historical behavior with
+bounded lease recovery and explicitly accepts at-least-once external invocation;
+HTTP replay itself still never directly reinvokes work.
