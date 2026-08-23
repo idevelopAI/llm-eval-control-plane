@@ -205,7 +205,7 @@ class ControlPlaneRepository(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class RunSubmission:
-    """Validated parameters for one deterministic in-process evaluation."""
+    """Validated parameters for one durable deterministic evaluation request."""
 
     idempotency_key: str
     dataset_name: str

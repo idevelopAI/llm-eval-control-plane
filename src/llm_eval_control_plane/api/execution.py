@@ -1,4 +1,4 @@
-"""Explicit offline execution adapter used by the Phase 4 HTTP service."""
+"""Explicit offline execution adapter used by leased control-plane workers."""
 
 from __future__ import annotations
 
