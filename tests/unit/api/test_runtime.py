@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import FastAPI
@@ -37,8 +38,13 @@ def test_runtime_factory_wires_secret_safe_postgres_dependencies(
         captured["repository_engine"] = value
         return repository
 
-    def fake_service(*, repository: object, executor: object) -> object:
-        captured["service"] = (repository, executor)
+    def fake_service(
+        *,
+        repository: object,
+        executor: object,
+        max_attempts: int,
+    ) -> object:
+        captured["service"] = (repository, executor, max_attempts)
         return service
 
     def fake_create_app(*, service: object, max_body_bytes: int) -> FastAPI:
@@ -47,6 +53,11 @@ def test_runtime_factory_wires_secret_safe_postgres_dependencies(
 
     monkeypatch.setattr(runtime, "database_url_from_environment", lambda: "safe-url")
     monkeypatch.setattr(runtime, "max_body_bytes_from_environment", lambda: 4_096)
+    monkeypatch.setattr(
+        runtime,
+        "worker_settings_from_environment",
+        lambda: SimpleNamespace(max_attempts=5),
+    )
     monkeypatch.setattr(runtime, "create_engine", fake_create_engine)
     monkeypatch.setattr(runtime, "SqlAlchemyControlPlaneRepository", fake_repository)
     monkeypatch.setattr(runtime, "DeterministicEvaluationExecutor", lambda: executor)
@@ -58,7 +69,7 @@ def test_runtime_factory_wires_secret_safe_postgres_dependencies(
     assert captured == {
         "engine": ("safe-url", True, True),
         "repository_engine": engine,
-        "service": (repository, executor),
+        "service": (repository, executor, 5),
         "app": (service, 4_096),
     }
     assert app.state.control_plane_engine is engine
