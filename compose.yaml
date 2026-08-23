@@ -1,0 +1,102 @@
+name: llm-eval-control-plane
+
+x-control-plane-environment: &control-plane-environment
+  CONTROL_PLANE_DATABASE_HOST: database
+  CONTROL_PLANE_DATABASE_PORT: "5432"
+  CONTROL_PLANE_DATABASE_NAME: ${CONTROL_PLANE_DATABASE_NAME:-control_plane}
+  CONTROL_PLANE_DATABASE_USER: ${CONTROL_PLANE_DATABASE_USER:-control_plane}
+  CONTROL_PLANE_DATABASE_PASSWORD_FILE: /run/secrets/control_plane_database_password
+
+x-control-plane-service: &control-plane-service
+  image: llm-eval-control-plane:local
+  build:
+    context: .
+    target: runtime
+  environment: *control-plane-environment
+  secrets:
+    - source: control_plane_database_password
+      target: control_plane_database_password
+  networks:
+    - control-plane
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=16m
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  database:
+    image: postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
+    environment:
+      POSTGRES_DB: ${CONTROL_PLANE_DATABASE_NAME:-control_plane}
+      POSTGRES_USER: ${CONTROL_PLANE_DATABASE_USER:-control_plane}
+      POSTGRES_PASSWORD_FILE: /run/secrets/control_plane_database_password
+    secrets:
+      - source: control_plane_database_password
+        target: control_plane_database_password
+    volumes:
+      - control-plane-postgres:/var/lib/postgresql/data
+    networks:
+      - control-plane
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  migrate:
+    <<: *control-plane-service
+    command:
+      - alembic
+      - -c
+      - /app/alembic.ini
+      - upgrade
+      - head
+    depends_on:
+      database:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    <<: *control-plane-service
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - control-plane
+      - api-edge
+    ports:
+      - 127.0.0.1:${CONTROL_PLANE_API_PORT:-8000}:8000
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          from urllib.request import urlopen;
+          response = urlopen('http://127.0.0.1:8000/health/ready', timeout=2);
+          raise SystemExit(0 if response.status == 200 else 1)
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
+    init: true
+    restart: unless-stopped
+
+secrets:
+  control_plane_database_password:
+    file: ${CONTROL_PLANE_PASSWORD_FILE:-.secrets/postgres-password.txt}
+
+networks:
+  control-plane:
+    internal: true
+  api-edge:
+
+volumes:
+  control-plane-postgres:
