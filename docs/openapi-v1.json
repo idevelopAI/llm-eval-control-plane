@@ -257,8 +257,8 @@
             "$ref": "#/components/schemas/JobResponse"
           },
           "schema_version": {
-            "const": "comparison-submission/v1",
-            "default": "comparison-submission/v1",
+            "const": "comparison-submission/v2",
+            "default": "comparison-submission/v2",
             "title": "Schema Version",
             "type": "string"
           }
@@ -686,6 +686,115 @@
         "title": "HealthResponse",
         "type": "object"
       },
+      "JobAttemptListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/JobAttemptResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "schema_version": {
+            "const": "job-attempt-list/v1",
+            "default": "job-attempt-list/v1",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "JobAttemptListResponse",
+        "type": "object"
+      },
+      "JobAttemptResponse": {
+        "additionalProperties": false,
+        "description": "Public attempt metadata with worker and lease identities excluded.",
+        "properties": {
+          "attempt_number": {
+            "title": "Attempt Number",
+            "type": "integer"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "heartbeat_at": {
+            "format": "date-time",
+            "title": "Heartbeat At",
+            "type": "string"
+          },
+          "lease_expires_at": {
+            "format": "date-time",
+            "title": "Lease Expires At",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "job-attempt/v1",
+            "default": "job-attempt/v1",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobAttemptStatus"
+          }
+        },
+        "required": [
+          "attempt_number",
+          "status",
+          "started_at",
+          "heartbeat_at",
+          "lease_expires_at"
+        ],
+        "title": "JobAttemptResponse",
+        "type": "object"
+      },
+      "JobAttemptStatus": {
+        "description": "Durable outcome of one fenced execution attempt.",
+        "enum": [
+          "running",
+          "succeeded",
+          "retry_scheduled",
+          "failed",
+          "canceled",
+          "lease_expired"
+        ],
+        "title": "JobAttemptStatus",
+        "type": "string"
+      },
+      "JobCancellationRequest": {
+        "additionalProperties": false,
+        "description": "Strict empty command body reserved for future compatible versions.",
+        "properties": {},
+        "title": "JobCancellationRequest",
+        "type": "object"
+      },
       "JobKind": {
         "enum": [
           "run",
@@ -716,8 +825,8 @@
             "title": "Next Cursor"
           },
           "schema_version": {
-            "const": "job-page/v1",
-            "default": "job-page/v1",
+            "const": "job-page/v2",
+            "default": "job-page/v2",
             "title": "Schema Version",
             "type": "string"
           }
@@ -731,6 +840,15 @@
       "JobResponse": {
         "additionalProperties": false,
         "properties": {
+          "attempt_count": {
+            "title": "Attempt Count",
+            "type": "integer"
+          },
+          "available_at": {
+            "format": "date-time",
+            "title": "Available At",
+            "type": "string"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -754,13 +872,17 @@
           "kind": {
             "$ref": "#/components/schemas/JobKind"
           },
+          "max_attempts": {
+            "title": "Max Attempts",
+            "type": "integer"
+          },
           "resource_id": {
             "title": "Resource Id",
             "type": "string"
           },
           "schema_version": {
-            "const": "job/v1",
-            "default": "job/v1",
+            "const": "job/v2",
+            "default": "job/v2",
             "title": "Schema Version",
             "type": "string"
           },
@@ -778,6 +900,9 @@
           "kind",
           "status",
           "resource_id",
+          "attempt_count",
+          "max_attempts",
+          "available_at",
           "created_at",
           "updated_at"
         ],
@@ -788,8 +913,10 @@
         "enum": [
           "queued",
           "running",
+          "cancel_requested",
           "succeeded",
-          "failed"
+          "failed",
+          "canceled"
         ],
         "title": "JobStatus",
         "type": "string"
@@ -1413,8 +1540,8 @@
             ]
           },
           "schema_version": {
-            "const": "run-submission/v1",
-            "default": "run-submission/v1",
+            "const": "run-submission/v2",
+            "default": "run-submission/v2",
             "title": "Schema Version",
             "type": "string"
           }
@@ -1430,7 +1557,7 @@
   "info": {
     "summary": "Durable, content-addressed evaluation and release decisions",
     "title": "LLM Evaluation Control Plane",
-    "version": "1.0.0"
+    "version": "1.1.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -1488,7 +1615,7 @@
     },
     "/v1/comparisons": {
       "post": {
-        "description": "The unique idempotency winner compares stored immutable runs synchronously in API v1.",
+        "description": "The API pins stored run evidence and durably enqueues an asynchronous release comparison.",
         "operationId": "submit_release_comparison",
         "parameters": [
           {
@@ -1534,25 +1661,6 @@
               }
             }
           },
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ComparisonSubmissionResponse"
-                }
-              }
-            },
-            "description": "Synchronously completed new job",
-            "headers": {
-              "Location": {
-                "description": "Canonical path of the durable submission job",
-                "schema": {
-                  "pattern": "^/v1/jobs/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
-                  "type": "string"
-                }
-              }
-            }
-          },
           "202": {
             "content": {
               "application/json": {
@@ -1561,7 +1669,7 @@
                 }
               }
             },
-            "description": "Existing queued or running job",
+            "description": "Accepted new or nonterminal job",
             "headers": {
               "Location": {
                 "description": "Canonical path of the durable submission job",
@@ -2325,6 +2433,246 @@
         ]
       }
     },
+    "/v1/jobs/{job_id}/attempts": {
+      "get": {
+        "operationId": "list_job_attempts",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobAttemptListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Immutable conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Request body too large"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Unsupported media type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Contract validation failed"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Internal service error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Service unavailable"
+          }
+        },
+        "summary": "List Job Attempts",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/v1/jobs/{job_id}/cancellation": {
+      "post": {
+        "operationId": "request_job_cancellation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobCancellationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Immutable conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Request body too large"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Unsupported media type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Contract validation failed"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Internal service error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Service unavailable"
+          }
+        },
+        "summary": "Request Job Cancellation",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
     "/v1/release-decisions": {
       "get": {
         "operationId": "list_release_decisions",
@@ -2741,7 +3089,7 @@
         ]
       },
       "post": {
-        "description": "The unique idempotency winner executes synchronously in-process in API v1. Existing queued or running jobs are returned without re-invocation.",
+        "description": "The API validates and durably enqueues immutable worker input. Execution is performed asynchronously by leased workers.",
         "operationId": "submit_evaluation_run",
         "parameters": [
           {
@@ -2787,25 +3135,6 @@
               }
             }
           },
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RunSubmissionResponse"
-                }
-              }
-            },
-            "description": "Synchronously completed new job",
-            "headers": {
-              "Location": {
-                "description": "Canonical path of the durable submission job",
-                "schema": {
-                  "pattern": "^/v1/jobs/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
-                  "type": "string"
-                }
-              }
-            }
-          },
           "202": {
             "content": {
               "application/json": {
@@ -2814,7 +3143,7 @@
                 }
               }
             },
-            "description": "Existing queued or running job",
+            "description": "Accepted new or nonterminal job",
             "headers": {
               "Location": {
                 "description": "Canonical path of the durable submission job",
