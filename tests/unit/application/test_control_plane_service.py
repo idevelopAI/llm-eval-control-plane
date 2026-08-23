@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from itertools import count
 from typing import Never
@@ -18,6 +18,7 @@ from llm_eval_control_plane.api.execution import DeterministicEvaluationExecutor
 from llm_eval_control_plane.application.control_plane import (
     ComparisonSubmission,
     ControlPlaneService,
+    ExecutionContract,
     IdempotencyConflictError,
     InvalidCursorError,
     InvalidSubmissionError,
@@ -37,7 +38,7 @@ from llm_eval_control_plane.domain import (
     MetricGate,
 )
 from llm_eval_control_plane.domain.control_plane import JobStatus
-from llm_eval_control_plane.domain.results import RunResult
+from llm_eval_control_plane.domain.results import ExecutionMode, RunResult
 
 
 class ReadyRepository(SqlAlchemyControlPlaneRepository):
@@ -95,13 +96,72 @@ class InvalidResultExecutor(DeterministicEvaluationExecutor):
         )
         if self._mode == "run_id":
             return result.model_copy(update={"run_id": "unexpected-run"})
-        different_dataset = ArtifactRef(
-            kind=ArtifactKind.DATASET,
-            name="different",
-            revision=1,
-            digest=result.dataset.digest,
+        if self._mode == "dataset":
+            different_dataset = ArtifactRef(
+                kind=ArtifactKind.DATASET,
+                name="different",
+                revision=1,
+                digest=result.dataset.digest,
+            )
+            return result.model_copy(update={"dataset": different_dataset})
+        if self._mode == "target":
+            different_target = ArtifactRef(
+                kind=ArtifactKind.TARGET,
+                name="fake/different",
+                revision=9,
+                digest=result.target.digest,
+            )
+            return result.model_copy(update={"target": different_target})
+        if self._mode == "evaluators":
+            different_evaluator = ArtifactRef(
+                kind=ArtifactKind.EVALUATOR,
+                name="builtin/different",
+                revision=1,
+                digest=result.evaluators[0].digest,
+            )
+            return result.model_copy(update={"evaluators": (different_evaluator,)})
+        if self._mode in {"metric_evaluator", "observation_evaluator"}:
+            different_evaluator = ArtifactRef(
+                kind=ArtifactKind.EVALUATOR,
+                name="builtin/different",
+                revision=1,
+                digest=result.evaluators[0].digest,
+            )
+            if self._mode == "metric_evaluator":
+                summary = result.metrics[0].model_copy(
+                    update={"evaluator": different_evaluator}
+                )
+                return result.model_copy(update={"metrics": (summary,)})
+            observation = (
+                result.cases[0]
+                .observations[0]
+                .model_copy(update={"evaluator": different_evaluator})
+            )
+            case = result.cases[0].model_copy(update={"observations": (observation,)})
+            return result.model_copy(update={"cases": (case,)})
+        if self._mode == "mode":
+            return result.model_copy(update={"execution_mode": ExecutionMode.LIVE})
+        return result.model_copy(update={"cases": ()})
+
+
+class InvalidContractExecutor(DeterministicEvaluationExecutor):
+    def validate(
+        self,
+        *,
+        target_name: str,
+        target_revision: int,
+        adapter: str,
+        evaluator_names: tuple[str, ...],
+        scenario_overrides: Mapping[str, str],
+    ) -> ExecutionContract:
+        contract = super().validate(
+            target_name=target_name,
+            target_revision=target_revision,
+            adapter=adapter,
+            evaluator_names=evaluator_names,
+            scenario_overrides=scenario_overrides,
         )
-        return result.model_copy(update={"dataset": different_dataset})
+        return replace(contract, adapter="different-adapter")
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,7 +332,17 @@ def test_invalid_executor_evidence_is_rejected_before_persistence(
     context: ServiceContext,
 ) -> None:
     context.service.register_dataset(_dataset())
-    for index, mode in enumerate(("run_id", "dataset"), start=1):
+    modes = (
+        "run_id",
+        "dataset",
+        "target",
+        "evaluators",
+        "metric_evaluator",
+        "observation_evaluator",
+        "mode",
+        "cases",
+    )
+    for index, mode in enumerate(modes, start=1):
         service = _service(
             context.repository,
             executor=InvalidResultExecutor(mode),
@@ -285,6 +355,18 @@ def test_invalid_executor_evidence_is_rejected_before_persistence(
         assert result.job.error_code == "execution_failed"
         with raises(ResourceNotFoundError):
             service.get_run(result.job.resource_id)
+
+
+def test_executor_contract_must_match_submission_before_job_claim(
+    context: ServiceContext,
+) -> None:
+    service = _service(context.repository, executor=InvalidContractExecutor())
+    service.register_dataset(_dataset())
+
+    with raises(InvalidSubmissionError):
+        asyncio.run(service.submit_run(_run_submission("invalid-contract")))
+
+    assert service.list_jobs(limit=10).items == ()
 
 
 def test_run_completion_conflict_fails_job_atomically(

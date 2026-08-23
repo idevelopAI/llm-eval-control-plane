@@ -12,6 +12,7 @@ from llm_eval_control_plane.adapters.scorers import (
     BuiltInEvaluatorKind,
     build_evaluators,
 )
+from llm_eval_control_plane.application.control_plane import ExecutionContract
 from llm_eval_control_plane.application.runner import InProcessRunner
 from llm_eval_control_plane.domain.datasets import DatasetVersion
 from llm_eval_control_plane.domain.results import ExecutionMode, RunResult
@@ -30,15 +31,22 @@ class DeterministicEvaluationExecutor:
         adapter: str,
         evaluator_names: tuple[str, ...],
         scenario_overrides: Mapping[str, str],
-    ) -> None:
+    ) -> ExecutionContract:
         if adapter != self._ADAPTER:
             raise ValueError("unsupported target adapter")
         kinds = self._evaluator_kinds(evaluator_names)
-        build_evaluators(kinds)
-        DeterministicFakeTarget(
+        evaluators = build_evaluators(kinds)
+        target = DeterministicFakeTarget(
             name=target_name,
             revision=target_revision,
             scenario_overrides=scenario_overrides,
+        )
+        return ExecutionContract(
+            adapter=self._ADAPTER,
+            evaluator_names=evaluator_names,
+            target=target.ref,
+            evaluators=tuple(evaluator.ref for evaluator in evaluators),
+            execution_mode=ExecutionMode.OFFLINE_MOCK,
         )
 
     async def execute(
