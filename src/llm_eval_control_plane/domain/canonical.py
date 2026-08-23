@@ -98,6 +98,14 @@ def parse_json(text: str) -> JsonValue:
             line=error.lineno,
             column=error.colno,
         ) from error
+    except ValueError as error:
+        # CPython raises a plain ValueError when an integer token exceeds its
+        # conversion digit limit. Treat every parser-level ValueError as
+        # untrusted JSON instead of allowing implementation details to escape.
+        raise CanonicalJsonError(
+            "invalid_json",
+            "Could not parse JSON",
+        ) from error
     return _validated_json_value(value)
 
 
