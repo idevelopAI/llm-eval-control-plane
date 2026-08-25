@@ -2,6 +2,7 @@ import asyncio
 import base64
 from typing import cast
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pytest import raises
 from starlette.types import Message, Receive, Scope, Send
@@ -80,6 +81,37 @@ def test_authentication_precedes_json_parsing_and_health_stays_public(
     assert sentinel.decode() not in missing.text
     assert wrong_project.status_code == 403
     assert wrong_project.json()["error"]["code"] == "permission_denied"
+    assert health.status_code == 200
+
+
+def test_mount_prefix_cannot_bypass_api_or_metrics_authentication(
+    api_harness: ApiHarness,
+) -> None:
+    mounted = create_app(
+        service=api_harness.service,
+        authorizer=build_authorizer(),
+        telemetry=build_telemetry(),
+    )
+    parent = FastAPI()
+    parent.mount("/control-plane", mounted)
+
+    with TestClient(parent, raise_server_exceptions=False) as client:
+        missing_api = client.get("/control-plane/v1/jobs")
+        missing_metrics = client.get("/control-plane/metrics")
+        authorized_api = client.get(
+            "/control-plane/v1/jobs",
+            headers=AUTH_HEADERS,
+        )
+        authorized_metrics = client.get(
+            "/control-plane/metrics",
+            headers=AUTH_HEADERS,
+        )
+        health = client.get("/control-plane/health/live")
+
+    assert missing_api.status_code == missing_metrics.status_code == 401
+    assert missing_api.json()["error"]["code"] == "authentication_required"
+    assert missing_metrics.json()["error"]["code"] == "authentication_required"
+    assert authorized_api.status_code == authorized_metrics.status_code == 200
     assert health.status_code == 200
 
 
