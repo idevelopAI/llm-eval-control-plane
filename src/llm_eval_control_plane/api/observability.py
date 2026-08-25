@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import re
-from contextlib import AbstractContextManager, nullcontext
-from typing import cast
+from collections.abc import Callable
+from contextlib import AbstractContextManager
+from typing import TypeVar
 
 from opentelemetry.context import Context
 from opentelemetry.trace import (
@@ -32,6 +33,7 @@ from llm_eval_control_plane.observability import (
 )
 
 _TRACEPARENT = re.compile(r"^00-([0-9a-f]{32})-([0-9a-f]{16})-(00|01)$")
+_Value = TypeVar("_Value")
 
 
 class ApiObservabilityMiddleware:
@@ -48,10 +50,10 @@ class ApiObservabilityMiddleware:
             await self._app(scope, receive, send)
             return
 
-        started_ns = self._telemetry.now_ns()
+        started_ns = _telemetry_value(lambda: self._telemetry.now_ns(), 0)
         method = safe_http_method(scope.get("method"))
         response_status: int | None = None
-        self._telemetry.request_started()
+        _telemetry_action(lambda: self._telemetry.request_started())
 
         async def observe_send(message: Message) -> None:
             nonlocal response_status
@@ -59,9 +61,10 @@ class ApiObservabilityMiddleware:
                 response_status = safe_http_status(message.get("status"))
             await send(message)
 
-        parent = trace_context_from_scope(scope)
-        span_context: AbstractContextManager[Span]
+        span: Span = NonRecordingSpan(INVALID_SPAN.get_span_context())
+        span_context: AbstractContextManager[Span] | None = None
         try:
+            parent = trace_context_from_scope(scope)
             span_context = self._telemetry.tracer.start_as_current_span(
                 "HTTP request",
                 context=parent,
@@ -69,49 +72,66 @@ class ApiObservabilityMiddleware:
                 record_exception=False,
                 set_status_on_exception=False,
             )
+            span = span_context.__enter__()
         except Exception:
-            span_context = cast(
-                AbstractContextManager[Span],
-                nullcontext(NonRecordingSpan(INVALID_SPAN.get_span_context())),
-            )
+            if span_context is not None:
+                failed_context = span_context
+                _telemetry_action(lambda: failed_context.__exit__(None, None, None))
+            span_context = None
 
-        with span_context as span:
-            try:
-                await self._app(scope, receive, observe_send)
-            except BaseException:
-                response_status = 500
-                _set_error_code(scope, "internal_error")
-                raise
-            finally:
-                ended_ns = self._telemetry.now_ns()
-                duration_ns = max(0, ended_ns - started_ns)
-                route = route_template_from_scope(scope)
-                status_code = safe_http_status(response_status)
-                error_code = error_code_from_scope(scope, status_code=status_code)
-                request_id = request_id_from_scope(scope)
-                span.update_name(f"{method} {route}")
-                span.set_attribute("http.request.method", method)
-                span.set_attribute("http.route", route)
-                span.set_attribute("http.response.status_code", status_code)
-                span.set_attribute("control_plane.request_id", request_id)
-                if error_code is not None:
-                    span.set_attribute("control_plane.error_code", error_code)
-                if status_code >= 500:
-                    span.set_status(Status(StatusCode.ERROR))
-                context = span.get_span_context()
-                trace_id = f"{context.trace_id:032x}"
-                span_id = f"{context.span_id:016x}"
-                self._telemetry.request_finished(
+        try:
+            await self._app(scope, receive, observe_send)
+        except BaseException:
+            response_status = 500
+            _set_error_code(scope, "internal_error")
+            raise
+        finally:
+            ended_ns = _telemetry_value(lambda: self._telemetry.now_ns(), started_ns)
+            duration_ns = max(0, ended_ns - started_ns)
+            route = route_template_from_scope(scope)
+            status_code = safe_http_status(response_status)
+            error_code = error_code_from_scope(scope, status_code=status_code)
+            request_id = request_id_from_scope(scope)
+            _telemetry_action(lambda: span.update_name(f"{method} {route}"))
+            _telemetry_action(lambda: span.set_attribute("http.request.method", method))
+            _telemetry_action(lambda: span.set_attribute("http.route", route))
+            _telemetry_action(
+                lambda: span.set_attribute("http.response.status_code", status_code)
+            )
+            _telemetry_action(
+                lambda: span.set_attribute("control_plane.request_id", request_id)
+            )
+            if error_code is not None:
+                _telemetry_action(
+                    lambda: span.set_attribute(
+                        "control_plane.error_code",
+                        error_code,
+                    )
+                )
+            if status_code >= 500:
+                _telemetry_action(lambda: span.set_status(Status(StatusCode.ERROR)))
+            context = _telemetry_value(
+                lambda: span.get_span_context(),
+                INVALID_SPAN.get_span_context(),
+            )
+            trace_id = f"{context.trace_id:032x}"
+            span_id = f"{context.span_id:016x}"
+            _telemetry_action(
+                lambda: self._telemetry.request_finished(
                     method=method,
                     route=route,
                     status_code=status_code,
                     error_code=error_code,
                     duration_ns=duration_ns,
                 )
-                auth_outcome = _auth_outcome_from_scope(scope)
-                if auth_outcome is not None:
-                    self._telemetry.record_auth_decision(auth_outcome)
-                self._telemetry.emit_http_event(
+            )
+            auth_outcome = _auth_outcome_from_scope(scope)
+            if auth_outcome is not None:
+                _telemetry_action(
+                    lambda: self._telemetry.record_auth_decision(auth_outcome)
+                )
+            _telemetry_action(
+                lambda: self._telemetry.emit_http_event(
                     request_id=request_id,
                     trace_id=trace_id,
                     span_id=span_id,
@@ -121,6 +141,23 @@ class ApiObservabilityMiddleware:
                     error_code=error_code,
                     duration_ns=duration_ns,
                 )
+            )
+            if span_context is not None:
+                _telemetry_action(lambda: span_context.__exit__(None, None, None))
+
+
+def _telemetry_value(action: Callable[[], _Value], fallback: _Value) -> _Value:
+    try:
+        return action()
+    except Exception:
+        return fallback
+
+
+def _telemetry_action(action: Callable[[], object]) -> None:
+    try:
+        action()
+    except Exception:
+        return
 
 
 def trace_context_from_scope(scope: Scope) -> Context | None:

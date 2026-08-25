@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from typing import Never, cast
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -108,6 +109,7 @@ def test_request_telemetry_uses_only_route_template_and_allowlisted_fields() -> 
     client = TestClient(
         _app(telemetry), headers=AUTH_HEADERS, raise_server_exceptions=False
     )
+    caller_value = "cpk_" + ("C" * 43)
     sentinels = (
         "private-path-sentinel",
         "private-query-sentinel",
@@ -115,6 +117,7 @@ def test_request_telemetry_uses_only_route_template_and_allowlisted_fields() -> 
         "private-auth-sentinel",
         "private-baggage-sentinel",
         "private-tracestate-sentinel",
+        caller_value,
     )
 
     response = client.post(
@@ -125,11 +128,13 @@ def test_request_telemetry_uses_only_route_template_and_allowlisted_fields() -> 
             "X-Credential-Probe": "private-auth-sentinel",
             "Traceparent": TRACEPARENT,
             "Tracestate": "vendor=private-tracestate-sentinel",
-            "X-Request-ID": "request-telemetry",
+            "X-Request-ID": caller_value,
         },
     )
 
     assert response.status_code == 200
+    request_id = response.headers["x-request-id"]
+    assert request_id.startswith("req_") and len(request_id) == 36
     assert len(lines) == 1
     event = json.loads(lines[0])
     assert event == {
@@ -139,7 +144,7 @@ def test_request_telemetry_uses_only_route_template_and_allowlisted_fields() -> 
         "http_route": "/v1/jobs/{job_id}/cancellation",
         "http_status": 200,
         "outcome": "success",
-        "request_id": "request-telemetry",
+        "request_id": request_id,
         "schema_version": "control-plane-log/v1",
         "service": "api",
         "severity": "INFO",
@@ -158,7 +163,7 @@ def test_request_telemetry_uses_only_route_template_and_allowlisted_fields() -> 
     assert span.parent is not None
     assert f"{span.parent.span_id:016x}" == PARENT_SPAN_ID
     assert dict(span.attributes or {}) == {
-        "control_plane.request_id": "request-telemetry",
+        "control_plane.request_id": request_id,
         "http.request.method": "POST",
         "http.response.status_code": 200,
         "http.route": "/v1/jobs/{job_id}/cancellation",
@@ -201,6 +206,8 @@ def test_errors_are_bounded_and_never_record_exception_details() -> None:
 
     assert response.status_code == 500
     event = json.loads(lines[0])
+    request_id = event["request_id"]
+    assert isinstance(request_id, str) and request_id.startswith("req_")
     assert event["http_route"] == "/v1/jobs/{job_id}"
     assert event["error_code"] == "internal_error"
     assert event["severity"] == "ERROR"
@@ -208,7 +215,7 @@ def test_errors_are_bounded_and_never_record_exception_details() -> None:
     span = _finished(exporter)[0]
     assert dict(span.attributes or {}) == {
         "control_plane.error_code": "internal_error",
-        "control_plane.request_id": "error-request",
+        "control_plane.request_id": request_id,
         "http.request.method": "GET",
         "http.response.status_code": 500,
         "http.route": "/v1/jobs/{job_id}",
@@ -228,6 +235,7 @@ def test_errors_are_bounded_and_never_record_exception_details() -> None:
         "user:secret",
         "RuntimeError",
         "example.test",
+        "error-request",
     ):
         assert sentinel not in captured
     provider.shutdown()
@@ -375,6 +383,24 @@ def test_duplicate_traceparent_is_ignored_and_log_sink_failures_are_isolated() -
     assert f"{span.context.trace_id:032x}" != TRACE_ID
     assert span.parent is None
     provider.shutdown()
+
+
+def test_api_telemetry_failures_never_interrupt_request_processing() -> None:
+    class BrokenTelemetry:
+        def __getattribute__(self, _name: str) -> Never:
+            raise RuntimeError("private-telemetry-failure-sentinel")
+
+    client = TestClient(
+        _app(cast(Observability, BrokenTelemetry())),
+        headers=AUTH_HEADERS,
+        raise_server_exceptions=False,
+    )
+
+    response = client.get("/v1/jobs/safe-job")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert "private-telemetry-failure-sentinel" not in response.text
 
 
 def test_operational_metrics_refresh_from_one_fixed_aggregate_snapshot() -> None:

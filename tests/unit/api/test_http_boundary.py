@@ -171,9 +171,11 @@ def test_deeply_nested_json_is_a_safe_client_error_with_request_id(
     )
 
     assert response.status_code == 400
-    assert response.headers["x-request-id"] == "nested-request"
+    request_id = response.headers["x-request-id"]
+    assert request_id.startswith("req_")
     assert response.json()["error"]["code"] == "invalid_json"
-    assert response.json()["error"]["request_id"] == "nested-request"
+    assert response.json()["error"]["request_id"] == request_id
+    assert "nested-request" not in response.text
 
 
 def test_oversized_json_integer_is_a_safe_client_error_with_request_id(
@@ -189,14 +191,16 @@ def test_oversized_json_integer_is_a_safe_client_error_with_request_id(
     )
 
     assert response.status_code == 400
-    assert response.headers["x-request-id"] == "integer-limit-request"
+    request_id = response.headers["x-request-id"]
+    assert request_id.startswith("req_")
     assert response.json()["error"] == {
         "code": "invalid_json",
         "details": [],
         "message": "Request body is not valid strict JSON",
-        "request_id": "integer-limit-request",
+        "request_id": request_id,
     }
     assert "9999999999999999" not in response.text
+    assert "integer-limit-request" not in response.text
 
 
 def test_media_type_and_content_encoding_are_enforced(
@@ -322,20 +326,25 @@ def test_body_limit_and_collection_bounds_are_stable(
     assert duplicate.status_code == overflow.status_code == 422
 
 
-def test_request_id_is_sanitized_or_preserved(api_harness: ApiHarness) -> None:
-    preserved = api_harness.client.get(
+def test_request_id_is_generated_without_retaining_caller_values(
+    api_harness: ApiHarness,
+) -> None:
+    caller_value = "cpk_" + ("A" * 43)
+    credential_shaped = api_harness.client.get(
         "/missing",
-        headers={"X-Request-ID": "request-123"},
+        headers={"X-Request-ID": caller_value},
     )
-    replaced = api_harness.client.get(
+    malformed = api_harness.client.get(
         "/missing",
         headers={"X-Request-ID": "private sentinel\nvalue"},
     )
 
-    assert preserved.headers["x-request-id"] == "request-123"
-    assert preserved.json()["error"]["request_id"] == "request-123"
-    assert replaced.headers["x-request-id"].startswith("req_")
-    assert "private sentinel" not in replaced.text
+    for response in (credential_shaped, malformed):
+        request_id = response.headers["x-request-id"]
+        assert request_id.startswith("req_") and len(request_id) == 36
+        assert response.json()["error"]["request_id"] == request_id
+    assert caller_value not in credential_shaped.text
+    assert "private sentinel" not in malformed.text
 
 
 def test_method_not_allowed_preserves_the_safe_allow_header(
@@ -484,7 +493,10 @@ def test_boundary_handles_non_http_scopes_and_replays_one_bounded_body() -> None
     assert cast(dict[str, object], captured[2])["body"] == b"{}"
     assert cast(dict[str, object], captured[3])["type"] == "http.disconnect"
     response_headers = cast(list[tuple[bytes, bytes]], sent[0]["headers"])
-    assert response_headers == [(b"x-request-id", b"boundary-request")]
+    assert len(response_headers) == 1
+    assert response_headers[0][0] == b"x-request-id"
+    assert response_headers[0][1].startswith(b"req_")
+    assert response_headers[0][1] != b"boundary-request"
 
 
 def test_boundary_helpers_fail_closed_on_invalid_protocol_values() -> None:
