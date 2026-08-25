@@ -28,13 +28,17 @@ def create_runtime_app() -> FastAPI:
     authorizer = ControlPlaneAuthorizer.from_file(
         authentication_file_from_environment()
     )
-    telemetry = Observability(service="api", log_sink=_stdout_log_sink)
     engine = create_engine(
         database_url_from_environment(),
         pool_pre_ping=True,
         hide_parameters=True,
     )
     repository = SqlAlchemyControlPlaneRepository(engine)
+    telemetry = Observability(
+        service="api",
+        log_sink=_stdout_log_sink,
+        operational_snapshot_provider=repository.operational_snapshot,
+    )
     worker_settings = worker_settings_from_environment()
     service = ControlPlaneService(
         repository=repository,
