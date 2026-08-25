@@ -176,7 +176,8 @@ class DataBridgeSqlEvaluator:
                     "DataBridge refusal state must match its SQL expectation"
                 )
             if expectation.behavior is SqlBehavior.QUERY:
-                assert expectation.reference_sql is not None
+                # SqlExpectation validates query evidence as an atomic set.
+                assert expectation.reference_sql is not None  # noqa: S101
                 if not self._policy.evaluate(expectation.reference_sql).allowed:
                     raise ValueError(
                         "DataBridge reference SQL must pass the read-only policy"
@@ -244,7 +245,8 @@ class DataBridgeSqlEvaluator:
     ) -> tuple[MetricObservation, MetricObservation]:
         if expectation.behavior is SqlBehavior.CLARIFICATION:
             accepted = expectation.accepted_clarification_codes
-            assert accepted is not None
+            # SqlExpectation requires codes for clarification behavior.
+            assert accepted is not None  # noqa: S101
             clarification_match = (
                 output is not None
                 and output.kind is SqlBehavior.CLARIFICATION
@@ -295,7 +297,8 @@ class DataBridgeSqlEvaluator:
         decisions: tuple[SqlPolicyResult, ...] = ()
         if output is not None and output.kind is SqlBehavior.QUERY:
             candidate_query = True
-            assert output.sql_executions is not None
+            # SqlTargetOutput requires executions for query behavior.
+            assert output.sql_executions is not None  # noqa: S101
             decisions = tuple(
                 self._policy.evaluate(sql) for sql in output.sql_executions
             )
@@ -357,7 +360,8 @@ class DataBridgeSqlEvaluator:
         elif not candidate_query:
             remaining = self._candidate_failures("candidate_did_not_query")
         else:
-            assert output is not None
+            # candidate_query can only be true for a validated query output.
+            assert output is not None  # noqa: S101
             remaining = self._replay_observations(
                 expectation,
                 output,
@@ -390,7 +394,8 @@ class DataBridgeSqlEvaluator:
         if not policy_allowed:
             return self._candidate_failures("policy_rejected")
 
-        assert output.sql_executions is not None
+        # SqlTargetOutput requires executions for query behavior.
+        assert output.sql_executions is not None  # noqa: S101
         candidate: SqlReplayResult | None = None
         try:
             for sql in output.sql_executions:
@@ -399,10 +404,11 @@ class DataBridgeSqlEvaluator:
             return self._candidate_failures("candidate_execution_failed")
         except Exception:
             return self._candidate_failures("candidate_execution_failed")
-        assert candidate is not None
-        assert expectation.expected_columns is not None
-        assert expectation.expected_rows is not None
-        assert expectation.result_order is not None
+        # Query models validate these fields before replay is entered.
+        assert candidate is not None  # noqa: S101
+        assert expectation.expected_columns is not None  # noqa: S101
+        assert expectation.expected_rows is not None  # noqa: S101
+        assert expectation.result_order is not None  # noqa: S101
         columns_match = candidate.columns == expectation.expected_columns
         rows_match = _rows_equal(
             candidate.rows,
@@ -435,10 +441,11 @@ class DataBridgeSqlEvaluator:
     def _verified_reference(
         self, expectation: SqlExpectation
     ) -> SqlReplayResult | None:
-        assert expectation.reference_sql is not None
-        assert expectation.expected_columns is not None
-        assert expectation.expected_rows is not None
-        assert expectation.result_order is not None
+        # SqlExpectation validates query evidence as an atomic set.
+        assert expectation.reference_sql is not None  # noqa: S101
+        assert expectation.expected_columns is not None  # noqa: S101
+        assert expectation.expected_rows is not None  # noqa: S101
+        assert expectation.result_order is not None  # noqa: S101
         if not self._policy.evaluate(expectation.reference_sql).allowed:
             return None
         try:

@@ -81,7 +81,8 @@ class ApiBoundaryMiddleware:
             if failure is not None:
                 await failure(scope, receive, send_with_request_id)
                 return
-            assert buffered is not None
+            # A successful body validation always returns the buffered payload.
+            assert buffered is not None  # noqa: S101
             delivered = False
 
             async def replay() -> Message:

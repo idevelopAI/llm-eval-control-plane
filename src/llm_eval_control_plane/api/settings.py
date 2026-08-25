@@ -17,7 +17,7 @@ _HOST = "CONTROL_PLANE_DATABASE_HOST"
 _PORT = "CONTROL_PLANE_DATABASE_PORT"
 _NAME = "CONTROL_PLANE_DATABASE_NAME"
 _USER = "CONTROL_PLANE_DATABASE_USER"
-_PASSWORD_FILE = "CONTROL_PLANE_DATABASE_PASSWORD_FILE"
+_PASSWORD_FILE = "CONTROL_PLANE_DATABASE_PASSWORD_FILE"  # noqa: S105
 _COMPONENT_KEYS = (_HOST, _PORT, _NAME, _USER, _PASSWORD_FILE)
 _MAX_SECRET_BYTES = 4 * 1024
 _MAX_URL_CHARS = 4 * 1024
@@ -50,7 +50,8 @@ class WorkerSettings:
     reaper_batch: int = 50
     backoff_base_seconds: int = 1
     backoff_max_seconds: int = 60
-    health_file: Path = Path("/tmp/control-plane-worker.ready")
+    # A content-free readiness marker in the container's private noexec tmpfs.
+    health_file: Path = Path("/tmp/control-plane-worker.ready")  # noqa: S108
 
     def __post_init__(self) -> None:
         bounds = (
@@ -185,7 +186,8 @@ def _bounded_worker_decimal(
 
 def _worker_health_file(raw: object | None) -> Path:
     if raw is None:
-        return Path("/tmp/control-plane-worker.ready")
+        # A content-free readiness marker in the container's private noexec tmpfs.
+        return Path("/tmp/control-plane-worker.ready")  # noqa: S108
     if not isinstance(raw, str):
         raise RuntimeConfigurationError("Worker configuration is invalid")
     try:

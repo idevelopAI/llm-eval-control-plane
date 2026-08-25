@@ -257,7 +257,8 @@ class PsycopgPostgresExecutor:
         """Hash bounded rows and column metadata without returning fixture data."""
         tables: list[dict[str, object]] = []
         for table_name in ("departments", "employees", "projects"):
-            result = self.execute(f"SELECT * FROM public.{table_name}")
+            # table_name is selected exclusively from the fixed tuple above.
+            result = self.execute(f"SELECT * FROM public.{table_name}")  # noqa: S608
             rows = sorted(result.rows, key=lambda row: canonical_json_bytes(list(row)))
             tables.append(
                 {

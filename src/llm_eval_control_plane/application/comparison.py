@@ -165,7 +165,8 @@ def compare_runs(
                 )
             )
 
-    assert spec.baseline is not None
+    # Input validation above requires a stored-evidence baseline.
+    assert spec.baseline is not None  # noqa: S101
     return ReleaseDecision.create(
         spec_name=spec.name,
         dataset=dataset.artifact_ref,
@@ -285,7 +286,8 @@ def _aggregate(
     for case in selected:
         value = _case_value(results[case.case_id], metric)
         if value.status is ComparisonValueStatus.SCORED:
-            assert value.value is not None
+            # Scored comparison values always carry a finite value.
+            assert value.value is not None  # noqa: S101
             values.append(value.value)
         elif value.status is ComparisonValueStatus.SKIPPED:
             skipped += 1
@@ -407,8 +409,9 @@ def _compare_case(
             candidate=candidate,
             change=CaseChange.INCOMPARABLE,
         )
-    assert baseline.value is not None
-    assert candidate.value is not None
+    # Comparable values are both validated scored observations.
+    assert baseline.value is not None  # noqa: S101
+    assert candidate.value is not None  # noqa: S101
     baseline_passed = _passes(
         baseline.value,
         direction=direction,

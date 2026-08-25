@@ -324,7 +324,7 @@ def _record_legacy_attempts() -> None:
 
     op.execute(
         sa.text(
-            "INSERT INTO control_plane_job_attempts "
+            "INSERT INTO control_plane_job_attempts "  # noqa: S608 -- fixed migration SQL
             "(job_id, attempt_number, status, worker_id, lease_token, error_code, "
             "started_at, heartbeat_at, lease_expires_at, finished_at) "
             "SELECT job_id, 1, status, 'phase5-migration', "
