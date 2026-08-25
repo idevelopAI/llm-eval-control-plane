@@ -166,8 +166,10 @@ digests, database URLs, or exception text.
 | `POST` | `/v1/comparisons` | Submit a baseline/candidate comparison |
 | `GET` | `/v1/release-decisions` | Page release decisions |
 | `GET` | `/v1/release-decisions/{decision_id}` | Read one redacted decision |
-| `GET` | `/openapi.json`, `/docs` | Read the generated contract or local Swagger UI |
+| `GET` | `/openapi.json` | Read the generated API contract |
 
+The runtime does not serve an interactive documentation UI, so a
+credential-handling browser page never loads third-party documentation assets.
 The generated API contract is committed at
 [`docs/openapi-v1.json`](docs/openapi-v1.json). Regenerate or verify it with:
 
