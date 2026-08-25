@@ -30,6 +30,23 @@ def test_direct_postgres_url_is_validated_and_masks_its_password() -> None:
     assert sentinel not in str(url)
 
 
+def test_direct_database_url_rejects_query_values_without_retaining_them() -> None:
+    sentinel = "private-query-secret"
+
+    with raises(RuntimeConfigurationError) as captured:
+        database_url_from_environment(
+            {
+                "CONTROL_PLANE_DATABASE_URL": (
+                    "postgresql+psycopg://control_plane@database/control_plane"
+                    f"?sslpassword={sentinel}"
+                )
+            }
+        )
+
+    assert "options are unsupported" in str(captured.value)
+    assert sentinel not in str(captured.value)
+
+
 def test_component_configuration_reads_a_bounded_absolute_secret_file(
     tmp_path: Path,
 ) -> None:

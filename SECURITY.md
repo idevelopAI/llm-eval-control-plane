@@ -124,8 +124,9 @@ host traversal even though the directly bind-mounted file uses mode `0444`:
 Compose mounts that file read-only under `/run/secrets/` for PostgreSQL, the
 migration process, the API, and workers. Runtime configuration reads only a bounded
 regular file without following symlinks. SQLAlchemy engines hide parameter
-values. Migration and application errors must never render a database URL or
-password.
+values. Direct database URLs reject all query options because drivers may render
+query values without password masking. Migration and application errors must
+never render a database URL or password.
 
 Use a dedicated local control-plane database and role. API and worker runtimes do
 not create or upgrade tables: the one-shot Alembic service applies migrations
