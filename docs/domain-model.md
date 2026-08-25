@@ -28,6 +28,10 @@
 | `JobStatus` | `queued`, `running`, `cancel_requested`, `succeeded`, `failed`, or `canceled` lifecycle state | Implemented |
 | `JobPayload` | Canonical resolved run or comparison input pinned at submission | Implemented |
 | `JobAttemptRecord` | Redacted timing, outcome, and safe failure metadata for one leased attempt | Implemented |
+| Project boundary | One configured project owned by one deployment and database | Implemented |
+| Principal | Bounded identity, digest-only bearer reference, and ordered scope set | Implemented |
+| `ControlPlaneScope` | Read, write, cancellation, or observability permission | Implemented |
+| `TraceParent` | Private strict W3C submission-to-worker correlation metadata | Implemented |
 | `RunRecord` | Append-only run result plus its durable creation time | Implemented |
 | `ReleaseDecisionRecord` | Append-only release decision plus stable ID and creation time | Implemented |
 | `CursorPage` | Stable bounded page plus opaque continuation cursor | Implemented |
@@ -140,18 +144,21 @@ behavior revisions inside a run.
 ## Durable submission invariants
 
 - A job has one stable ID, kind, status, opaque idempotency key, semantic request
-  digest, resource ID, bounded attempt count, maximum attempts, availability
-  time, creation time, and update time. Public job models exclude the key and
-  semantic digest. All timestamps normalize to UTC and cannot move backwards.
+  digest, resource ID, optional private `TraceParent`, bounded attempt count,
+  maximum attempts, availability time, creation time, and update time. Public
+  job models exclude the key, semantic digest, and trace metadata. All timestamps
+  normalize to UTC and cannot move backwards.
 - The idempotency namespace is `(job kind, idempotency key)`. A run and a
   comparison may use the same opaque key without identifying the same job.
 - The semantic digest covers the validated effective request with all defaults
   materialized. It does not cover JSON member order, raw transport bytes, or the
-  separately stored idempotency key.
+  separately stored idempotency key. It also excludes trace context because
+  correlation does not change requested work.
 - An atomic submission insert has one winner. It stores the job and canonical
   resolved payload in one transaction. An identical request returns the original
   job and payload without another enqueue. Reusing the same kind and key with a
-  different semantic digest is a conflict.
+  different semantic digest is a conflict. The insert winner's validated trace
+  context remains authoritative on an exact replay.
 - Dataset lookup, adapter and evaluator validation, comparison alignment, and
   derived-work bounds are checked before a new job is claimed whenever they can
   be resolved without execution.
@@ -185,6 +192,9 @@ behavior revisions inside a run.
   heartbeat, and publish through fenced transactions. This guarantees at most
   one durable evidence resource for a job, not exactly-once provider invocation
   or exactly-once external side effects.
+- A worker treats the durable `TraceParent` as an optional W3C Link, not as a
+  parent span and never as authorization. Invalid legacy or stored context is
+  ignored rather than copied into telemetry.
 
 ## Persistence invariants
 
@@ -226,6 +236,45 @@ behavior revisions inside a run.
 - Database connection configuration and credentials are runtime inputs, never
   domain fields, artifact identities, semantic request input, or error evidence.
 
+## Project authorization and telemetry invariants
+
+- `control-plane-auth/v1` contains exactly one project and one to 512 ordered,
+  uniquely identified principals. A principal contains only a bounded identity,
+  a unique SHA-256 bearer digest, and a nonempty, unique, lexicographically
+  ordered scope tuple. The raw credential is not a model field.
+- A bearer credential has the exact `cpk_` prefix followed by 43 URL-safe
+  characters. Runtime matching hashes the presented value and compares digests
+  in constant time. Authentication failures do not disclose whether a principal,
+  digest, or project exists.
+- Every protected request contains exactly one bounded `X-Project-ID` equal to
+  the configured project. One deployment and database own one project. The
+  header is a fail-closed routing assertion, not a selector over shared tenant
+  rows.
+- `control-plane:read` permits protected reads, `control-plane:write` permits
+  ordinary mutations, `control-plane:cancel` permits cancellation, and
+  `observability:read` permits metrics retrieval. Missing or malformed
+  authentication fails with `401`; a wrong project or missing scope fails with
+  `403`.
+- API telemetry uses only bounded methods, route templates, status classes,
+  stable public error codes, authorization outcomes, durations, generated
+  request IDs, and valid trace identifiers. Other caller-controlled values collapse to
+  fixed fallback categories and never create metric-label cardinality.
+- Worker telemetry uses only bounded poll outcomes, job kinds, durable results,
+  recovery counts, readiness, lifecycle state, duration, and trace identifiers.
+  Worker IDs, lease tokens, job IDs, and resolved payloads are not telemetry
+  fields.
+- Prompts, expectations, target outputs, request or response bodies, SQL, rows,
+  authorization material, project and principal identity, idempotency keys,
+  semantic request digests, raw cursors, database configuration, and exception
+  text are excluded from logs, metrics, traces, events, and links.
+- The API accepts exactly one lowercase W3C `traceparent` version `00` value.
+  Invalid or duplicate values are ignored and `tracestate` is not propagated.
+  HTTP spans use route templates; linked worker, run, target, and evaluator spans
+  carry no evaluation content or exception events.
+- Telemetry providers and registries are dependency-injected and isolated.
+  Telemetry export, clock, sink, or instrumentation failure must not change API,
+  worker, idempotency, recovery, or evidence behavior.
+
 ## API resource invariants
 
 - Top-level public contracts carry a literal schema version. Breaking transport
@@ -251,8 +300,9 @@ behavior revisions inside a run.
   timestamps. Attempt summaries expose only attempt number, status, safe failure,
   and timing; neither surface exposes the resolved payload, worker identity, or
   lease token.
-- Request and application failures use a versioned safe envelope and bounded
-  request ID. Validation details include only sanitized locations and stable
+- Request and application failures use a versioned safe envelope and generated
+  request ID; caller request IDs are ignored. Validation details include only
+  sanitized locations and stable
   error types, never rejected values, validator context, URLs, or exception
   strings. Readiness uses the separate `health/v1` status contract.
 
