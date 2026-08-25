@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import secrets
 
 from starlette.responses import JSONResponse
@@ -15,7 +14,6 @@ from llm_eval_control_plane.api.security import (
 )
 from llm_eval_control_plane.domain.canonical import CanonicalJsonError, parse_json
 
-_REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _BODY_METHODS = frozenset({"PATCH", "POST", "PUT"})
 
 
@@ -250,15 +248,8 @@ class ApiBoundaryMiddleware:
         return all(part in {"", "charset=utf-8"} for part in parts[1:])
 
     @staticmethod
-    def _request_id(headers: list[tuple[bytes, bytes]]) -> str:
-        values = ApiBoundaryMiddleware._header_values(headers, b"x-request-id")
-        if len(values) == 1:
-            try:
-                candidate = values[0].decode("ascii")
-            except UnicodeDecodeError:
-                candidate = ""
-            if _REQUEST_ID.fullmatch(candidate):
-                return candidate
+    def _request_id(_headers: list[tuple[bytes, bytes]]) -> str:
+        """Generate correlation metadata without retaining caller-controlled IDs."""
         return f"req_{secrets.token_hex(16)}"
 
     @staticmethod
