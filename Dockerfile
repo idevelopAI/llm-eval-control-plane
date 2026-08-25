@@ -2,7 +2,7 @@
 
 FROM ghcr.io/astral-sh/uv:0.12.5@sha256:e85be844203885286c60ffad8a858d48afb6c5a5c237ca0e67f12e74b8f174b1 AS uv
 
-FROM python:3.13-slim-bookworm@sha256:00faa2debb87529f9f0764e9491d8ba400a3678976616c3bd7cb193745ac20d1 AS builder
+FROM python:3.13-alpine3.23@sha256:7ea3f82de8ea6d4fb7e5d2bbe3fe3c9d931700b7a529f1fe5769e42abe514ca1 AS builder
 
 COPY --from=uv /uv /usr/local/bin/uv
 
@@ -17,20 +17,22 @@ COPY src ./src
 
 RUN uv sync --locked --no-dev --no-editable --no-cache
 
-FROM python:3.13-slim-bookworm@sha256:00faa2debb87529f9f0764e9491d8ba400a3678976616c3bd7cb193745ac20d1 AS runtime
+FROM python:3.13-alpine3.23@sha256:7ea3f82de8ea6d4fb7e5d2bbe3fe3c9d931700b7a529f1fe5769e42abe514ca1 AS runtime
 
 ENV PATH="/opt/venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-RUN groupadd --system --gid 10001 controlplane \
-    && useradd \
+RUN addgroup --system --gid 10001 controlplane \
+    && adduser \
         --system \
-        --uid 10001 \
-        --gid controlplane \
+        --disabled-password \
         --no-create-home \
-        --shell /usr/sbin/nologin \
-        controlplane
+        --uid 10001 \
+        --ingroup controlplane \
+        --shell /sbin/nologin \
+        controlplane \
+    && python -m pip uninstall --yes pip
 
 WORKDIR /app
 

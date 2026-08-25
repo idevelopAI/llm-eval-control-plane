@@ -110,9 +110,10 @@ def test_runtime_image_ends_as_a_fixed_non_root_user() -> None:
     users = re.findall(r"(?m)^USER\s+([^\s]+)\s*$", runtime_stage)
 
     assert users == ["10001:10001"]
-    assert "useradd" in runtime_stage
+    assert "adduser" in runtime_stage
     assert "--no-create-home" in runtime_stage
-    assert "--shell /usr/sbin/nologin" in runtime_stage
+    assert "--shell /sbin/nologin" in runtime_stage
+    assert "python -m pip uninstall --yes pip" in runtime_stage
 
 
 def test_build_context_excludes_secrets_evidence_and_vcs_metadata() -> None:
