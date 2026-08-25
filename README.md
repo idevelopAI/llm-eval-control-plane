@@ -5,17 +5,18 @@
 [![DataBridge Gate](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/databridge-gate.yml/badge.svg)](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/databridge-gate.yml)
 [![Control Plane API Gate](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/control-plane-api-gate.yml/badge.svg)](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/control-plane-api-gate.yml)
 [![Worker Recovery Gate](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/worker-recovery-gate.yml/badge.svg)](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/worker-recovery-gate.yml)
+[![Security Gate](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/security-gate.yml/badge.svg)](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/security-gate.yml)
 
 A deterministic-first control plane for evaluating AI application behavior,
 preserving case-level evidence, and making quality, safety, latency, and usage
 changes measurable before release.
 
-> **Status:** Phase 5 leased workers and crash recovery. The versioned FastAPI
-> service durably enqueues resolved evaluation and comparison payloads;
-> PostgreSQL-backed workers claim them with expiring leases, heartbeat while
-> running, retry transient failures with bounded backoff, recover expired work,
-> and publish immutable evidence through a fencing token. The DataBridge
-> PostgreSQL evaluation remains available through the CLI.
+> **Status:** Phase 6 project-bound authorization, privacy-safe observability,
+> and supply-chain gates. The versioned FastAPI service authenticates a bounded
+> bearer credential, requires the deployment's exact project assertion, emits
+> allowlisted logs, metrics, and traces, and durably links accepted request trace
+> context to leased worker execution. The fenced PostgreSQL recovery protocol
+> and the DataBridge PostgreSQL evaluation remain available.
 
 ## Durable HTTP control plane
 
@@ -27,8 +28,9 @@ not be presented as live-model measurements.
 
 ### Local Compose quickstart
 
-The Compose stack mounts the database password from a gitignored secret file.
-Keep the value out of `.env`, command arguments, and shell history:
+The Compose stack mounts the database password and authentication configuration
+from gitignored files. Keep credential values out of `.env`, command arguments,
+shell history, and Git:
 
 ```bash
 (
@@ -42,9 +44,43 @@ Keep the value out of `.env`, command arguments, and shell history:
   printf '\n'
   printf '%s\n' "$CONTROL_PLANE_LOCAL_PASSWORD" \
     > .secrets/postgres-password.txt
-  chmod 0444 .secrets/postgres-password.txt
   unset CONTROL_PLANE_LOCAL_PASSWORD
 )
+```
+
+Create a bearer credential in a secret manager using the exact `cpk_` prefix
+followed by 43 URL-safe characters. Keep that raw value outside the repository.
+The authentication file stores only its SHA-256 digest and represents exactly
+one project. This schematic is deliberately invalid and must not be used as a
+credential or copied unchanged:
+
+```json
+{
+  "schema_version": "control-plane-auth/v1",
+  "project_id": "<single-deployment-project-id>",
+  "principals": [
+    {
+      "principal_id": "<operator-id>",
+      "token_digest": "sha256:<64-lowercase-hex-characters>",
+      "scopes": [
+        "control-plane:cancel",
+        "control-plane:read",
+        "control-plane:write",
+        "observability:read"
+      ]
+    }
+  ]
+}
+```
+
+Write the resolved document to `.secrets/control-plane-auth.json` through a
+protected local process, then make the bind-mounted files readable by the fixed
+non-root container UID:
+
+```bash
+chmod 0444 \
+  .secrets/control-plane-auth.json \
+  .secrets/postgres-password.txt
 
 docker compose up --build --detach --wait
 docker compose ps
@@ -61,11 +97,17 @@ claims locally, scale only the worker service:
 docker compose up --build --detach --wait --scale worker=2
 ```
 
-Register a small dataset, then submit a run with a caller-selected idempotency
-key:
+Provision a mode-`0600` curl configuration outside Git from the secret manager.
+It must supply the `Authorization: Bearer ...` and matching `X-Project-ID: ...`
+headers. Point `CONTROL_PLANE_CURL_CONFIG` at that file; the path is not secret,
+and the raw credential stays out of command arguments. Register a small dataset,
+then submit a run with a caller-selected idempotency key:
 
 ```bash
+test -r "${CONTROL_PLANE_CURL_CONFIG:?}"
+
 curl --fail-with-body \
+  --config "${CONTROL_PLANE_CURL_CONFIG:?}" \
   --header 'Content-Type: application/json' \
   --request POST http://127.0.0.1:8000/v1/datasets \
   --data-binary @- <<'JSON'
@@ -83,6 +125,7 @@ curl --fail-with-body \
 JSON
 
 curl --include --fail-with-body \
+  --config "${CONTROL_PLANE_CURL_CONFIG:?}" \
   --header 'Content-Type: application/json' \
   --header 'Idempotency-Key: demo-run-v1' \
   --request POST http://127.0.0.1:8000/v1/runs \
@@ -112,6 +155,7 @@ digests, database URLs, or exception text.
 |---|---|---|
 | `GET` | `/health/live` | Process liveness |
 | `GET` | `/health/ready` | Database and exact-schema readiness |
+| `GET` | `/metrics` | Authenticated API Prometheus metrics |
 | `POST`, `GET` | `/v1/datasets` | Register or page dataset revisions |
 | `GET` | `/v1/dataset-revisions/{revision}/{name:path}` | Read one slash-safe dataset summary |
 | `POST`, `GET` | `/v1/runs` | Submit or page evaluation runs |
@@ -140,19 +184,65 @@ nonterminal submission returns `202`; a replay of a terminal job returns `200`.
 Both responses carry the job `Location` header. Submission handlers never invoke
 the target, an evaluator, or the comparison engine.
 
-This is an intentionally local, unauthenticated service. Do not expose it to an
-untrusted network. Jobs progress through `queued`, `running`,
-`cancel_requested`, `succeeded`, `failed`, or `canceled`. Each claim creates a
-redacted attempt record and a private expiring lease. Workers heartbeat active
-leases; the reaper either reschedules an expired attempt with bounded backoff or
-fails it after the configured attempt limit. Queued cancellation is immediate,
-while running cancellation is cooperative and wins any later publication race.
+Every `/v1` request is authenticated and project-bound. Reads require
+`control-plane:read`, mutations require `control-plane:write`, cancellation
+requires `control-plane:cancel`, and `/metrics` requires `observability:read`.
+The exact `X-Project-ID` is a fail-closed routing assertion: one deployment and
+database own one project, and the service does not claim row-level
+multitenancy. Compose remains loopback-only because TLS termination and
+distributed rate limiting are external responsibilities.
+
+Jobs progress through `queued`, `running`, `cancel_requested`, `succeeded`,
+`failed`, or `canceled`. Each claim creates a redacted attempt record and a
+private expiring lease. Workers heartbeat active leases; the reaper either
+reschedules an expired attempt with bounded backoff or fails it after the
+configured attempt limit. Queued cancellation is immediate, while running
+cancellation is cooperative and wins any later publication race.
 
 Provider or target invocation is at least once: a worker can lose its lease
 after an external call and another worker may retry it. Fencing provides
 exactly-once durable evidence publication for a job, not exactly-once external
 side effects. Attempt lease tokens, worker identities, idempotency keys, semantic
 request digests, and resolved payloads are never returned by the API.
+
+### Observability and trace continuity
+
+The API emits one fixed-schema `control-plane-log/v1` JSON completion event per
+request. Logs, metrics, and traces use route templates and bounded vocabularies;
+they exclude bodies, prompts, expectations, outputs, SQL, rows, authorization
+material, project and principal identity, idempotency keys, request digests,
+lease data, raw cursors, and exception text.
+
+The authenticated `/metrics` endpoint exposes only the API instance registry:
+
+- `control_plane_http_requests_total`
+- `control_plane_http_request_duration_seconds`
+- `control_plane_http_errors_total`
+- `control_plane_http_requests_in_progress`
+- `control_plane_auth_decisions_total`
+- `control_plane_job_queue_depth`
+- `control_plane_failed_jobs`
+- `control_plane_evaluation_usage_units`
+- `control_plane_operational_snapshot_ready`
+
+The last four instruments come from one fixed aggregate PostgreSQL query and
+never load evidence documents.
+
+Workers maintain separate low-cardinality poll, job-duration, result, recovery,
+and readiness instruments in their isolated process registry and emit safe JSON
+lifecycle events. The current Compose worker has no HTTP port, so those worker
+metrics are not published through a scrape endpoint.
+
+The API accepts exactly one strict lowercase W3C `traceparent` version `00`
+header. Invalid, duplicate, or differently cased values are ignored, and
+`tracestate` is not propagated. A generated or accepted trace context is stored
+as private job coordination metadata. The asynchronous worker starts a new
+consumer span with one W3C Link to the submission span, then creates content-free
+run, target, and evaluator spans below it. Trace context is not authorization,
+does not affect semantic idempotency, and never permits private evaluation
+content in telemetry. Completed spans are exported as fixed-schema
+`trace.span.completed` JSON events that omit every span attribute and event; no
+external OTLP collector is configured by default.
 
 ## DataBridge PostgreSQL evaluation
 
@@ -405,9 +495,18 @@ performed safely.
   expiring leases, heartbeats, bounded retry backoff, and expired-lease recovery
 - Fenced transactional completion that publishes immutable evidence at most once
   while explicitly preserving at-least-once target invocation semantics
+- Digest-only bearer authentication with exact project assertion and separate
+  read, write, cancellation, and observability scopes for one project per
+  deployment and database
+- Privacy-safe structured logs, low-cardinality Prometheus metrics, strict W3C
+  request context, durable submission trace links, and content-free worker,
+  target, and evaluator spans
 - A hardened local Compose stack with one-shot migration, scalable portless
   workers, loopback API binding, read-only containers, dropped capabilities, and
   file-mounted secrets
+- Full-history secret scanning, dependency and static security analysis,
+  container vulnerability and configuration gates, CodeQL, and weekly locked
+  dependency updates
 - Python 3.11–3.14 CI, strict typing, linting, branch coverage, packaging, and
   isolated wheel smoke tests
 
@@ -449,6 +548,8 @@ uv run llm-eval validate examples/evaluation-spec.json
 - [Architecture](docs/architecture.md)
 - [Domain model](docs/domain-model.md)
 - [Architecture decisions](docs/adr/)
+- [Threat model](docs/security/threat-model.md)
+- [Incident and recovery runbook](docs/operations/recovery.md)
 
 The project is a modular monolith with dependency direction
 `entrypoints/adapters → application → domain`. The CLI and API runtime are
@@ -458,8 +559,8 @@ control-plane repository protocols, not concrete adapters.
 ## Contributing and security
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and
-[SECURITY.md](SECURITY.md) for vulnerability reporting and the evaluation-data
-handling policy.
+[SECURITY.md](SECURITY.md) for vulnerability reporting, authentication,
+telemetry, supply-chain, recovery, and evaluation-data handling policy.
 
 ## License
 

@@ -82,6 +82,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   deployment with no exposed worker port.
 - A credential-free PostgreSQL worker recovery gate covering competing claims,
   crash recovery, cancellation races, attempt exhaustion, and evidence fencing.
+- Project-bound bearer authentication with digest-only configuration, exact
+  `X-Project-ID` assertion, and separate read, write, cancellation, and
+  observability scopes.
+- Privacy-safe `control-plane-log/v1` API and worker events, an authenticated
+  API Prometheus endpoint, isolated low-cardinality worker instruments, and
+  dependency-injected OpenTelemetry tracing.
+- Strict W3C request-context acceptance, durable private submission trace
+  metadata, asynchronous worker spans linked to their submission span, and
+  content-free deterministic run, target, and evaluator spans.
+- A least-privilege security workflow with locked dependency audit, Ruff
+  security analysis, full-history redacted secret scanning, container
+  vulnerability and configuration gates, and CodeQL `security-extended`
+  analysis.
+- Weekly uv, GitHub Actions, and Docker dependency updates, an
+  implementation-specific threat model, an incident and recovery runbook, and
+  static deployment-hardening tests.
 
 ### Changed
 
@@ -107,6 +123,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Durable replay coordination now combines semantic HTTP idempotency with
   exactly-once successful evidence publication while explicitly retaining
   at-least-once target or provider invocation.
+- API v1 is now an authenticated single-project boundary. One deployment and
+  database own one project; the exact project header is a routing assertion and
+  does not provide row-level multitenancy.
+- Accepted or generated request trace context is stored on the first durable job
+  without changing the semantic request digest. Exact idempotency replays retain
+  the original trace link.
+- Production access logging now uses fixed-schema application events rather than
+  raw Uvicorn access lines. Telemetry accepts only bounded route, outcome,
+  duration, safe-error, and trace metadata.
 
 ### Security
 
@@ -139,6 +164,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Compose keeps the API on loopback, drops container capabilities, uses
   read-only filesystems where practical, and obtains the database password from
   a gitignored mounted file rather than an environment value.
-- The local API remains unauthenticated and has no tenant isolation, TLS
-  termination, or request-rate enforcement; it is not intended for exposure to
-  an untrusted network.
+- Raw bearer credentials are never stored in runtime configuration; only strict
+  SHA-256 digests are accepted from a bounded, regular, non-symlink file.
+- Protected API operations fail closed on missing or malformed authentication,
+  wrong project assertion, and insufficient scope without echoing credential,
+  digest, project, principal, or request content.
+- Logs, metrics, traces, span links, errors, and scanner output exclude prompts,
+  outputs, SQL, rows, request bodies, authorization material, identity fields,
+  idempotency metadata, lease data, raw cursors, and exception text.
+- Security automation uses full-SHA Action pins, checksum-verifies the Gitleaks
+  release, scans complete history with redaction, and grants CodeQL only the
+  permission required to upload security events.
+- The service still has no TLS termination, distributed request-rate
+  enforcement, or row-level multitenancy. Non-loopback use requires an external
+  trusted edge and a separately isolated deployment for every project.

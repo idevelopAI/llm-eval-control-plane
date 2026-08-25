@@ -39,11 +39,32 @@ Evaluation payloads are potentially sensitive. The project follows these rules:
 
 ## Control-plane API trust boundary
 
-The FastAPI service is a local development control plane. It has no user
-authentication, authorization, tenant isolation, or TLS termination. Compose
-binds it to `127.0.0.1` by default. Do not change that binding or place the
-service behind a public endpoint without adding an authenticated gateway,
-transport security, request-rate controls, and an explicit tenant model.
+The FastAPI service authenticates bearer credentials and authorizes protected
+operations inside one deployment. A credential has the exact `cpk_` prefix
+followed by 43 URL-safe characters. The strict `control-plane-auth/v1`
+configuration stores only a `sha256:<64 lowercase hexadecimal characters>`
+digest, never the raw bearer value. The file must be an absolute, bounded,
+regular, non-symlink file and is required at API startup.
+
+Every protected request also supplies exactly one `X-Project-ID` matching the
+configured project. Authorization is split into these scopes:
+
+- `control-plane:read` for `GET`, `HEAD`, and `OPTIONS` under `/v1`;
+- `control-plane:write` for `/v1` mutations other than cancellation;
+- `control-plane:cancel` for the cancellation operation; and
+- `observability:read` for `/metrics`.
+
+One deployment and one database own one project. `X-Project-ID` is a fail-closed
+routing assertion, not row-level multitenancy. Never configure multiple projects
+in one database or describe this boundary as tenant isolation. Invalid or
+missing authentication returns a content-safe `401` with a Bearer challenge;
+wrong project or insufficient scope returns a content-safe `403`. Neither path
+echoes a credential, digest, project, or principal.
+
+Compose binds the API to `127.0.0.1` by default. The application does not
+terminate TLS or enforce distributed rate limits. Any non-loopback deployment
+requires a maintained TLS-terminating gateway, request normalization, rate
+controls, and one isolated control-plane deployment per project.
 
 API request handling is intentionally fail-closed:
 
@@ -52,11 +73,12 @@ API request handling is intentionally fail-closed:
   malformed or excessively nested JSON, and bodies over the configured limit;
 - dataset size, slice fan-out, evaluator count, comparison gates, and derived
   comparison work are bounded before a job is claimed;
-- caller request IDs are accepted only through a bounded safe alphabet;
+- caller request IDs are ignored; the boundary generates a fresh internal
+  correlation ID and replaces any downstream response header;
 - validation details contain safe field locations and error types, never rejected
   values, validator context, URLs, or raw exceptions; and
 - request and application errors use the versioned `api-error/v1` envelope and a
-  sanitized request ID. Readiness is the deliberate exception: a non-ready
+  generated request ID. Readiness is the deliberate exception: a non-ready
   service returns `503` with the versioned `health/v1` status contract.
 
 Run and comparison responses are summaries. They exclude case inputs,
@@ -92,7 +114,52 @@ effect that occurred before the worker observed the request. Real providers must
 use their own idempotency or deduplication controls when duplicate effects are
 unsafe.
 
-## Local PostgreSQL secret handling
+## Telemetry boundary
+
+The API and worker use isolated Prometheus registries and isolated OpenTelemetry
+tracer providers; they do not mutate global providers. API request metrics use
+only bounded methods, route templates, status classes, and stable error or
+authorization outcomes. It also exports fixed-cardinality persisted queue depth,
+failed-job count, and aggregate input/output usage through one aggregate query.
+The authenticated `/metrics` route publishes only the API process registry.
+Workers maintain separate poll, job-duration, result, recovery, and readiness
+instruments, but the current worker runtime has no HTTP scrape listener.
+
+Structured events use the fixed `control-plane-log/v1` schema. Request events
+contain a generated request ID, trace and span IDs, route template, method, status,
+duration, outcome, and an optional stable error code. Worker events contain
+only lifecycle state, bounded recovered-job count, safe job kind and outcome,
+duration, and trace identifiers. Uvicorn access logging is disabled in the
+production API runtime so a raw request target cannot bypass this schema.
+
+The request boundary accepts at most one strict lowercase W3C `traceparent`
+version `00` value. Duplicate or invalid values are ignored; `tracestate` is not
+propagated. The active trace context is stored as private durable job metadata,
+excluded from semantic request identity, and never returned by the API. A worker
+starts a new consumer span with at most one W3C Link to the submission span,
+rather than making an asynchronous job a child of the HTTP request. Deterministic
+run, target, and evaluator spans carry no evaluation content.
+The default exporter emits only fixed `trace.span.completed` JSON envelopes with
+allowlisted operation, kind, outcome, timing, and linkage IDs; it discards all
+span attributes and events. No external OTLP destination is enabled by default.
+
+Telemetry is metadata, never an evidence export. Prompts, expectations, target
+outputs, request and response bodies, SQL, rows, authorization material, project
+or principal identity, idempotency keys, semantic request digests, database
+configuration, worker identities, lease tokens, raw cursors, and exception text
+are prohibited from log fields, metric labels, span attributes, events, and
+links. Telemetry failures are isolated from request and worker correctness.
+
+## Local authentication and PostgreSQL secret handling
+
+The authentication configuration path is selected by
+`CONTROL_PLANE_AUTH_CONFIG_FILE` on the Compose host and mounted as
+`CONTROL_PLANE_AUTH_FILE` inside the API container. The tracked environment
+example contains only that path. Generate raw bearer values through a secret
+manager, write only their SHA-256 digests into the mounted JSON document, grant
+each principal the minimum sorted scope set, and keep both the raw values and
+resolved configuration out of Git. Recreate the API process after rotation;
+configuration is loaded once and validated fail-closed at startup.
 
 The Compose stack reads the PostgreSQL password from the gitignored file named
 by `CONTROL_PLANE_PASSWORD_FILE`. `.env.example` contains only non-secret
@@ -192,3 +259,32 @@ the complete `.llm-eval/` store remains sensitive and must not be committed.
 Mock evidence is deterministic and simulated. It is suitable for control-plane
 and release-gate verification, not for claims about deployed-model accuracy,
 latency, token use, or cost. Live accuracy was not run for this release.
+
+## Supply-chain and recovery controls
+
+The dedicated security workflow runs five required checks:
+
+- `Dependency Vulnerability Audit` installs the locked security environment and
+  audits the resolved local packages;
+- `Static Security Analysis` enforces Ruff security rules and deployment
+  hardening contracts;
+- `Secret History Scan` scans every reachable commit with a checksum-verified,
+  fully redacted Gitleaks binary;
+- `Container Security Gate` rejects critical runtime vulnerabilities, fixable
+  high runtime vulnerabilities, and high-risk deployment misconfiguration; and
+- `CodeQL Python` runs the `security-extended` query suite with only the
+  permissions needed to read source and upload code-scanning results.
+
+Executable Actions are pinned to full commit SHAs, external container bases are
+manifest-digest pinned, scanner jobs receive no deployment secrets, and weekly
+Dependabot updates cover uv, GitHub Actions, and Docker. Pin updates still
+require source and transitive-action review; a passing scanner does not prove an
+artifact is benign.
+
+The implementation-specific [threat model](docs/security/threat-model.md)
+defines assets, trust boundaries, telemetry minimization, supply-chain threats,
+and residual risk. The [incident and recovery runbook](docs/operations/recovery.md)
+covers containment, credential rotation, isolated PostgreSQL restoration,
+migration failure, worker crash recovery, and safe return to service. This
+repository does not schedule, encrypt, replicate, or retention-manage backups
+and makes no recovery point or recovery time objective claim.
