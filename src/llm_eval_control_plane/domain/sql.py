@@ -106,8 +106,9 @@ class SqlExpectation(_StrictSqlModel):
                 raise ValueError("query expectations require complete SQL evidence")
             if "accepted_clarification_codes" in self.model_fields_set:
                 raise ValueError("query expectations cannot accept clarification codes")
-            assert self.expected_columns is not None
-            assert self.expected_rows is not None
+            # The complete-evidence check above narrows both query fields.
+            assert self.expected_columns is not None  # noqa: S101
+            assert self.expected_rows is not None  # noqa: S101
             if any(
                 len(row) != len(self.expected_columns) for row in self.expected_rows
             ):

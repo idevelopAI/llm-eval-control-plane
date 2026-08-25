@@ -448,7 +448,7 @@ class WorkerService:
             await task
         except asyncio.CancelledError:
             pass
-        except Exception:
+        except Exception:  # noqa: S110 -- cleanup must not mask the job outcome
             pass
 
 

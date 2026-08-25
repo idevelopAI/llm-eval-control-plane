@@ -81,8 +81,9 @@ class GateCaseComparison(FrozenModel):
             raise ValueError("case pass states exist exactly for comparable values")
         expected_change = CaseChange.INCOMPARABLE
         if comparable:
-            assert self.baseline_passed is not None
-            assert self.candidate_passed is not None
+            # The pass-state equivalence check above narrows both values.
+            assert self.baseline_passed is not None  # noqa: S101
+            assert self.candidate_passed is not None  # noqa: S101
             expected_change = {
                 (False, False): CaseChange.UNCHANGED_FAILING,
                 (False, True): CaseChange.NEWLY_PASSING,

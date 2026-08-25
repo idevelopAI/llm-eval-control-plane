@@ -417,7 +417,8 @@ def run_databridge_evaluation(
         target: DataBridgeMockTarget | DataBridgeHttpTarget
 
         if not live_mode:
-            assert responses is not None
+            # CLI option validation requires responses outside live mode.
+            assert responses is not None  # noqa: S101
             mock_responses = _read_response_manifest(responses)
             dataset_case_ids = {case.case_id for case in dataset_version.cases}
             if set(mock_responses) != dataset_case_ids:
@@ -435,7 +436,8 @@ def run_databridge_evaluation(
             runner = InProcessRunner(clock=DeterministicStepClock())
             execution_mode = ExecutionMode.OFFLINE_MOCK
         else:
-            assert live_base_url is not None
+            # CLI option validation requires a base URL in live mode.
+            assert live_base_url is not None  # noqa: S101
             target = DataBridgeHttpTarget(
                 base_url=live_base_url,
                 api_key_env=api_key_env,
@@ -485,7 +487,8 @@ def run_databridge_evaluation(
 
     if not completed:
         raise typer.Exit(code=2)
-    assert result is not None
+    # completed is set only after result construction and persistence.
+    assert result is not None  # noqa: S101
 
     _print_json(_run_summary(result))
     if result.status is RunStatus.COMPLETED_WITH_FAILURES:
@@ -738,7 +741,8 @@ def _read_scenario_overrides(path: Path | None) -> dict[str, str]:
         raise ValueError("Scenario overrides must map case IDs to scenario names")
     overrides: dict[str, str] = {}
     for key, value in document.items():
-        assert isinstance(value, str)
+        # The all-values validation above narrows each mapping value.
+        assert isinstance(value, str)  # noqa: S101
         overrides[key] = value
     return overrides
 
