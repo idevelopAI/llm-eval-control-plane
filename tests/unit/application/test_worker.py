@@ -2,22 +2,29 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from threading import Event
 from typing import cast
 
-from pytest import raises
+from pytest import MonkeyPatch, raises
 
 from llm_eval_control_plane.api.execution import DeterministicEvaluationExecutor
+from llm_eval_control_plane.application.comparison import (
+    compare_runs as compare_runs_sync,
+)
 from llm_eval_control_plane.application.control_plane import (
     ClaimedJob,
     ControlPlaneRepository,
     ControlPlaneStoreError,
+    StoreConflictError,
     StoreLeaseLostError,
     StoreNotFoundError,
 )
 from llm_eval_control_plane.application.worker import (
     TransientExecutionError,
     WorkerConfigurationError,
+    WorkerInvariantError,
     WorkerResultStatus,
     WorkerService,
     WorkerUnavailableError,
@@ -29,12 +36,14 @@ from llm_eval_control_plane.domain import (
     EvaluationSpec,
     MetricDirection,
     MetricGate,
+    ReleaseDecision,
     RunResult,
     sha256_digest,
 )
 from llm_eval_control_plane.domain.control_plane import (
     ComparisonJobPayload,
     DatasetRecord,
+    ExecutionContract,
     JobAttemptRecord,
     JobAttemptStatus,
     JobKind,
@@ -201,6 +210,7 @@ class FakeRepository:
         self.dataset = DatasetRecord(dataset=dataset, created_at=NOW)
         self.runs: dict[str, RunRecord] = {}
         self.claim = True
+        self.claim_error: ControlPlaneStoreError | None = None
         self.claim_tokens: list[str] = []
         self.claim_worker_ids: list[str] = []
         self.claim_lease_seconds: list[int] = []
@@ -209,11 +219,22 @@ class FakeRepository:
         self.heartbeat_status = JobStatus.RUNNING
         self.heartbeat_error: ControlPlaneStoreError | None = None
         self.heartbeat_seen = asyncio.Event()
+        self.block_dataset_load = False
+        self.dataset_load_started = Event()
+        self.dataset_load_release = Event()
         self.completed_run: RunRecord | None = None
         self.completed_decision: ReleaseDecisionRecord | None = None
+        self.completion_error: ControlPlaneStoreError | None = None
+        self.completion_status: JobStatus | None = None
         self.retry_call: tuple[int, str] | None = None
+        self.retry_error: ControlPlaneStoreError | None = None
+        self.retry_status: JobStatus | None = None
         self.fail_code: str | None = None
+        self.fail_error: ControlPlaneStoreError | None = None
+        self.fail_status: JobStatus | None = None
         self.acknowledged = False
+        self.acknowledge_error: ControlPlaneStoreError | None = None
+        self.acknowledge_status: JobStatus | None = None
         self.cancel_during_mutation = False
 
     def claim_next_job(
@@ -223,6 +244,8 @@ class FakeRepository:
         lease_token: str,
         lease_seconds: int,
     ) -> ClaimedJob | None:
+        if self.claim_error is not None:
+            raise self.claim_error
         self.claim_tokens.append(lease_token)
         self.claim_worker_ids.append(worker_id)
         self.claim_lease_seconds.append(lease_seconds)
@@ -258,9 +281,15 @@ class FakeRepository:
             raise self.heartbeat_error
         if self.heartbeat_status is JobStatus.CANCEL_REQUESTED:
             self.job = self.job.transition_to(JobStatus.CANCEL_REQUESTED, at=NOW)
+        elif self.heartbeat_status is not JobStatus.RUNNING:
+            return self.job.model_copy(update={"status": self.heartbeat_status})
         return self.job
 
     def get_dataset(self, name: str, revision: int) -> DatasetRecord:
+        if self.block_dataset_load:
+            self.dataset_load_started.set()
+            if not self.dataset_load_release.wait(timeout=10):
+                raise AssertionError("evidence load blocked the worker event loop")
         if (name, revision) != (
             self.dataset.dataset.name,
             self.dataset.dataset.revision,
@@ -283,6 +312,8 @@ class FakeRepository:
         delay_seconds: int,
         error_code: str,
     ) -> JobRecord:
+        if self.retry_error is not None:
+            raise self.retry_error
         if self.cancel_during_mutation:
             return self._cancel()
         self.retry_call = (delay_seconds, error_code)
@@ -291,6 +322,8 @@ class FakeRepository:
             at=NOW,
             available_at=NOW + timedelta(seconds=delay_seconds),
         )
+        if self.retry_status is not None:
+            return self.job.model_copy(update={"status": self.retry_status})
         return self.job
 
     def fail_job(
@@ -301,6 +334,8 @@ class FakeRepository:
         *,
         error_code: str,
     ) -> JobRecord:
+        if self.fail_error is not None:
+            raise self.fail_error
         if self.cancel_during_mutation:
             return self._cancel()
         self.fail_code = error_code
@@ -309,6 +344,8 @@ class FakeRepository:
             at=NOW,
             error_code=error_code,
         )
+        if self.fail_status is not None:
+            return self.job.model_copy(update={"status": self.fail_status})
         return self.job
 
     def acknowledge_cancellation(
@@ -317,8 +354,12 @@ class FakeRepository:
         _attempt_number: int,
         _lease_token: str,
     ) -> JobRecord:
+        if self.acknowledge_error is not None:
+            raise self.acknowledge_error
         self.acknowledged = True
         self.job = self.job.transition_to(JobStatus.CANCELED, at=NOW)
+        if self.acknowledge_status is not None:
+            return self.job.model_copy(update={"status": self.acknowledge_status})
         return self.job
 
     def complete_run(
@@ -330,10 +371,14 @@ class FakeRepository:
         lease_token: str,
     ) -> JobRecord:
         del attempt_number, lease_token
+        if self.completion_error is not None:
+            raise self.completion_error
         if self.cancel_during_mutation:
             return self._cancel()
         self.completed_run = record
         self.job = self.job.transition_to(JobStatus.SUCCEEDED, at=NOW)
+        if self.completion_status is not None:
+            return self.job.model_copy(update={"status": self.completion_status})
         return self.job
 
     def complete_release_decision(
@@ -345,10 +390,14 @@ class FakeRepository:
         lease_token: str,
     ) -> JobRecord:
         del attempt_number, lease_token
+        if self.completion_error is not None:
+            raise self.completion_error
         if self.cancel_during_mutation:
             return self._cancel()
         self.completed_decision = record
         self.job = self.job.transition_to(JobStatus.SUCCEEDED, at=NOW)
+        if self.completion_status is not None:
+            return self.job.model_copy(update={"status": self.completion_status})
         return self.job
 
     def _cancel(self) -> JobRecord:
@@ -410,25 +459,7 @@ def _run_context(
     return repository, selected, _service(repository, selected)
 
 
-def test_run_attempt_claims_with_private_fence_and_publishes_once() -> None:
-    repository, executor, service = _run_context()
-
-    result = asyncio.run(service.run_once())
-
-    assert result.status is WorkerResultStatus.SUCCEEDED
-    assert executor.calls == 1
-    assert repository.completed_run is not None
-    assert repository.completed_run.run_id == "run-worker-001"
-    assert repository.heartbeat_calls == 1
-    assert repository.claim_lease_seconds == [30]
-    assert repository.heartbeat_lease_seconds == [30]
-    assert len(repository.claim_tokens[0]) >= 32
-    assert "privateLeaseToken" not in repr(result)
-    assert "private-worker-identity" not in repr(service)
-    assert "private-payload-sentinel" not in repr(result)
-
-
-def test_comparison_attempt_uses_pinned_runs_and_publishes_decision() -> None:
+def _comparison_context() -> tuple[FakeRepository, CountingExecutor, WorkerService]:
     executor = CountingExecutor()
     dataset = _dataset()
     baseline = asyncio.run(
@@ -483,15 +514,110 @@ def test_comparison_attempt_uses_pinned_runs_and_publishes_decision() -> None:
         baseline.run_id: RunRecord(result=baseline, created_at=NOW),
         candidate.run_id: RunRecord(result=candidate, created_at=NOW),
     }
+    return repository, executor, _service(repository, executor)
+
+
+def test_run_attempt_claims_with_private_fence_and_publishes_once() -> None:
+    repository, executor, service = _run_context()
+
+    result = asyncio.run(service.run_once())
+
+    assert result.status is WorkerResultStatus.SUCCEEDED
+    assert executor.calls == 1
+    assert repository.completed_run is not None
+    assert repository.completed_run.run_id == "run-worker-001"
+    assert repository.heartbeat_calls == 1
+    assert repository.claim_lease_seconds == [30]
+    assert repository.heartbeat_lease_seconds == [30]
+    assert len(repository.claim_tokens[0]) >= 32
+    assert "privateLeaseToken" not in repr(result)
+    assert "private-worker-identity" not in repr(service)
+    assert "private-payload-sentinel" not in repr(result)
+
+
+def test_claim_repr_never_exposes_private_worker_state() -> None:
+    repository, _executor, _service_instance = _run_context()
+    claim = repository.claim_next_job(
+        worker_id="private-worker-identity",
+        lease_token="privateLeaseToken_1234567890abcdef",
+        lease_seconds=30,
+    )
+
+    assert claim is not None
+    assert f"{claim!r} {claim!s}" == "ClaimedJob() ClaimedJob()"
+    for private_value in (
+        "job-worker-001",
+        "private-idempotency-key",
+        claim.job.request_digest,
+        "private-payload-sentinel",
+        "private-worker-identity",
+        "privateLeaseToken_1234567890abcdef",
+    ):
+        assert private_value not in repr(claim)
+
+
+def test_comparison_attempt_uses_pinned_runs_and_publishes_decision() -> None:
+    repository, executor, service = _comparison_context()
     calls_before = executor.calls
 
-    result = asyncio.run(_service(repository, executor).run_once())
+    result = asyncio.run(service.run_once())
 
     assert result.status is WorkerResultStatus.SUCCEEDED
     assert executor.calls == calls_before
     assert repository.completed_decision is not None
     assert repository.completed_decision.decision_id == "decision-worker-001"
     assert repository.completed_decision.decision.status.value == "passed"
+
+
+def test_blocked_comparison_keeps_event_loop_available_for_heartbeat(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    repository, executor, _unused = _comparison_context()
+    sleeper = ManualSleeper()
+    service = _service(repository, executor, sleeper=sleeper)
+    started = Event()
+    release = Event()
+
+    def blocking_compare_runs(
+        *,
+        spec: EvaluationSpec,
+        dataset: DatasetVersion,
+        baseline: RunResult,
+        candidate: RunResult,
+    ) -> ReleaseDecision:
+        started.set()
+        if not release.wait(timeout=10):
+            raise AssertionError("comparison blocked the worker event loop")
+        return compare_runs_sync(
+            spec=spec,
+            dataset=dataset,
+            baseline=baseline,
+            candidate=candidate,
+        )
+
+    monkeypatch.setattr(
+        "llm_eval_control_plane.application.worker.compare_runs",
+        blocking_compare_runs,
+    )
+
+    async def exercise() -> WorkerResultStatus:
+        task = asyncio.create_task(service.run_once())
+        try:
+            assert await asyncio.to_thread(started.wait, 10)
+            assert not task.done()
+            sleeper.tick.set()
+            await asyncio.wait_for(repository.heartbeat_seen.wait(), timeout=10)
+            assert not task.done()
+        finally:
+            release.set()
+        result = await asyncio.wait_for(task, timeout=10)
+        return result.status
+
+    status = asyncio.run(exercise())
+
+    assert status is WorkerResultStatus.SUCCEEDED
+    assert sleeper.calls == 1
+    assert repository.heartbeat_calls == 2
 
 
 def test_explicit_transient_failure_retries_with_bounded_exponential_backoff() -> None:
@@ -598,6 +724,31 @@ def test_heartbeat_runs_during_cooperative_long_execution_without_sleeping() -> 
     assert heartbeat_calls == 2
 
 
+def test_blocked_repository_evidence_load_still_permits_heartbeat() -> None:
+    async def exercise() -> tuple[WorkerResultStatus, int, int]:
+        repository, executor, _unused = _run_context()
+        repository.block_dataset_load = True
+        sleeper = ManualSleeper()
+        service = _service(repository, executor, sleeper=sleeper)
+        task = asyncio.create_task(service.run_once())
+        try:
+            assert await asyncio.to_thread(repository.dataset_load_started.wait, 10)
+            assert not task.done()
+            sleeper.tick.set()
+            await asyncio.wait_for(repository.heartbeat_seen.wait(), timeout=10)
+            assert not task.done()
+        finally:
+            repository.dataset_load_release.set()
+        result = await asyncio.wait_for(task, timeout=10)
+        return result.status, executor.calls, repository.heartbeat_calls
+
+    status, execution_calls, heartbeat_calls = asyncio.run(exercise())
+
+    assert status is WorkerResultStatus.SUCCEEDED
+    assert execution_calls == 1
+    assert heartbeat_calls == 2
+
+
 def test_persistence_failure_is_sanitized_and_left_for_lease_recovery() -> None:
     repository, _, service = _run_context()
     repository.heartbeat_error = ControlPlaneStoreError(
@@ -692,3 +843,313 @@ def test_external_task_cancellation_leaves_the_attempt_for_recovery() -> None:
         assert repository.acknowledged is False
 
     asyncio.run(exercise())
+
+
+def test_worker_configuration_defaults_and_claim_failures_are_safe() -> None:
+    repository, executor, _unused = _run_context()
+    for overrides in (
+        {"worker_id": ""},
+        {"lease_seconds": 4},
+        {"lease_seconds": True},
+        {"heartbeat_seconds": 16},
+        {"backoff_base_seconds": 5, "backoff_max_seconds": 4},
+    ):
+        with raises(WorkerConfigurationError):
+            _service(repository, executor, **overrides)
+
+    default_service = WorkerService(
+        repository=cast(ControlPlaneRepository, repository),
+        executor=executor,
+        worker_id="default-worker",
+    )
+    assert (
+        asyncio.run(default_service.run_once()).status is WorkerResultStatus.SUCCEEDED
+    )
+
+    unavailable, unavailable_executor, _unused = _run_context()
+    unavailable.claim_error = ControlPlaneStoreError("private claim details")
+    with raises(WorkerUnavailableError) as captured:
+        asyncio.run(_service(unavailable, unavailable_executor).run_once())
+    assert str(captured.value) == "Worker persistence is unavailable"
+
+
+def test_worker_rejects_malformed_claims_and_payload_kinds() -> None:
+    repository, _executor, service = _run_context()
+    claim = repository.claim_next_job(
+        worker_id="private-worker-identity",
+        lease_token="privateLeaseToken_1234567890abcdef",
+        lease_seconds=30,
+    )
+    assert claim is not None
+    malformed_claims = (
+        (claim, "differentLeaseToken_1234567890abcdef"),
+        (
+            replace(
+                claim,
+                job=claim.job.model_copy(update={"status": JobStatus.SUCCEEDED}),
+            ),
+            claim.lease_token,
+        ),
+        (
+            replace(
+                claim,
+                attempt=claim.attempt.model_copy(
+                    update={"status": JobAttemptStatus.SUCCEEDED}
+                ),
+            ),
+            claim.lease_token,
+        ),
+        (
+            replace(
+                claim,
+                attempt=claim.attempt.model_copy(update={"job_id": "different-job"}),
+            ),
+            claim.lease_token,
+        ),
+        (
+            replace(
+                claim,
+                attempt=claim.attempt.model_copy(update={"attempt_number": 2}),
+            ),
+            claim.lease_token,
+        ),
+    )
+    for malformed, expected_token in malformed_claims:
+        with raises(WorkerInvariantError):
+            service._validate_claim(malformed, expected_token)
+
+    mismatched_dataset = DatasetVersion.create(
+        name="worker/fixture",
+        revision=1,
+        cases=(
+            EvaluationCase(
+                case_id="case-001",
+                input=CanonicalJson.from_value("different"),
+                expected=CanonicalJson.from_value("different"),
+            ),
+        ),
+    )
+    repository.dataset = DatasetRecord(dataset=mismatched_dataset, created_at=NOW)
+    mismatch = asyncio.run(service.run_once())
+    assert mismatch.status is WorkerResultStatus.FAILED
+    assert repository.fail_code == "invalid_job_payload"
+
+    class UnsupportedPayload:
+        kind = JobKind.RUN
+
+    unsupported, unsupported_executor, _unused = _run_context()
+    unsupported.payload = cast(JobPayload, UnsupportedPayload())
+    unsupported_result = asyncio.run(
+        _service(unsupported, unsupported_executor).run_once()
+    )
+    assert unsupported_result.status is WorkerResultStatus.FAILED
+    assert unsupported.fail_code == "invalid_job_payload"
+
+
+def test_kind_mismatch_contract_drift_and_comparison_digest_drift_fail_safely() -> None:
+    dataset = _dataset()
+    executor = CountingExecutor()
+    kind_mismatch = FakeRepository(
+        job=_job(kind=JobKind.COMPARISON, resource_id="decision-kind-mismatch"),
+        payload=_run_payload(dataset, executor),
+        dataset=dataset,
+    )
+    mismatch_result = asyncio.run(_service(kind_mismatch, executor).run_once())
+    assert mismatch_result.status is WorkerResultStatus.FAILED
+    assert kind_mismatch.fail_code == "invalid_job_payload"
+
+    class DriftExecutor(CountingExecutor):
+        drift = False
+
+        def validate(
+            self,
+            *,
+            target_name: str,
+            target_revision: int,
+            adapter: str,
+            evaluator_names: tuple[str, ...],
+            scenario_overrides: Mapping[str, str],
+        ) -> ExecutionContract:
+            return super().validate(
+                target_name=target_name,
+                target_revision=target_revision,
+                adapter=adapter,
+                evaluator_names=evaluator_names,
+                scenario_overrides=(
+                    {**scenario_overrides, "case-001": "uppercase"}
+                    if self.drift
+                    else scenario_overrides
+                ),
+            )
+
+    drift_executor = DriftExecutor()
+    drift_repository, _, _unused = _run_context(executor=drift_executor)
+    drift_executor.drift = True
+    drift_executor.calls = 0
+    drift_result = asyncio.run(_service(drift_repository, drift_executor).run_once())
+    assert drift_result.status is WorkerResultStatus.FAILED
+    assert drift_repository.fail_code == "invalid_job_payload"
+    assert drift_executor.calls == 0
+
+    comparison, comparison_executor, _unused = _comparison_context()
+    payload = comparison.payload
+    assert isinstance(payload, ComparisonJobPayload)
+    comparison.payload = payload.model_copy(
+        update={"baseline_result_digest": sha256_digest("different-result")}
+    )
+    comparison_result = asyncio.run(
+        _service(comparison, comparison_executor).run_once()
+    )
+    assert comparison_result.status is WorkerResultStatus.FAILED
+    assert comparison.fail_code == "invalid_job_payload"
+
+
+def test_invalid_worker_clock_fails_the_attempt_without_leaking_details() -> None:
+    for clock in (
+        lambda: datetime(2026, 8, 23, 12),
+        lambda: (_ for _ in ()).throw(RuntimeError("private clock details")),
+    ):
+        repository, executor, _unused = _run_context()
+        result = asyncio.run(_service(repository, executor, clock=clock).run_once())
+        assert result.status is WorkerResultStatus.FAILED
+        assert repository.fail_code == "execution_failed"
+
+
+def test_monitor_first_cancellation_and_monitor_failure_stop_execution() -> None:
+    async def cancel_during_execution() -> tuple[WorkerResultStatus, bool]:
+        executor = BlockingExecutor()
+        repository, _, _unused = _run_context(executor=executor)
+        repository.heartbeat_status = JobStatus.CANCEL_REQUESTED
+        sleeper = ManualSleeper()
+        task = asyncio.create_task(
+            _service(repository, executor, sleeper=sleeper).run_once()
+        )
+        await executor.started.wait()
+        sleeper.tick.set()
+        result = await task
+        return result.status, repository.acknowledged
+
+    status, acknowledged = asyncio.run(cancel_during_execution())
+    assert status is WorkerResultStatus.CANCELED
+    assert acknowledged is True
+
+    async def broken_sleeper(_seconds: float) -> None:
+        raise RuntimeError("private sleeper failure")
+
+    blocked = BlockingExecutor()
+    repository, _, _unused = _run_context(executor=blocked)
+    with raises(WorkerUnavailableError):
+        asyncio.run(_service(repository, blocked, sleeper=broken_sleeper).run_once())
+
+
+def test_retry_mutation_fences_cancellation_and_invalid_states() -> None:
+    lease_lost_executor = FailingExecutor(transient=True)
+    lease_lost, _, _unused = _run_context(executor=lease_lost_executor)
+    lease_lost.retry_error = StoreLeaseLostError("private stale retry")
+    result = asyncio.run(_service(lease_lost, lease_lost_executor).run_once())
+    assert result.status is WorkerResultStatus.LEASE_LOST
+
+    unavailable_executor = FailingExecutor(transient=True)
+    unavailable, _, _unused = _run_context(executor=unavailable_executor)
+    unavailable.retry_error = ControlPlaneStoreError("private retry storage")
+    with raises(WorkerUnavailableError):
+        asyncio.run(_service(unavailable, unavailable_executor).run_once())
+
+    canceled_executor = FailingExecutor(transient=True)
+    canceled, _, _unused = _run_context(executor=canceled_executor)
+    canceled.retry_status = JobStatus.CANCELED
+    canceled_result = asyncio.run(_service(canceled, canceled_executor).run_once())
+    assert canceled_result.status is WorkerResultStatus.CANCELED
+
+    invalid_executor = FailingExecutor(transient=True)
+    invalid, _, _unused = _run_context(executor=invalid_executor)
+    invalid.retry_status = JobStatus.RUNNING
+    with raises(WorkerInvariantError):
+        asyncio.run(_service(invalid, invalid_executor).run_once())
+
+
+def test_failure_mutation_fences_cancellation_and_invalid_states() -> None:
+    lease_lost_executor = FailingExecutor(transient=False)
+    lease_lost, _, _unused = _run_context(executor=lease_lost_executor)
+    lease_lost.fail_error = StoreLeaseLostError("private stale failure")
+    result = asyncio.run(_service(lease_lost, lease_lost_executor).run_once())
+    assert result.status is WorkerResultStatus.LEASE_LOST
+
+    unavailable_executor = FailingExecutor(transient=False)
+    unavailable, _, _unused = _run_context(executor=unavailable_executor)
+    unavailable.fail_error = ControlPlaneStoreError("private failure storage")
+    with raises(WorkerUnavailableError):
+        asyncio.run(_service(unavailable, unavailable_executor).run_once())
+
+    canceled_executor = FailingExecutor(transient=False)
+    canceled, _, _unused = _run_context(executor=canceled_executor)
+    canceled.fail_status = JobStatus.CANCELED
+    canceled_result = asyncio.run(_service(canceled, canceled_executor).run_once())
+    assert canceled_result.status is WorkerResultStatus.CANCELED
+
+    invalid_executor = FailingExecutor(transient=False)
+    invalid, _, _unused = _run_context(executor=invalid_executor)
+    invalid.fail_status = JobStatus.RUNNING
+    with raises(WorkerInvariantError):
+        asyncio.run(_service(invalid, invalid_executor).run_once())
+
+
+def test_publication_fences_conflicts_storage_and_invalid_states() -> None:
+    lease_lost, lease_executor, _unused = _run_context()
+    lease_lost.completion_error = StoreLeaseLostError("private stale completion")
+    assert (
+        asyncio.run(_service(lease_lost, lease_executor).run_once()).status
+        is WorkerResultStatus.LEASE_LOST
+    )
+
+    conflict, conflict_executor, _unused = _run_context()
+    conflict.completion_error = StoreConflictError("private evidence conflict")
+    conflict_result = asyncio.run(_service(conflict, conflict_executor).run_once())
+    assert conflict_result.status is WorkerResultStatus.FAILED
+    assert conflict.fail_code == "evidence_conflict"
+
+    unavailable, unavailable_executor, _unused = _run_context()
+    unavailable.completion_error = ControlPlaneStoreError("private completion storage")
+    with raises(WorkerUnavailableError):
+        asyncio.run(_service(unavailable, unavailable_executor).run_once())
+
+    canceled, canceled_executor, _unused = _run_context()
+    canceled.completion_status = JobStatus.CANCELED
+    assert (
+        asyncio.run(_service(canceled, canceled_executor).run_once()).status
+        is WorkerResultStatus.CANCELED
+    )
+
+    invalid, invalid_executor, _unused = _run_context()
+    invalid.completion_status = JobStatus.RUNNING
+    with raises(WorkerInvariantError):
+        asyncio.run(_service(invalid, invalid_executor).run_once())
+
+
+def test_cancellation_acknowledgement_is_fenced_and_validated() -> None:
+    lease_lost, lease_executor, _unused = _run_context()
+    lease_lost.heartbeat_status = JobStatus.CANCEL_REQUESTED
+    lease_lost.acknowledge_error = StoreLeaseLostError("private stale cancellation")
+    assert (
+        asyncio.run(_service(lease_lost, lease_executor).run_once()).status
+        is WorkerResultStatus.LEASE_LOST
+    )
+
+    unavailable, unavailable_executor, _unused = _run_context()
+    unavailable.heartbeat_status = JobStatus.CANCEL_REQUESTED
+    unavailable.acknowledge_error = ControlPlaneStoreError("private ack storage")
+    with raises(WorkerUnavailableError):
+        asyncio.run(_service(unavailable, unavailable_executor).run_once())
+
+    invalid, invalid_executor, _unused = _run_context()
+    invalid.heartbeat_status = JobStatus.CANCEL_REQUESTED
+    invalid.acknowledge_status = JobStatus.RUNNING
+    with raises(WorkerInvariantError):
+        asyncio.run(_service(invalid, invalid_executor).run_once())
+
+    terminal, terminal_executor, _unused = _run_context()
+    terminal.heartbeat_status = JobStatus.SUCCEEDED
+    assert (
+        asyncio.run(_service(terminal, terminal_executor).run_once()).status
+        is WorkerResultStatus.LEASE_LOST
+    )
