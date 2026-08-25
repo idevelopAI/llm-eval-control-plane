@@ -33,7 +33,7 @@ jobs:
           --health-retries 12
     env:
       CONTROL_PLANE_DATABASE_URL: postgresql+psycopg://postgres@127.0.0.1:5432/control_plane
-      CONTROL_PLANE_PASSWORD_FILE: ${{ runner.temp }}/worker-recovery-postgres-password
+      CONTROL_PLANE_PASSWORD_FILE: /tmp/worker-recovery-postgres-password
       COMPOSE_PROJECT_NAME: worker-recovery-gate
     steps:
       - name: Check out repository
@@ -94,3 +94,4 @@ jobs:
           if [[ -f compose.yaml && -f "$CONTROL_PLANE_PASSWORD_FILE" ]]; then
             docker compose down --volumes --remove-orphans
           fi
+          rm -f /tmp/worker-recovery-postgres-password
