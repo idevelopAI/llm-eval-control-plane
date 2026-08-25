@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -18,7 +18,12 @@ from typing import Protocol
 
 from opentelemetry.context import Context
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import SpanLimits, TracerProvider
+from opentelemetry.sdk.trace import ReadableSpan, SpanLimits, TracerProvider
+from opentelemetry.sdk.trace.export import (
+    SimpleSpanProcessor,
+    SpanExporter,
+    SpanExportResult,
+)
 from opentelemetry.trace import (
     INVALID_SPAN,
     Link,
@@ -26,6 +31,7 @@ from opentelemetry.trace import (
     Span,
     SpanContext,
     SpanKind,
+    StatusCode,
     TraceFlags,
     Tracer,
     TraceState,
@@ -82,9 +88,7 @@ _ERROR_CODES = frozenset(
     }
 )
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-_WORKER_TRACEPARENT = re.compile(
-    r"^00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$"
-)
+_WORKER_TRACEPARENT = re.compile(r"^00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$")
 _WORKER_JOB_KINDS = frozenset({"comparison", "run"})
 _WORKER_JOB_RESULTS = frozenset(
     {"canceled", "failed", "lease_lost", "retry_scheduled", "succeeded"}
@@ -100,6 +104,24 @@ _WORKER_LIFECYCLE_STATES = frozenset(
         "stopped",
     }
 )
+_TRACE_OPERATIONS = frozenset(
+    {
+        "evaluation.evaluator.evaluate",
+        "evaluation.run",
+        "evaluation.target.invoke",
+        "worker.job",
+        *(
+            f"{method} {route}"
+            for method in _HTTP_METHODS
+            for route in (*_HTTP_ROUTES, "unmatched")
+        ),
+    }
+)
+_TRACE_KINDS = {
+    SpanKind.CONSUMER: "consumer",
+    SpanKind.INTERNAL: "internal",
+    SpanKind.SERVER: "server",
+}
 _DURATION_BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10)
 _MAX_DURATION_NS = 86_400 * 1_000_000_000
 _MAX_RECOVERED_JOBS = 10_000
@@ -117,6 +139,69 @@ class MetricsDocument:
 
     body: bytes
     content_type: str
+
+
+class _SafeJsonSpanExporter(SpanExporter):
+    """Export only a fixed span envelope; attributes and events stay private."""
+
+    __slots__ = ("_log_sink", "_service", "_wall_clock")
+
+    def __init__(
+        self,
+        *,
+        service: str,
+        log_sink: LogSink,
+        wall_clock: Callable[[], datetime],
+    ) -> None:
+        self._service = service
+        self._log_sink = log_sink
+        self._wall_clock = wall_clock
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        for span in spans:
+            self._export_one(span)
+        return SpanExportResult.SUCCESS
+
+    def _export_one(self, span: ReadableSpan) -> None:
+        try:
+            context = span.context
+            if context is None:
+                return
+            status = span.status.status_code
+            event: dict[str, object] = {
+                "duration_ms": bounded_duration_ns(
+                    _span_duration_ns(span.start_time, span.end_time)
+                )
+                // 1_000_000,
+                "event": "trace.span.completed",
+                "operation": _safe_trace_operation(span.name),
+                "outcome": _safe_trace_outcome(status),
+                "schema_version": "control-plane-log/v1",
+                "service": self._service,
+                "severity": "ERROR" if status is StatusCode.ERROR else "INFO",
+                "span_id": safe_span_id(f"{context.span_id:016x}"),
+                "span_kind": _TRACE_KINDS.get(span.kind, "unknown"),
+                "timestamp": _safe_timestamp(self._wall_clock),
+                "trace_id": safe_trace_id(f"{context.trace_id:032x}"),
+            }
+            parent = span.parent
+            if parent is not None and parent.is_valid:
+                event["parent_span_id"] = safe_span_id(f"{parent.span_id:016x}")
+            links = tuple(link for link in span.links if link.context.is_valid)
+            if links:
+                linked = links[0].context
+                event["linked_span_id"] = safe_span_id(f"{linked.span_id:016x}")
+                event["linked_trace_id"] = safe_trace_id(f"{linked.trace_id:032x}")
+            document = json.dumps(
+                event,
+                allow_nan=False,
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            self._log_sink(f"{document}\n")
+        except Exception:
+            return
 
 
 class Observability:
@@ -164,7 +249,7 @@ class Observability:
         self._wall_clock = wall_clock
 
         if tracer_provider is None:
-            provider: ApiTracerProvider = TracerProvider(
+            internal_provider = TracerProvider(
                 resource=Resource(
                     {
                         "service.name": f"llm-eval-control-plane-{service}",
@@ -178,6 +263,17 @@ class Observability:
                     max_attribute_length=128,
                 ),
             )
+            if log_sink is not None:
+                internal_provider.add_span_processor(
+                    SimpleSpanProcessor(
+                        _SafeJsonSpanExporter(
+                            service=service,
+                            log_sink=log_sink,
+                            wall_clock=wall_clock,
+                        )
+                    )
+                )
+            provider: ApiTracerProvider = internal_provider
             self._owns_provider = True
         else:
             provider = tracer_provider
@@ -527,14 +623,7 @@ class Observability:
             return
 
     def _timestamp(self) -> str:
-        try:
-            value = self._wall_clock()
-            if value.tzinfo is None or value.utcoffset() is None:
-                raise ValueError
-            normalized = value.astimezone(UTC)
-        except Exception:
-            normalized = datetime.now(UTC)
-        return normalized.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        return _safe_timestamp(self._wall_clock)
 
 
 def safe_http_method(value: object) -> str:
@@ -585,6 +674,35 @@ def bounded_duration_ns(value: object) -> int:
     if type(value) is not int or value < 0:
         return 0
     return min(value, _MAX_DURATION_NS)
+
+
+def _safe_trace_operation(value: object) -> str:
+    return value if isinstance(value, str) and value in _TRACE_OPERATIONS else "unknown"
+
+
+def _safe_trace_outcome(value: object) -> str:
+    if value is StatusCode.ERROR:
+        return "error"
+    if value is StatusCode.OK:
+        return "ok"
+    return "unset"
+
+
+def _span_duration_ns(start_time: object, end_time: object) -> int:
+    if type(start_time) is not int or type(end_time) is not int:
+        return 0
+    return max(0, end_time - start_time)
+
+
+def _safe_timestamp(wall_clock: Callable[[], datetime]) -> str:
+    try:
+        value = wall_clock()
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError
+        normalized = value.astimezone(UTC)
+    except Exception:
+        normalized = datetime.now(UTC)
+    return normalized.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def _safe_worker_job_kind(value: object) -> str:
