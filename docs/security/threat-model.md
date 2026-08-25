@@ -141,8 +141,8 @@ headers, API keys, database URLs, secret paths or contents, idempotency keys,
 request digests, worker identity, lease token, raw cursor, raw exception text,
 and caller-controlled strings as metric labels.
 
-Request IDs may correlate safe operational events but must use the validated
-bounded alphabet. They are not authentication or authorization evidence.
+Request IDs may correlate safe operational events but are generated internally;
+caller-provided IDs are ignored. They are not authentication or authorization evidence.
 Diagnostic verbosity must not weaken the allowlist.
 
 ## Supply-chain acceptance rules

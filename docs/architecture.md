@@ -3,14 +3,16 @@
 ## System objective
 
 LLM Eval Control Plane turns AI application behavior into reproducible evidence.
-The implemented Phase 5 slice registers immutable dataset revisions, accepts
-durable idempotent run and comparison submissions, stores their resolved worker
-payloads, executes them through leased workers, recovers expired attempts, and
-preserves append-only evidence in PostgreSQL. A versioned HTTP API exposes only
-safe resource, job, and attempt summaries. The same application core supports
-the CLI evaluation, comparison, and DataBridge workflows. DataBridge adds strict
-HTTP normalization, SQL safety policy, and bounded read-only PostgreSQL replay
-without weakening the provider-neutral application ports.
+The implemented Phase 6 slice places project-bound authorization and
+privacy-safe observability around durable evaluation work. It registers
+immutable dataset revisions, accepts idempotent run and comparison submissions,
+stores resolved worker payloads and private trace links, executes them through
+leased workers, recovers expired attempts, and preserves append-only evidence in
+PostgreSQL. A versioned HTTP API exposes only safe resource, job, attempt, and
+metric surfaces for one project per deployment. The same application core
+supports the CLI evaluation, comparison, and DataBridge workflows. DataBridge
+adds strict HTTP normalization, SQL safety policy, and bounded read-only
+PostgreSQL replay without weakening the provider-neutral application ports.
 
 ## Architectural style
 
@@ -25,9 +27,12 @@ flowchart LR
     CLI --> ADAPTERS["Concrete adapters"]
     API["FastAPI composition root"] --> CONTROL["Control-plane service"]
     API --> DB["PostgreSQL repository"]
+    API --> AUTH["Project-bound authorizer"]
+    API --> TELEMETRY["Isolated metrics + tracing + safe logs"]
     WORKER["Worker composition root"] --> ORCHESTRATE["Leased worker service"]
     WORKER --> EXECUTOR["Deterministic executor"]
     WORKER --> DB
+    WORKER --> TELEMETRY
     ORCHESTRATE --> RUNNER
     ORCHESTRATE --> COMPARE
     ORCHESTRATE --> DB
@@ -55,14 +60,17 @@ import CLI, persistence, network, telemetry, queue, database, or provider SDKs.
 ```text
 src/llm_eval_control_plane/
 ├── cli.py
+├── observability.py       # isolated metrics, tracing, and safe event schemas
 ├── worker.py             # worker loop, reaper, health, and shutdown
 ├── api/
 │   ├── app.py            # FastAPI routes and safe exception translation
 │   ├── contracts.py      # versioned request and redacted response models
 │   ├── execution.py      # credential-free deterministic API executor
-│   ├── middleware.py     # strict body and request-ID boundary
+│   ├── middleware.py     # authorization, strict body, and request-ID boundary
+│   ├── observability.py  # request spans, metrics, and fixed-schema events
 │   ├── runtime.py        # environment-only API composition root
-│   └── settings.py       # bounded database and server configuration
+│   ├── security.py       # digest-only bearer and project authorization
+│   └── settings.py       # bounded database, auth-file, and server configuration
 ├── application/
 │   ├── ports.py           # target, evaluator, and run-repository protocols
 │   ├── runner.py          # serial in-process orchestration and aggregation
@@ -159,11 +167,12 @@ control exceptions such as cancellation or keyboard interruption.
 
 ## Durable HTTP submission flow
 
-API v1 exposes liveness and readiness, dataset registration and lookup, run
-submission and retrieval, durable job and attempt inspection, cancellation,
-comparison submission, and release-decision retrieval. Collection endpoints use
-bounded `limit` values, opaque keyset cursors, documented exact-name filters, and
-enumerated kind/status filters. Dataset names containing `/` use the slash-safe route
+API v1 exposes liveness and readiness, authenticated Prometheus metrics, dataset
+registration and lookup, run submission and retrieval, durable job and attempt
+inspection, cancellation, comparison submission, and release-decision retrieval.
+Collection endpoints use bounded `limit` values, opaque keyset cursors,
+documented exact-name filters, and enumerated kind/status filters. Dataset names
+containing `/` use the slash-safe route
 `/v1/dataset-revisions/{revision}/{name:path}`. The complete, machine-readable
 contract is committed as
 [`openapi-v1.json`](openapi-v1.json).
@@ -172,12 +181,16 @@ contract is committed as
 sequenceDiagram
     participant Client
     participant Boundary as API boundary
+    participant Auth as Project authorizer
     participant Service as Control-plane service
     participant Store as PostgreSQL repository
     participant Worker as Leased worker
     participant Execute as Executor / comparator
 
-    Client->>Boundary: POST run/comparison + Idempotency-Key
+    Client->>Boundary: bearer + project + POST + key + optional traceparent
+    Boundary->>Boundary: accept one strict W3C parent or start new trace
+    Boundary->>Auth: digest credential + exact project + required scope
+    Auth-->>Boundary: allow or content-safe 401/403
     Boundary->>Boundary: bound body, parse strict JSON, validate model
     Boundary->>Service: effective request with defaults
     Service->>Store: resolve and pin every available dependency
@@ -189,11 +202,12 @@ sequenceDiagram
         Store-->>Service: idempotency conflict
         Service-->>Client: 409 api-error/v1
     else unique insert winner
-        Store-->>Service: queued job
+        Store-->>Service: queued job + private submission trace link
         Service-->>Client: 202 job summary + Location
     end
     Worker->>Store: claim available job with SKIP LOCKED
     Store-->>Worker: payload + private lease token + attempt number
+    Worker->>Worker: start consumer span linked to submission span
     par Until execution finishes
         Worker->>Store: heartbeat and extend lease
     and Execute immutable payload
@@ -213,6 +227,22 @@ replays observe the original job and payload; changed semantics conflict. API
 processes never invoke execution. The idempotency boundary is recorded in
 [ADR 0006](adr/0006-durable-idempotent-http-submissions.md), and the worker
 protocol in [ADR 0007](adr/0007-leased-workers-and-fenced-publication.md).
+
+Authentication runs before request-body parsing or application work. Protected
+`/v1` reads require `control-plane:read`; ordinary mutations require
+`control-plane:write`; cancellation requires `control-plane:cancel`; and
+`/metrics` requires `observability:read`. Every protected request must also
+present the deployment's exact `X-Project-ID`. This is a single-project
+deployment assertion, not a row-level tenant selector. The digest-only bearer
+configuration and telemetry boundary are recorded in
+[ADR 0008](adr/0008-project-bound-auth-and-safe-observability.md).
+
+Request tracing accepts only one strict lowercase W3C `traceparent` version `00`
+value and ignores invalid or duplicate context. The active context is stored as
+private job metadata on the first idempotent submission and is excluded from the
+semantic request digest and public models. A worker creates a new consumer span
+with at most one Link to that context, preserving asynchronous causality without
+pretending that a durable queued job is an HTTP child span.
 
 PostgreSQL is the coordination clock. A claim transaction selects one available
 queued job with `FOR UPDATE SKIP LOCKED`, changes it to `running`, increments its
@@ -248,8 +278,45 @@ digests, timestamps, dataset identity and case count, execution mode, and
 comparison run IDs where applicable. Neither surface returns raw cases, inputs,
 expectations, outputs, SQL, rows, idempotency keys, semantic request digests,
 database URLs, local paths, or exception text. Request and application failures
-use the stable `api-error/v1` envelope with a sanitized or generated request ID;
+use the stable `api-error/v1` envelope with a generated request ID; caller
+request IDs are never retained or reflected;
 non-ready health checks instead return `503` with `health/v1`.
+
+## Observability boundary
+
+`Observability` is dependency-injected at the API and worker composition roots.
+Each instance owns a Prometheus `CollectorRegistry` and OpenTelemetry tracer
+provider, avoiding global provider mutation and cross-test or cross-runtime
+metric leakage. The API instance publishes its registry from the authenticated
+`/metrics` route. The worker instance owns low-cardinality polling,
+job-duration, durable-result, recovery, and readiness instruments, but the
+current production worker has no HTTP scrape listener or host port.
+
+API metrics are deliberately limited to request totals by method, route
+template, and status class; duration by method and route template; errors by
+route template and stable code; in-progress request count; authorization
+decisions by fixed outcome; and persisted queue depth, failed-job count, and
+aggregate input/output usage. The persisted snapshot uses one fixed aggregate
+query and a readiness gauge. Unknown routes, methods, codes, and outcomes
+collapse to bounded fallback values. Resource IDs and raw paths never become
+labels.
+
+API and worker JSON lines use `control-plane-log/v1`. API completion events carry
+only timestamp, service, severity, outcome, bounded duration, generated request ID,
+trace and span IDs, method, route template, status, and optional safe error code.
+Worker lifecycle, recovery, and job-completion events similarly exclude job IDs,
+worker identities, lease tokens, and payload data. Telemetry failures are
+isolated from request and worker correctness.
+
+HTTP server spans use route templates and safe status metadata. Deterministic
+execution creates content-free `evaluation.run`, `evaluation.target.invoke`, and
+`evaluation.evaluator.evaluate` internal spans below the worker consumer span.
+The default exporter emits only fixed `trace.span.completed` JSON envelopes and
+discards every span attribute and event. Spans record no exception events or text.
+Prompts, outputs, expectations, SQL,
+rows, request bodies, authorization material, project and principal identity,
+idempotency keys, semantic request digests, cursors, database configuration, and
+private coordination values are excluded from every telemetry channel.
 
 ## DataBridge vertical slice
 
@@ -367,6 +434,14 @@ non-secret components and a mounted password file. It does not render or log the
 assembled URL. The password is a regular, non-symlink file with a strict size
 limit; `.env.example` contains only non-secret defaults and its path.
 
+The API composition root separately requires a mounted authentication file. Its
+strict `control-plane-auth/v1` document contains one project, ordered principals,
+minimal scopes, and only SHA-256 bearer digests. Raw bearer values are provisioned
+out of band and never enter tracked configuration. Each job may also retain one
+validated W3C `traceparent` as private coordination metadata. That value is not
+part of semantic idempotency or evidence identity, and the first successful
+submission remains authoritative on replay.
+
 ## Trust boundaries
 
 - Dataset lines, target outputs, schemas, and stored bytes are untrusted.
@@ -391,9 +466,14 @@ limit; `.env.example` contains only non-secret defaults and its path.
 - DataBridge run artifacts retain generated SQL but not provider answers,
   returned rows/columns, request IDs, or provider timings. The artifact store is
   therefore still sensitive.
-- The HTTP API is unauthenticated and intended only for loopback development.
-  Compose binds it to `127.0.0.1`; exposing it requires an authenticated gateway,
-  transport security, rate controls, and a defined tenant boundary.
+- The HTTP API authenticates strict bearer credentials against digest-only
+  configuration, authorizes a bounded operation scope, and requires the exact
+  configured `X-Project-ID` before parsing a protected request body. One
+  deployment and database own one project; the header is not row-level
+  multitenancy.
+- Compose binds the API to `127.0.0.1`. Non-loopback deployment still requires a
+  trusted TLS-terminating gateway, request normalization, distributed rate
+  controls, and an isolated deployment for each project.
 - API parsing rejects unsupported media types and encodings, oversized or deeply
   nested bodies, invalid UTF-8, duplicate JSON keys, BOMs, and non-finite values.
   Request collection sizes and derived comparison work are also bounded.
@@ -402,16 +482,22 @@ limit; `.env.example` contains only non-secret defaults and its path.
 - `Idempotency-Key` is an opaque retry identifier, not a secret container. It
   must never contain credentials, prompts, customer identifiers, or other
   sensitive content.
+- Logs, metric labels, spans, events, and links use bounded allowlists. They omit
+  request bodies, evaluation content, identity fields, credentials, semantic
+  request data, cursor values, worker coordination data, and exception text.
 
 ## Current limitations
 
-The API is a local, unauthenticated service with a deterministic simulated
-executor. It has no TLS termination, tenant isolation, provider-backed API
-execution, or request-rate enforcement. Crash recovery intentionally provides
-at-least-once invocation, so real external targets must tolerate duplicate calls
-or use their own idempotency support. A cancellation request cannot undo an
-external effect that already happened.
+The API has a deterministic simulated executor. It has no TLS termination,
+distributed request-rate enforcement, row-level multitenancy, or provider-backed
+API execution. Crash recovery intentionally provides at-least-once invocation,
+so real external targets must tolerate duplicate calls or use their own
+idempotency support. A cancellation request cannot undo an external effect that
+already happened.
 
-A dashboard, OpenTelemetry, cloud infrastructure, Kubernetes, multi-cloud
-abstractions, billing, and arbitrary third-party Python plugins remain outside
-the implemented scope.
+The worker registry is not exposed by a scrape endpoint in the current Compose
+topology, and the fixed JSON span exporter has no external OTLP destination. A
+dashboard, cloud infrastructure, Kubernetes, multi-cloud abstractions, billing, and
+arbitrary third-party Python plugins remain outside the implemented scope. The
+repository does not schedule backups and claims no recovery point or recovery
+time objective.
