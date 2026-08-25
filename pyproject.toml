@@ -24,6 +24,9 @@ dependencies = [
   "fastapi>=0.116,<1",
   "httpx>=0.28,<1",
   "jsonschema>=4.23,<5",
+  "opentelemetry-api>=1.44,<2",
+  "opentelemetry-sdk>=1.44,<2",
+  "prometheus-client>=0.26,<1",
   "psycopg[binary]>=3.3,<4",
   "pydantic>=2.11,<3",
   "rfc8785>=0.1,<1",
@@ -49,6 +52,12 @@ dev = [
   "ruff>=0.11,<1",
   "types-jsonschema>=4.23,<5",
 ]
+security = [
+  "pip-audit==2.10.1",
+]
+
+[tool.uv]
+build-constraint-dependencies = ["hatchling==1.27.0"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/llm_eval_control_plane"]
