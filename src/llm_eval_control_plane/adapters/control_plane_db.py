@@ -5,12 +5,14 @@ from __future__ import annotations
 import base64
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Any, TypeVar
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     Column,
     DateTime,
@@ -319,6 +321,8 @@ runs_table = Table(
     Column("dataset_revision", Integer, nullable=False),
     Column("status", String(32), nullable=False),
     Column("execution_mode", String(32), nullable=False),
+    Column("input_units", BigInteger, nullable=False),
+    Column("output_units", BigInteger, nullable=False),
     Column("document", Text, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
     ForeignKeyConstraint(
@@ -340,6 +344,14 @@ runs_table = Table(
     CheckConstraint(
         "execution_mode IN ('offline_deterministic_fixture', 'offline_mock', 'live')",
         name="ck_control_plane_runs_execution_mode",
+    ),
+    CheckConstraint(
+        "input_units >= 0",
+        name="ck_control_plane_runs_input_units",
+    ),
+    CheckConstraint(
+        "output_units >= 0",
+        name="ck_control_plane_runs_output_units",
     ),
     PrimaryKeyConstraint("run_id", name="pk_control_plane_runs"),
     CheckConstraint(
@@ -455,6 +467,16 @@ class PayloadTooLargeError(ControlPlaneRepositoryError):
     """Raised before persistence when canonical evidence exceeds its bound."""
 
 
+@dataclass(frozen=True, slots=True)
+class OperationalSnapshot:
+    """One fixed-cardinality aggregate view over persisted operational indexes."""
+
+    queued_jobs: int
+    failed_jobs: int
+    input_units: int
+    output_units: int
+
+
 Model = TypeVar("Model", bound=BaseModel)
 
 
@@ -468,6 +490,32 @@ def _model_text(model: BaseModel) -> str:
             exclude_unset=False,
         )
     ).decode("utf-8")
+
+
+def _run_usage(result: RunResult) -> tuple[int, int]:
+    input_units = sum(
+        case.target.response.usage.input_units
+        for case in result.cases
+        if case.target is not None
+    )
+    output_units = sum(
+        case.target.response.usage.output_units
+        for case in result.cases
+        if case.target is not None
+    )
+    if input_units > _MAX_OPERATIONAL_VALUE or output_units > _MAX_OPERATIONAL_VALUE:
+        raise ValueError("run usage exceeds its supported range")
+    return input_units, output_units
+
+
+def _operational_value(value: object) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not 0 <= value <= _MAX_OPERATIONAL_VALUE
+    ):
+        raise CorruptRecordError("Stored operational counters are invalid")
+    return value
 
 
 def _validated_model(
@@ -507,9 +555,10 @@ def _limit(value: int) -> int:
 
 
 _CURSOR_DOMAIN = b"llm-eval-control-plane/keyset-cursor/v1\0"
-_SCHEMA_REVISION = "20260825_0003"
+_SCHEMA_REVISION = "20260825_0004"
 _DEFAULT_MAX_DOCUMENT_BYTES = 64 * 1024 * 1024
 _MAX_JOB_PAYLOAD_BYTES = 4 * 1024 * 1024
+_MAX_OPERATIONAL_VALUE = 2**63 - 1
 _MIGRATION_WORKER_ID = "phase5-migration"
 _MIGRATION_LEASE_TOKEN = "phase5-migration-token-000000000000"  # noqa: S105
 _SAFE_CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
@@ -683,6 +732,48 @@ class SqlAlchemyControlPlaneRepository:
         except SQLAlchemyError:
             return False
         return revision == _SCHEMA_REVISION
+
+    def operational_snapshot(self) -> OperationalSnapshot:
+        """Return fixed aggregate counters without loading private evidence."""
+        statement = select(
+            select(func.count())
+            .select_from(jobs_table)
+            .where(jobs_table.c.status == JobStatus.QUEUED.value)
+            .scalar_subquery()
+            .label("queued_jobs"),
+            select(func.count())
+            .select_from(jobs_table)
+            .where(jobs_table.c.status == JobStatus.FAILED.value)
+            .scalar_subquery()
+            .label("failed_jobs"),
+            select(
+                func.coalesce(func.sum(runs_table.c.input_units), 0).cast(BigInteger)
+            )
+            .scalar_subquery()
+            .label("input_units"),
+            select(
+                func.coalesce(func.sum(runs_table.c.output_units), 0).cast(BigInteger)
+            )
+            .scalar_subquery()
+            .label("output_units"),
+        )
+        try:
+            with self._engine.connect() as connection:
+                row = connection.execute(statement).mappings().one()
+        except SQLAlchemyError as error:
+            raise ControlPlaneRepositoryError(
+                "Could not load operational counters"
+            ) from error
+        queued_jobs, failed_jobs, input_units, output_units = tuple(
+            _operational_value(row[name])
+            for name in ("queued_jobs", "failed_jobs", "input_units", "output_units")
+        )
+        return OperationalSnapshot(
+            queued_jobs=queued_jobs,
+            failed_jobs=failed_jobs,
+            input_units=input_units,
+            output_units=output_units,
+        )
 
     def put_dataset(self, record: DatasetRecord) -> DatasetRecord:
         document = _model_text(record.dataset)
@@ -1832,6 +1923,12 @@ class SqlAlchemyControlPlaneRepository:
         token = _lease_token_value(lease_token)
         document = _model_text(record.result)
         self._require_document_size(document)
+        try:
+            input_units, output_units = _run_usage(record.result)
+        except ValueError:
+            raise PayloadTooLargeError(
+                "Run usage exceeds its supported limit"
+            ) from None
         values = {
             "run_id": record.run_id,
             "result_digest": record.result.result_digest,
@@ -1839,6 +1936,8 @@ class SqlAlchemyControlPlaneRepository:
             "dataset_revision": record.result.dataset.revision,
             "status": record.result.status.value,
             "execution_mode": record.result.execution_mode.value,
+            "input_units": input_units,
+            "output_units": output_units,
             "document": document,
             "created_at": record.created_at,
         }
@@ -2082,6 +2181,12 @@ class SqlAlchemyControlPlaneRepository:
     def put_run(self, record: RunRecord) -> RunRecord:
         document = _model_text(record.result)
         self._require_document_size(document)
+        try:
+            input_units, output_units = _run_usage(record.result)
+        except ValueError:
+            raise PayloadTooLargeError(
+                "Run usage exceeds its supported limit"
+            ) from None
         values = {
             "run_id": record.run_id,
             "result_digest": record.result.result_digest,
@@ -2089,6 +2194,8 @@ class SqlAlchemyControlPlaneRepository:
             "dataset_revision": record.result.dataset.revision,
             "status": record.result.status.value,
             "execution_mode": record.result.execution_mode.value,
+            "input_units": input_units,
+            "output_units": output_units,
             "document": document,
             "created_at": record.created_at,
         }
@@ -2396,6 +2503,10 @@ class SqlAlchemyControlPlaneRepository:
             RunResult,
             max_document_bytes=self._max_document_bytes,
         )
+        try:
+            input_units, output_units = _run_usage(result)
+        except ValueError as error:
+            raise CorruptRecordError("Stored control-plane run is invalid") from error
         if (
             row["run_id"],
             row["result_digest"],
@@ -2403,6 +2514,8 @@ class SqlAlchemyControlPlaneRepository:
             row["dataset_revision"],
             row["status"],
             row["execution_mode"],
+            row["input_units"],
+            row["output_units"],
         ) != (
             result.run_id,
             result.result_digest,
@@ -2410,6 +2523,8 @@ class SqlAlchemyControlPlaneRepository:
             result.dataset.revision,
             result.status.value,
             result.execution_mode.value,
+            input_units,
+            output_units,
         ):
             raise CorruptRecordError(
                 "Stored run indexes do not match canonical evidence"

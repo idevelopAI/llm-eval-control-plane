@@ -128,6 +128,21 @@ def execute(
     )
 
 
+def run_usage(result: RunResult) -> tuple[int, int]:
+    return (
+        sum(
+            case.target.response.usage.input_units
+            for case in result.cases
+            if case.target is not None
+        ),
+        sum(
+            case.target.response.usage.output_units
+            for case in result.cases
+            if case.target is not None
+        ),
+    )
+
+
 def decision(
     dataset_version: DatasetVersion,
     baseline: RunResult,
@@ -319,6 +334,108 @@ def test_migration_matches_metadata_and_readiness(engine: Engine) -> None:
     with engine.connect() as connection:
         context = MigrationContext.configure(connection)
         assert compare_metadata(context, CONTROL_PLANE_METADATA) == []
+
+
+def test_operational_snapshot_uses_persisted_fixed_cardinality_aggregates(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+) -> None:
+    assert repository.operational_snapshot() == control_plane_db.OperationalSnapshot(
+        queued_jobs=0,
+        failed_jobs=0,
+        input_units=0,
+        output_units=0,
+    )
+
+    data = dataset()
+    repository.put_dataset(DatasetRecord(dataset=data, created_at=NOW))
+    direct_result = execute(data, run_id="run-operational-direct")
+    completed_result = execute(data, run_id="run-operational-completed")
+    repository.put_run(RunRecord(result=direct_result, created_at=NOW))
+
+    queued = job(
+        job_id="job-operational-queued",
+        idempotency_key="request-operational-queued",
+        resource_id="run-operational-queued",
+    )
+    repository.begin_job(queued, run_payload(data))
+
+    failed = job(
+        job_id="job-operational-failed",
+        idempotency_key="request-operational-failed",
+        resource_id="run-operational-failed",
+    )
+    activate_job(engine, repository, failed, run_payload(data))
+    repository.fail_job(
+        failed.job_id,
+        1,
+        LEASE_TOKEN_A,
+        error_code="execution_failed",
+    )
+
+    completed = job(
+        job_id="job-operational-completed",
+        idempotency_key="request-operational-completed",
+        resource_id=completed_result.run_id,
+    )
+    activate_job(engine, repository, completed, run_payload(data))
+    repository.complete_run(
+        completed.job_id,
+        RunRecord(result=completed_result, created_at=NOW),
+        attempt_number=1,
+        lease_token=LEASE_TOKEN_A,
+    )
+
+    direct_input, direct_output = run_usage(direct_result)
+    completed_input, completed_output = run_usage(completed_result)
+    assert repository.operational_snapshot() == control_plane_db.OperationalSnapshot(
+        queued_jobs=1,
+        failed_jobs=1,
+        input_units=direct_input + completed_input,
+        output_units=direct_output + completed_output,
+    )
+    with engine.connect() as connection:
+        rows = {
+            row["run_id"]: (row["input_units"], row["output_units"])
+            for row in connection.execute(
+                select(
+                    runs_table.c.run_id,
+                    runs_table.c.input_units,
+                    runs_table.c.output_units,
+                )
+            ).mappings()
+        }
+    assert rows == {
+        direct_result.run_id: (direct_input, direct_output),
+        completed_result.run_id: (completed_input, completed_output),
+    }
+
+
+def test_run_usage_indexes_are_nonnegative_and_match_canonical_evidence(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+) -> None:
+    data = dataset()
+    repository.put_dataset(DatasetRecord(dataset=data, created_at=NOW))
+    result = execute(data, run_id="run-usage-integrity")
+    repository.put_run(RunRecord(result=result, created_at=NOW))
+
+    with raises(IntegrityError), engine.begin() as connection:
+        connection.execute(
+            update(runs_table)
+            .where(runs_table.c.run_id == result.run_id)
+            .values(input_units=-1)
+        )
+
+    with engine.begin() as connection:
+        connection.execute(
+            update(runs_table)
+            .where(runs_table.c.run_id == result.run_id)
+            .values(output_units=runs_table.c.output_units + 1)
+        )
+    with raises(CorruptRecordError, match="indexes") as captured:
+        repository.get_run(result.run_id)
+    assert result.run_id not in str(captured.value)
 
 
 def test_dataset_is_append_only_idempotent_and_digest_is_not_unique(
