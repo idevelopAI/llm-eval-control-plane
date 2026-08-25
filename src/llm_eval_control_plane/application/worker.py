@@ -16,6 +16,7 @@ from llm_eval_control_plane.application.control_plane import (
     ControlPlaneRepository,
     ControlPlaneStoreError,
     EvaluationExecutor,
+    ExecutionContract,
     StoreConflictError,
     StoreLeaseLostError,
     StoreNotFoundError,
@@ -23,8 +24,10 @@ from llm_eval_control_plane.application.control_plane import (
     validate_execution_contract,
     validate_run_result,
 )
+from llm_eval_control_plane.domain.comparison import ReleaseDecision
 from llm_eval_control_plane.domain.control_plane import (
     ComparisonJobPayload,
+    DatasetRecord,
     JobAttemptStatus,
     JobStatus,
     ReleaseDecisionRecord,
@@ -239,31 +242,20 @@ class WorkerService:
     async def _build_evidence(self, claim: ClaimedJob) -> Evidence:
         payload = claim.payload
         if isinstance(payload, RunJobPayload):
-            dataset = self._repository.get_dataset(
-                payload.dataset.name,
-                payload.dataset.revision,
+            dataset = await asyncio.to_thread(
+                _load_run_dataset,
+                repository=self._repository,
+                payload=payload,
             )
-            if dataset.dataset.artifact_ref != payload.dataset:
-                raise ValueError("stored dataset does not match the worker payload")
             scenario_overrides = {
                 item.case_id: item.scenario for item in payload.scenario_overrides
             }
-            contract = self._executor.validate(
-                target_name=payload.target_name,
-                target_revision=payload.target_revision,
-                adapter=payload.adapter,
-                evaluator_names=payload.evaluator_names,
+            contract = await asyncio.to_thread(
+                _resolve_run_contract,
+                executor=self._executor,
+                payload=payload,
                 scenario_overrides=scenario_overrides,
             )
-            validate_execution_contract(
-                contract,
-                target_name=payload.target_name,
-                target_revision=payload.target_revision,
-                adapter=payload.adapter,
-                evaluator_names=payload.evaluator_names,
-            )
-            if contract != payload.execution_contract:
-                raise ValueError("executor contract changed after submission")
             result = await self._executor.execute(
                 run_id=claim.job.resource_id,
                 dataset=dataset.dataset,
@@ -273,42 +265,21 @@ class WorkerService:
                 evaluator_names=payload.evaluator_names,
                 scenario_overrides=scenario_overrides,
             )
-            validate_run_result(
+            await asyncio.to_thread(
+                validate_run_result,
                 result,
                 resource_id=claim.job.resource_id,
                 dataset=dataset,
-                contract=payload.execution_contract,
+                contract=contract,
             )
             return RunRecord(result=result, created_at=self._now())
 
         if not isinstance(payload, ComparisonJobPayload):
             raise ValueError("worker payload kind is unsupported")
-        dataset = self._repository.get_dataset(
-            payload.dataset.name,
-            payload.dataset.revision,
-        )
-        baseline = self._repository.get_run(payload.baseline_run_id)
-        candidate = self._repository.get_run(payload.candidate_run_id)
-        if (
-            baseline.result.result_digest != payload.baseline_result_digest
-            or candidate.result.result_digest != payload.candidate_result_digest
-        ):
-            raise ValueError("comparison inputs changed after submission")
-        validate_comparison_inputs(
-            dataset_name=payload.dataset.name,
-            dataset_revision=payload.dataset.revision,
-            baseline_run_id=payload.baseline_run_id,
-            candidate_run_id=payload.candidate_run_id,
-            spec=payload.spec,
-            dataset=dataset,
-            baseline=baseline,
-            candidate=candidate,
-        )
-        decision = compare_runs(
-            spec=payload.spec,
-            dataset=dataset.dataset,
-            baseline=baseline.result,
-            candidate=candidate.result,
+        decision = await asyncio.to_thread(
+            _compare_job,
+            repository=self._repository,
+            payload=payload,
         )
         return ReleaseDecisionRecord(
             decision_id=claim.job.resource_id,
@@ -479,6 +450,82 @@ class WorkerService:
             pass
         except Exception:
             pass
+
+
+def _load_run_dataset(
+    *,
+    repository: ControlPlaneRepository,
+    payload: RunJobPayload,
+) -> DatasetRecord:
+    """Load and verify pinned run input away from the heartbeat event loop."""
+    dataset = repository.get_dataset(
+        payload.dataset.name,
+        payload.dataset.revision,
+    )
+    if dataset.dataset.artifact_ref != payload.dataset:
+        raise ValueError("stored dataset does not match the worker payload")
+    return dataset
+
+
+def _resolve_run_contract(
+    *,
+    executor: EvaluationExecutor,
+    payload: RunJobPayload,
+    scenario_overrides: dict[str, str],
+) -> ExecutionContract:
+    """Resolve and verify synchronous executor metadata off the heartbeat loop."""
+    contract = executor.validate(
+        target_name=payload.target_name,
+        target_revision=payload.target_revision,
+        adapter=payload.adapter,
+        evaluator_names=payload.evaluator_names,
+        scenario_overrides=scenario_overrides,
+    )
+    validate_execution_contract(
+        contract,
+        target_name=payload.target_name,
+        target_revision=payload.target_revision,
+        adapter=payload.adapter,
+        evaluator_names=payload.evaluator_names,
+    )
+    if contract != payload.execution_contract:
+        raise ValueError("executor contract changed after submission")
+    return contract
+
+
+def _compare_job(
+    *,
+    repository: ControlPlaneRepository,
+    payload: ComparisonJobPayload,
+) -> ReleaseDecision:
+    """Load, validate, and compare evidence without starving lease heartbeats."""
+    dataset = repository.get_dataset(
+        payload.dataset.name,
+        payload.dataset.revision,
+    )
+    baseline = repository.get_run(payload.baseline_run_id)
+    candidate = repository.get_run(payload.candidate_run_id)
+    if (
+        baseline.result.result_digest != payload.baseline_result_digest
+        or candidate.result.result_digest != payload.candidate_result_digest
+    ):
+        raise ValueError("comparison inputs changed after submission")
+    validate_comparison_inputs(
+        dataset_name=payload.dataset.name,
+        dataset_revision=payload.dataset.revision,
+        baseline_run_id=payload.baseline_run_id,
+        candidate_run_id=payload.candidate_run_id,
+        spec=payload.spec,
+        dataset=dataset,
+        baseline=baseline,
+        candidate=candidate,
+    )
+    return compare_runs(
+        spec=payload.spec,
+        dataset=dataset.dataset,
+        baseline=baseline.result,
+        candidate=candidate.result,
+    )
 
 
 __all__ = [

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 
 from llm_eval_control_plane.adapters.fake_target import (
@@ -68,16 +69,14 @@ class DeterministicEvaluationExecutor:
             scenario_overrides=scenario_overrides,
         )
         kinds = self._evaluator_kinds(evaluator_names)
-        return await InProcessRunner(clock=DeterministicStepClock()).run(
+        return await asyncio.to_thread(
+            _run_evaluation,
             run_id=run_id,
             dataset=dataset,
-            target=DeterministicFakeTarget(
-                name=target_name,
-                revision=target_revision,
-                scenario_overrides=scenario_overrides,
-            ),
-            evaluators=build_evaluators(kinds),
-            execution_mode=ExecutionMode.OFFLINE_MOCK,
+            target_name=target_name,
+            target_revision=target_revision,
+            evaluator_kinds=kinds,
+            scenario_overrides=scenario_overrides,
         )
 
     @staticmethod
@@ -88,6 +87,31 @@ class DeterministicEvaluationExecutor:
             return tuple(BuiltInEvaluatorKind(name) for name in evaluator_names)
         except ValueError as error:
             raise ValueError("unsupported evaluator") from error
+
+
+def _run_evaluation(
+    *,
+    run_id: str,
+    dataset: DatasetVersion,
+    target_name: str,
+    target_revision: int,
+    evaluator_kinds: tuple[BuiltInEvaluatorKind, ...],
+    scenario_overrides: Mapping[str, str],
+) -> RunResult:
+    """Run the synchronous deterministic workload outside the worker event loop."""
+    return asyncio.run(
+        InProcessRunner(clock=DeterministicStepClock()).run(
+            run_id=run_id,
+            dataset=dataset,
+            target=DeterministicFakeTarget(
+                name=target_name,
+                revision=target_revision,
+                scenario_overrides=scenario_overrides,
+            ),
+            evaluators=build_evaluators(evaluator_kinds),
+            execution_mode=ExecutionMode.OFFLINE_MOCK,
+        )
+    )
 
 
 __all__ = ["DeterministicEvaluationExecutor"]

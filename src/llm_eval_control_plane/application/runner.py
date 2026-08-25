@@ -41,7 +41,7 @@ class RunnerConfigurationError(ValueError):
 
 
 class InProcessRunner:
-    """Run one dataset serially before durable queues are introduced."""
+    """Run one claimed dataset serially within the current process."""
 
     def __init__(self, *, clock: Clock = time.perf_counter) -> None:
         self._clock = clock
