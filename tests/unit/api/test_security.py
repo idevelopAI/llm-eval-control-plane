@@ -325,6 +325,44 @@ def test_valid_credentials_authorize_all_explicit_scopes() -> None:
     assert failure.status == 401
 
 
+def test_every_protected_resource_has_one_exact_scope() -> None:
+    resources = (
+        ("/v1/datasets", "POST", ControlPlaneScope.WRITE),
+        ("/v1/datasets", "GET", ControlPlaneScope.READ),
+        ("/v1/dataset-revisions/1/example", "GET", ControlPlaneScope.READ),
+        ("/v1/runs", "POST", ControlPlaneScope.WRITE),
+        ("/v1/runs", "GET", ControlPlaneScope.READ),
+        ("/v1/runs/run-one", "GET", ControlPlaneScope.READ),
+        ("/v1/jobs", "GET", ControlPlaneScope.READ),
+        ("/v1/jobs/job-one", "GET", ControlPlaneScope.READ),
+        ("/v1/jobs/job-one/attempts", "GET", ControlPlaneScope.READ),
+        (
+            "/v1/jobs/job-one/cancellation",
+            "POST",
+            ControlPlaneScope.CANCEL,
+        ),
+        ("/v1/comparisons", "POST", ControlPlaneScope.WRITE),
+        ("/v1/release-decisions", "GET", ControlPlaneScope.READ),
+        (
+            "/v1/release-decisions/decision-one",
+            "GET",
+            ControlPlaneScope.READ,
+        ),
+        ("/metrics", "GET", ControlPlaneScope.OBSERVABILITY_READ),
+    )
+
+    for path, method, required_scope in resources:
+        for granted_scope in ControlPlaneScope:
+            authorizer = ControlPlaneAuthorizer(_configuration(scopes=(granted_scope,)))
+            result = authorizer.authorize(_scope(path, method=method))
+            if granted_scope is required_scope:
+                assert result is None, (path, method, granted_scope)
+            else:
+                failure = _failure(result)
+                assert failure.status == 403, (path, method, granted_scope)
+                assert failure.code == "permission_denied"
+
+
 def test_invalid_credentials_have_one_safe_401_and_never_retain_state() -> None:
     authorizer = ControlPlaneAuthorizer(_configuration())
     invalid_headers: tuple[list[tuple[bytes, bytes]], ...] = (

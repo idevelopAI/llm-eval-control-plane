@@ -11,8 +11,19 @@ from llm_eval_control_plane.api.middleware import (
     ApiBoundaryMiddleware,
     request_id_from_scope,
 )
+from llm_eval_control_plane.api.security import ControlPlaneScope
 
-from .conftest import ApiHarness
+from .conftest import (
+    AUTH_HEADERS,
+    ApiHarness,
+    build_authorizer,
+    build_telemetry,
+)
+
+_AUTH_HEADER_BYTES = [
+    (name.lower().encode("ascii"), value.encode("ascii"))
+    for name, value in AUTH_HEADERS.items()
+]
 
 
 def test_idempotency_header_is_required_and_never_reflected(
@@ -35,6 +46,86 @@ def test_idempotency_header_is_required_and_never_reflected(
             "type": "string_pattern_mismatch",
         }
     ]
+
+
+def test_authentication_precedes_json_parsing_and_health_stays_public(
+    api_harness: ApiHarness,
+) -> None:
+    sentinel = b"private-unauthenticated-body-sentinel"
+    with TestClient(
+        create_app(
+            service=api_harness.service,
+            authorizer=build_authorizer(),
+            telemetry=build_telemetry(),
+        ),
+        raise_server_exceptions=False,
+    ) as client:
+        missing = client.post(
+            "/v1/datasets",
+            content=b'{"broken":"' + sentinel,
+            headers={"Content-Type": "application/json"},
+        )
+        wrong_project = client.get(
+            "/v1/jobs",
+            headers={
+                "Authorization": AUTH_HEADERS["Authorization"],
+                "X-Project-ID": "project-other",
+            },
+        )
+        health = client.get("/health/live")
+
+    assert missing.status_code == 401
+    assert missing.json()["error"]["code"] == "authentication_required"
+    assert missing.headers["www-authenticate"] == "Bearer"
+    assert sentinel.decode() not in missing.text
+    assert wrong_project.status_code == 403
+    assert wrong_project.json()["error"]["code"] == "permission_denied"
+    assert health.status_code == 200
+
+
+def test_read_and_observability_scopes_are_enforced_independently(
+    api_harness: ApiHarness,
+) -> None:
+    with TestClient(
+        create_app(
+            service=api_harness.service,
+            authorizer=build_authorizer((ControlPlaneScope.READ,)),
+            telemetry=build_telemetry(),
+        ),
+        headers=AUTH_HEADERS,
+        raise_server_exceptions=False,
+    ) as reader:
+        listed = reader.get("/v1/jobs")
+        mutation = reader.post(
+            "/v1/datasets",
+            content=b"not-json",
+            headers={"Content-Type": "application/json"},
+        )
+        canceled = reader.post(
+            "/v1/jobs/missing/cancellation",
+            json={"reason": "requested"},
+        )
+        reader_metrics = reader.get("/metrics")
+
+    with TestClient(
+        create_app(
+            service=api_harness.service,
+            authorizer=build_authorizer((ControlPlaneScope.OBSERVABILITY_READ,)),
+            telemetry=build_telemetry(),
+        ),
+        headers=AUTH_HEADERS,
+        raise_server_exceptions=False,
+    ) as observer:
+        metrics = observer.get("/metrics")
+        observer_api = observer.get("/v1/jobs")
+
+    assert listed.status_code == 200
+    assert mutation.status_code == canceled.status_code == 403
+    assert reader_metrics.status_code == 403
+    assert metrics.status_code == 200
+    assert metrics.headers["content-type"].startswith("text/plain")
+    assert b"control_plane_http_requests_total" in metrics.content
+    assert observer_api.status_code == 403
 
 
 def test_strict_json_rejects_duplicate_keys_non_finite_numbers_and_bom(
@@ -132,7 +223,13 @@ def test_body_limit_and_collection_bounds_are_stable(
     dataset_body: dict[str, object],
 ) -> None:
     with TestClient(
-        create_app(service=api_harness.service, max_body_bytes=32),
+        create_app(
+            service=api_harness.service,
+            authorizer=build_authorizer(),
+            telemetry=build_telemetry(),
+            max_body_bytes=32,
+        ),
+        headers=AUTH_HEADERS,
         raise_server_exceptions=False,
     ) as client:
         response = client.post(
@@ -260,7 +357,12 @@ def test_chunked_strict_json_and_size_checks_cover_the_full_stream(
         limit: int,
         headers: list[tuple[bytes, bytes]] | None = None,
     ) -> list[Message]:
-        app = create_app(service=api_harness.service, max_body_bytes=limit)
+        app = create_app(
+            service=api_harness.service,
+            authorizer=build_authorizer(),
+            telemetry=build_telemetry(),
+            max_body_bytes=limit,
+        )
         messages: list[Message] = [
             {
                 "type": "http.request",
@@ -286,7 +388,10 @@ def test_chunked_strict_json_and_size_checks_cover_the_full_stream(
             "path": "/v1/datasets",
             "raw_path": b"/v1/datasets",
             "query_string": b"",
-            "headers": headers or [(b"content-type", b"application/json")],
+            "headers": [
+                *(headers or [(b"content-type", b"application/json")]),
+                *_AUTH_HEADER_BYTES,
+            ],
             "client": ("127.0.0.1", 1),
             "server": ("testserver", 80),
             "root_path": "",
@@ -344,7 +449,11 @@ def test_boundary_handles_non_http_scopes_and_replays_one_bounded_body() -> None
         )
         await send({"type": "http.response.body", "body": b"", "more_body": False})
 
-    middleware = ApiBoundaryMiddleware(downstream, max_body_bytes=32)
+    middleware = ApiBoundaryMiddleware(
+        downstream,
+        max_body_bytes=32,
+        authorizer=build_authorizer(),
+    )
 
     async def invoke() -> None:
         async def receive() -> Message:
@@ -384,7 +493,11 @@ def test_boundary_helpers_fail_closed_on_invalid_protocol_values() -> None:
 
     for value in (0, -1, True):
         with raises(ValueError, match="body size"):
-            ApiBoundaryMiddleware(downstream, max_body_bytes=value)
+            ApiBoundaryMiddleware(
+                downstream,
+                max_body_bytes=value,
+                authorizer=build_authorizer(),
+            )
 
     assert request_id_from_scope(cast(Scope, {})) == "request_unknown"
     assert ApiBoundaryMiddleware._is_json_content_type(b"\xff") is False

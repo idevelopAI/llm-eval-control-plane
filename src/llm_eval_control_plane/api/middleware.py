@@ -8,6 +8,11 @@ import secrets
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from llm_eval_control_plane.api.observability import set_error_code
+from llm_eval_control_plane.api.security import (
+    ControlPlaneAuthorizer,
+    principal_from_scope,
+)
 from llm_eval_control_plane.domain.canonical import CanonicalJsonError, parse_json
 
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -44,11 +49,20 @@ def error_document(
 class ApiBoundaryMiddleware:
     """Limit and strictly validate JSON before framework deserialization."""
 
-    def __init__(self, app: ASGIApp, *, max_body_bytes: int) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        max_body_bytes: int,
+        authorizer: ControlPlaneAuthorizer,
+    ) -> None:
         if type(max_body_bytes) is not int or max_body_bytes <= 0:
             raise ValueError("Maximum request body size must be positive")
+        if not isinstance(authorizer, ControlPlaneAuthorizer):
+            raise TypeError("Control-plane authorizer is required")
         self._app = app
         self._max_body_bytes = max_body_bytes
+        self._authorizer = authorizer
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -72,8 +86,30 @@ class ApiBoundaryMiddleware:
                 message["headers"] = response_headers
             await send(message)
 
+        authorization_failure = self._authorizer.authorize(scope)
+        if authorization_failure is not None:
+            _set_auth_outcome(
+                scope,
+                "invalid" if authorization_failure.status == 401 else "denied",
+            )
+            set_error_code(scope, authorization_failure.code)
+            auth_response = JSONResponse(
+                status_code=authorization_failure.status,
+                headers=dict(authorization_failure.headers),
+                content=error_document(
+                    code=authorization_failure.code,
+                    message=authorization_failure.message,
+                    request_id=request_id,
+                ),
+            )
+            await auth_response(scope, receive, send_with_request_id)
+            return
+        if principal_from_scope(scope) is not None:
+            _set_auth_outcome(scope, "allowed")
+
         if scope.get("method") in _BODY_METHODS:
             failure, buffered = await self._validated_body(
+                scope=scope,
                 headers=headers,
                 receive=receive,
                 request_id=request_id,
@@ -103,6 +139,7 @@ class ApiBoundaryMiddleware:
     async def _validated_body(
         self,
         *,
+        scope: Scope,
         headers: list[tuple[bytes, bytes]],
         receive: Receive,
         request_id: str,
@@ -114,6 +151,7 @@ class ApiBoundaryMiddleware:
                 code="invalid_request",
                 message="Request headers are invalid",
                 request_id=request_id,
+                scope=scope,
             ), None
         if content_lengths:
             try:
@@ -126,6 +164,7 @@ class ApiBoundaryMiddleware:
                     code="invalid_request",
                     message="Request headers are invalid",
                     request_id=request_id,
+                    scope=scope,
                 ), None
             if declared_size > self._max_body_bytes:
                 return self._error(
@@ -133,6 +172,7 @@ class ApiBoundaryMiddleware:
                     code="request_body_too_large",
                     message="Request body exceeds the configured limit",
                     request_id=request_id,
+                    scope=scope,
                 ), None
 
         if self._header_values(headers, b"content-encoding"):
@@ -141,6 +181,7 @@ class ApiBoundaryMiddleware:
                 code="unsupported_content_encoding",
                 message="Encoded request bodies are not supported",
                 request_id=request_id,
+                scope=scope,
             ), None
 
         content_types = self._header_values(headers, b"content-type")
@@ -150,6 +191,7 @@ class ApiBoundaryMiddleware:
                 code="unsupported_media_type",
                 message="Content-Type must be application/json",
                 request_id=request_id,
+                scope=scope,
             ), None
 
         chunks: list[bytes] = []
@@ -162,6 +204,7 @@ class ApiBoundaryMiddleware:
                     code="invalid_request",
                     message="Request body could not be read",
                     request_id=request_id,
+                    scope=scope,
                 ), None
             chunk = message.get("body", b"")
             received += len(chunk)
@@ -171,6 +214,7 @@ class ApiBoundaryMiddleware:
                     code="request_body_too_large",
                     message="Request body exceeds the configured limit",
                     request_id=request_id,
+                    scope=scope,
                 ), None
             chunks.append(chunk)
             if not message.get("more_body", False):
@@ -184,6 +228,7 @@ class ApiBoundaryMiddleware:
                 code="invalid_json",
                 message="Request body is not valid strict JSON",
                 request_id=request_id,
+                scope=scope,
             ), None
         return None, body
 
@@ -223,7 +268,9 @@ class ApiBoundaryMiddleware:
         code: str,
         message: str,
         request_id: str,
+        scope: Scope,
     ) -> JSONResponse:
+        set_error_code(scope, code)
         return JSONResponse(
             status_code=status,
             content=error_document(
@@ -234,4 +281,22 @@ class ApiBoundaryMiddleware:
         )
 
 
-__all__ = ["ApiBoundaryMiddleware", "error_document", "request_id_from_scope"]
+def auth_outcome_from_scope(scope: Scope) -> str | None:
+    """Return one fixed authentication outcome for bounded metrics."""
+    state = scope.get("state")
+    value = state.get("auth_outcome") if isinstance(state, dict) else None
+    return value if value in {"allowed", "denied", "invalid"} else None
+
+
+def _set_auth_outcome(scope: Scope, outcome: str) -> None:
+    state = scope.setdefault("state", {})
+    if isinstance(state, dict):
+        state["auth_outcome"] = outcome
+
+
+__all__ = [
+    "ApiBoundaryMiddleware",
+    "auth_outcome_from_scope",
+    "error_document",
+    "request_id_from_scope",
+]

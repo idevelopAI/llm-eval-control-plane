@@ -8,10 +8,33 @@ from pytest import raises
 from llm_eval_control_plane.api.settings import (
     RuntimeConfigurationError,
     WorkerSettings,
+    authentication_file_from_environment,
     database_url_from_environment,
     max_body_bytes_from_environment,
     worker_settings_from_environment,
 )
+
+
+def test_authentication_file_path_is_required_absolute_and_content_safe() -> None:
+    assert authentication_file_from_environment(
+        {"CONTROL_PLANE_AUTH_FILE": "/run/secrets/control-plane-auth"}
+    ) == Path("/run/secrets/control-plane-auth")
+
+    sentinel = "private-auth-path"
+    for value in (
+        None,
+        "",
+        sentinel,
+        "/",
+        "/run/secrets/",
+        f"/run/../{sentinel}",
+        f"/run/{sentinel}\nvalue",
+        f"/{'x' * 4_096}",
+    ):
+        environment = {} if value is None else {"CONTROL_PLANE_AUTH_FILE": value}
+        with raises(RuntimeConfigurationError) as captured:
+            authentication_file_from_environment(environment)
+        assert sentinel not in str(captured.value)
 
 
 def test_direct_postgres_url_is_validated_and_masks_its_password() -> None:

@@ -41,6 +41,12 @@ from llm_eval_control_plane.api.middleware import (
     error_document,
     request_id_from_scope,
 )
+from llm_eval_control_plane.api.observability import (
+    ApiObservabilityMiddleware,
+    current_traceparent,
+    set_error_code,
+)
+from llm_eval_control_plane.api.security import ControlPlaneAuthorizer
 from llm_eval_control_plane.application.control_plane import (
     ComparisonSubmission,
     ControlPlaneService,
@@ -56,6 +62,7 @@ from llm_eval_control_plane.application.control_plane import (
 )
 from llm_eval_control_plane.domain.comparison import ReleaseStatus
 from llm_eval_control_plane.domain.control_plane import JobKind, JobStatus
+from llm_eval_control_plane.observability import Observability
 
 _DEFAULT_MAX_BODY_BYTES = 4 * 1024 * 1024
 _IDEMPOTENCY_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]*$"
@@ -113,6 +120,8 @@ JobStatusQuery = Annotated[JobStatus | None, Query()]
 ReleaseStatusQuery = Annotated[ReleaseStatus | None, Query()]
 
 _ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
+    401: {"model": ApiErrorDocument, "description": "Authentication required"},
+    403: {"model": ApiErrorDocument, "description": "Permission denied"},
     400: {"model": ApiErrorDocument, "description": "Invalid request"},
     404: {"model": ApiErrorDocument, "description": "Resource not found"},
     409: {"model": ApiErrorDocument, "description": "Immutable conflict"},
@@ -136,19 +145,26 @@ _JOB_LOCATION_HEADERS: dict[str, dict[str, object]] = {
 def create_app(
     *,
     service: ControlPlaneService,
+    authorizer: ControlPlaneAuthorizer,
+    telemetry: Observability,
     max_body_bytes: int = _DEFAULT_MAX_BODY_BYTES,
 ) -> FastAPI:
     """Build an API with injected use cases and no implicit schema mutation."""
     app = FastAPI(
         title="LLM Evaluation Control Plane",
         summary="Durable, content-addressed evaluation and release decisions",
-        version="1.1.0",
+        version="1.2.0",
         openapi_url="/openapi.json",
         docs_url="/docs",
         redoc_url=None,
         swagger_ui_parameters={"displayOperationId": True},
     )
-    app.add_middleware(ApiBoundaryMiddleware, max_body_bytes=max_body_bytes)
+    app.add_middleware(
+        ApiBoundaryMiddleware,
+        max_body_bytes=max_body_bytes,
+        authorizer=authorizer,
+    )
+    app.add_middleware(ApiObservabilityMiddleware, telemetry=telemetry)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(
@@ -257,11 +273,17 @@ def create_app(
         responses={503: {"model": HealthResponse, "description": "Not ready"}},
         tags=["health"],
     )
-    async def readiness(response: Response) -> HealthResponse:
+    async def readiness(request: Request, response: Response) -> HealthResponse:
         if service.ready():
             return HealthResponse(status="ok")
+        set_error_code(request.scope, "readiness_unavailable")
         response.status_code = 503
         return HealthResponse(status="unavailable")
+
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics() -> Response:
+        document = telemetry.render_metrics()
+        return Response(content=document.body, media_type=document.content_type)
 
     @app.post(
         "/v1/datasets",
@@ -340,6 +362,7 @@ def create_app(
     )
     async def submit_run(
         body: RunCreateRequest,
+        request: Request,
         response: Response,
         idempotency_key: IdempotencyHeader,
     ) -> RunSubmissionResponse:
@@ -353,6 +376,7 @@ def create_app(
                 adapter=body.adapter,
                 evaluator_names=tuple(item.value for item in body.evaluators),
                 scenario_overrides=body.scenario_overrides,
+                traceparent=current_traceparent(),
             )
         )
         response.status_code = _submission_status(outcome)
@@ -504,6 +528,7 @@ def create_app(
     )
     async def submit_comparison(
         body: ComparisonCreateRequest,
+        request: Request,
         response: Response,
         idempotency_key: IdempotencyHeader,
     ) -> ComparisonSubmissionResponse:
@@ -515,6 +540,7 @@ def create_app(
                 baseline_run_id=body.baseline_run_id,
                 candidate_run_id=body.candidate_run_id,
                 spec=body.spec.to_domain(),
+                traceparent=current_traceparent(),
             )
         )
         response.status_code = _submission_status(outcome)
@@ -570,6 +596,7 @@ def create_app(
             service.get_release_decision(decision_id)
         )
 
+    _install_openapi_security(app)
     return app
 
 
@@ -613,6 +640,7 @@ def _error_response(
     details: list[dict[str, object]] | None = None,
     headers: Mapping[str, str] | None = None,
 ) -> JSONResponse:
+    set_error_code(request.scope, code)
     return JSONResponse(
         status_code=status_code,
         headers=headers,
@@ -623,6 +651,55 @@ def _error_response(
             details=details,
         ),
     )
+
+
+def _install_openapi_security(app: FastAPI) -> None:
+    """Document the bearer and project headers on every protected operation."""
+    original_openapi = app.openapi
+
+    def secured_openapi() -> dict[str, Any]:
+        document = original_openapi()
+        components = document.setdefault("components", {})
+        schemes = components.setdefault("securitySchemes", {})
+        schemes["ProjectBearer"] = {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "cpk_<base64url>",
+            "description": "Project-bound opaque API credential",
+        }
+        project_header = {
+            "name": "X-Project-ID",
+            "in": "header",
+            "required": True,
+            "description": "Configured single-deployment project boundary",
+            "schema": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": _STABLE_ID_PATTERN,
+            },
+        }
+        for path, path_item in document.get("paths", {}).items():
+            if not path.startswith("/v1") or not isinstance(path_item, dict):
+                continue
+            for method, operation in path_item.items():
+                if method not in {
+                    "delete",
+                    "get",
+                    "head",
+                    "options",
+                    "patch",
+                    "post",
+                    "put",
+                } or not isinstance(operation, dict):
+                    continue
+                operation["security"] = [{"ProjectBearer": []}]
+                parameters = operation.setdefault("parameters", [])
+                if isinstance(parameters, list):
+                    parameters.append(project_header)
+        return document
+
+    app.openapi = secured_openapi  # type: ignore[method-assign]
 
 
 __all__ = ["create_app"]

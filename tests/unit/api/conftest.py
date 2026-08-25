@@ -11,6 +11,13 @@ from pytest import fixture
 
 from llm_eval_control_plane.api.app import create_app
 from llm_eval_control_plane.api.execution import DeterministicEvaluationExecutor
+from llm_eval_control_plane.api.security import (
+    AuthenticationConfiguration,
+    ControlPlaneAuthorizer,
+    ControlPlaneScope,
+    PrincipalConfiguration,
+    digest_token,
+)
 from llm_eval_control_plane.application.control_plane import (
     ControlPlaneRepository,
     ControlPlaneService,
@@ -37,8 +44,42 @@ from llm_eval_control_plane.domain.control_plane import (
 )
 from llm_eval_control_plane.domain.datasets import DatasetVersion
 from llm_eval_control_plane.domain.results import RunResult
+from llm_eval_control_plane.observability import Observability
 
 NOW = datetime(2026, 8, 23, 12, tzinfo=UTC)
+TEST_PROJECT_ID = "project-test"
+TEST_TOKEN = "cpk_" + ("A" * 43)
+AUTH_HEADERS = {
+    "Authorization": f"Bearer {TEST_TOKEN}",
+    "X-Project-ID": TEST_PROJECT_ID,
+}
+
+
+def build_authorizer(
+    scopes: tuple[ControlPlaneScope, ...] | None = None,
+) -> ControlPlaneAuthorizer:
+    granted = (
+        tuple(sorted(ControlPlaneScope, key=lambda item: item.value))
+        if scopes is None
+        else tuple(sorted(scopes, key=lambda item: item.value))
+    )
+    return ControlPlaneAuthorizer(
+        AuthenticationConfiguration(
+            schema_version="control-plane-auth/v1",
+            project_id=TEST_PROJECT_ID,
+            principals=(
+                PrincipalConfiguration(
+                    principal_id="test-operator",
+                    token_digest=digest_token(TEST_TOKEN),
+                    scopes=granted,
+                ),
+            ),
+        )
+    )
+
+
+def build_telemetry() -> Observability:
+    return Observability(service="api")
 
 
 class ReadyRepository:
@@ -250,6 +291,7 @@ class ReadyRepository:
 
 class CountingExecutor(DeterministicEvaluationExecutor):
     def __init__(self) -> None:
+        super().__init__()
         self.calls = 0
 
     async def execute(
@@ -301,7 +343,12 @@ def api_harness() -> Iterator[ApiHarness]:
         identifier_factory=lambda _prefix: next(identifiers),
     )
     with TestClient(
-        create_app(service=service),
+        create_app(
+            service=service,
+            authorizer=build_authorizer(),
+            telemetry=build_telemetry(),
+        ),
+        headers=AUTH_HEADERS,
         raise_server_exceptions=False,
     ) as client:
         yield ApiHarness(

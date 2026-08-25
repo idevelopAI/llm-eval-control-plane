@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import secrets
 from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from datetime import UTC, datetime, timedelta
 from itertools import count
+from pathlib import Path
 from threading import Barrier
 from threading import Event as ThreadEvent
 from typing import Any, cast
@@ -15,6 +17,7 @@ from typing import Any, cast
 import pytest
 from fastapi.testclient import TestClient
 from httpx import Response
+from opentelemetry.trace import Tracer
 from pytest import MonkeyPatch
 from sqlalchemy import create_engine, delete, event, insert, select, text, update
 from sqlalchemy.engine import Engine, make_url
@@ -31,6 +34,12 @@ from llm_eval_control_plane.adapters.control_plane_db import (
 from llm_eval_control_plane.api import runtime
 from llm_eval_control_plane.api.contracts import DatasetCreateRequest
 from llm_eval_control_plane.api.execution import DeterministicEvaluationExecutor
+from llm_eval_control_plane.api.security import (
+    AuthenticationConfiguration,
+    ControlPlaneScope,
+    PrincipalConfiguration,
+    digest_token,
+)
 from llm_eval_control_plane.application.control_plane import (
     ClaimedJob,
     ControlPlaneRepository,
@@ -61,10 +70,15 @@ _KEY_PREFIX = "phase5-it-"
 _API_KEY = f"{_KEY_PREFIX}api-restart"
 _LEASE_SECONDS = 30
 _OLD_TIME = datetime(2020, 1, 1, tzinfo=UTC)
+_PROJECT_ID = "phase6-integration"
 
 
 class CountingExecutor(DeterministicEvaluationExecutor):
-    def __init__(self) -> None:
+    def __init__(self, *, tracer: Tracer | None = None) -> None:
+        if tracer is None:
+            super().__init__()
+        else:
+            super().__init__(tracer=tracer)
         self.validate_calls = 0
         self.execute_calls = 0
 
@@ -225,6 +239,30 @@ def _token(label: str) -> str:
     return f"phase5_{label}_lease_token_{'x' * 40}"
 
 
+def _runtime_authentication(tmp_path: Path) -> tuple[Path, dict[str, str]]:
+    token = "cpk_" + secrets.token_urlsafe(32)
+    configuration = AuthenticationConfiguration(
+        schema_version="control-plane-auth/v1",
+        project_id=_PROJECT_ID,
+        principals=(
+            PrincipalConfiguration(
+                principal_id="phase6-integration-operator",
+                token_digest=digest_token(token),
+                scopes=tuple(sorted(ControlPlaneScope, key=lambda item: item.value)),
+            ),
+        ),
+    )
+    document = configuration.model_dump_json()
+    assert token not in document
+    path = tmp_path / "control-plane-auth.json"
+    path.write_text(document, encoding="utf-8")
+    path.chmod(0o600)
+    return path, {
+        "Authorization": f"Bearer {token}",
+        "X-Project-ID": _PROJECT_ID,
+    }
+
+
 def _enqueue_run(
     repository: ControlPlaneRepository,
     *,
@@ -335,15 +373,18 @@ def _run_count(engine: Engine, run_id: str) -> int:
 def test_api_enqueue_survives_restart_and_terminal_replay_is_redacted(
     postgres_engine: Engine,
     monkeypatch: MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.setenv(
         "CONTROL_PLANE_DATABASE_URL",
         postgres_engine.url.render_as_string(hide_password=False),
     )
+    auth_file, auth_headers = _runtime_authentication(tmp_path)
+    monkeypatch.setenv("CONTROL_PLANE_AUTH_FILE", str(auth_file))
     api_executors: list[CountingExecutor] = []
 
-    def create_executor() -> CountingExecutor:
-        executor = CountingExecutor()
+    def create_executor(*, tracer: Tracer) -> CountingExecutor:
+        executor = CountingExecutor(tracer=tracer)
         api_executors.append(executor)
         return executor
 
@@ -351,7 +392,9 @@ def test_api_enqueue_survives_restart_and_terminal_replay_is_redacted(
     body = _run_body()
 
     with TestClient(
-        runtime.create_runtime_app(), raise_server_exceptions=False
+        runtime.create_runtime_app(),
+        raise_server_exceptions=False,
+        headers=auth_headers,
     ) as first_client:
         dataset_response = first_client.post("/v1/datasets", json=_dataset_body())
         submitted = first_client.post(
@@ -371,7 +414,9 @@ def test_api_enqueue_survives_restart_and_terminal_replay_is_redacted(
     assert api_executors[0].execute_calls == 0
 
     with TestClient(
-        runtime.create_runtime_app(), raise_server_exceptions=False
+        runtime.create_runtime_app(),
+        raise_server_exceptions=False,
+        headers=auth_headers,
     ) as restarted_client:
         loaded = restarted_client.get(f"/v1/jobs/{job_id}")
         replayed_queued = restarted_client.post(
@@ -403,7 +448,9 @@ def test_api_enqueue_survives_restart_and_terminal_replay_is_redacted(
     assert worker_executor.execute_calls == 1
 
     with TestClient(
-        runtime.create_runtime_app(), raise_server_exceptions=False
+        runtime.create_runtime_app(),
+        raise_server_exceptions=False,
+        headers=auth_headers,
     ) as terminal_client:
         replayed_terminal = terminal_client.post(
             "/v1/runs",
