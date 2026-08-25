@@ -252,6 +252,7 @@ def test_security_workflow_is_redacted_pinned_and_least_privilege() -> None:
     assert "--redact=100" in workflow
     assert '--log-opts="--all"' in workflow
     assert "v0.72.0" in workflow
+    assert "token-setup-trivy" not in workflow
     assert 'ignore-unfixed: "false"' in workflow
     assert 'ignore-unfixed: "true"' in workflow
     assert "security-extended" in workflow
