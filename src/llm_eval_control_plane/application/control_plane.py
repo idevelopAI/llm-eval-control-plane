@@ -63,7 +63,7 @@ class StoreLeaseLostError(StoreTransitionError):
     """A worker no longer owns the bounded lease for an execution attempt."""
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class ClaimedJob:
     """One private fenced worker claim and its immutable resolved payload."""
 
@@ -71,6 +71,10 @@ class ClaimedJob:
     payload: JobPayload
     attempt: JobAttemptRecord
     lease_token: LeaseToken = field(repr=False)
+
+    def __repr__(self) -> str:
+        """Never retain private claim content in logs or exception context."""
+        return "ClaimedJob()"
 
 
 class ControlPlaneRepository(Protocol):
@@ -95,6 +99,12 @@ class ControlPlaneRepository(Protocol):
     ) -> tuple[JobRecord, bool]: ...
 
     def get_job(self, job_id: str) -> JobRecord: ...
+
+    def get_job_by_idempotency(
+        self,
+        kind: JobKind,
+        idempotency_key: str,
+    ) -> JobRecord: ...
 
     def list_jobs(
         self,
@@ -400,6 +410,14 @@ class ControlPlaneService:
 
     async def submit_run(self, submission: RunSubmission) -> SubmissionResult:
         """Validate and atomically enqueue one idempotent evaluation job."""
+        request_digest = sha256_digest(submission.digest_record())
+        replay = self._idempotent_replay(
+            kind=JobKind.RUN,
+            idempotency_key=submission.idempotency_key,
+            request_digest=request_digest,
+        )
+        if replay is not None:
+            return replay
         try:
             dataset_record = self._repository.get_dataset(
                 submission.dataset_name,
@@ -439,7 +457,6 @@ class ControlPlaneService:
         except ValueError as error:
             raise InvalidSubmissionError("Run submission is invalid") from error
 
-        request_digest = sha256_digest(submission.digest_record())
         now = self._clock()
         proposed = JobRecord(
             job_id=self._identifier_factory("job"),
@@ -515,6 +532,14 @@ class ControlPlaneService:
         submission: ComparisonSubmission,
     ) -> SubmissionResult:
         """Validate and atomically enqueue one idempotent comparison job."""
+        request_digest = sha256_digest(submission.digest_record())
+        replay = self._idempotent_replay(
+            kind=JobKind.COMPARISON,
+            idempotency_key=submission.idempotency_key,
+            request_digest=request_digest,
+        )
+        if replay is not None:
+            return replay
         try:
             dataset = self._repository.get_dataset(
                 submission.dataset_name,
@@ -545,7 +570,6 @@ class ControlPlaneService:
         except ValueError as error:
             raise InvalidSubmissionError("Comparison submission is invalid") from error
 
-        request_digest = sha256_digest(submission.digest_record())
         now = self._clock()
         proposed = JobRecord(
             job_id=self._identifier_factory("job"),
@@ -569,6 +593,27 @@ class ControlPlaneService:
         except StoreConflictError as error:
             raise ResourceConflictError("Job identity already exists") from error
         return SubmissionResult(job=job, created=created)
+
+    def _idempotent_replay(
+        self,
+        *,
+        kind: JobKind,
+        idempotency_key: str,
+        request_digest: str,
+    ) -> SubmissionResult | None:
+        """Return an exact durable replay before consulting mutable dependencies."""
+        try:
+            existing = self._repository.get_job_by_idempotency(
+                kind,
+                idempotency_key,
+            )
+        except StoreNotFoundError:
+            return None
+        if existing.request_digest != request_digest:
+            raise IdempotencyConflictError(
+                "Idempotency key was used for a different request"
+            )
+        return SubmissionResult(job=existing, created=False)
 
     def cancel_job(self, job_id: str) -> JobRecord:
         """Request idempotent cooperative cancellation for one durable job."""
