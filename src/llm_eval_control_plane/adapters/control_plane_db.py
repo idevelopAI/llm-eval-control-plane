@@ -111,6 +111,7 @@ jobs_table = Table(
     Column("idempotency_key", String(128), nullable=False),
     Column("request_digest", String(71), nullable=False),
     Column("resource_id", String(128), nullable=False),
+    Column("traceparent", String(55), nullable=True),
     Column("attempt_count", Integer, nullable=False, server_default=text("0")),
     Column("max_attempts", Integer, nullable=False, server_default=text("3")),
     Column("available_at", DateTime(timezone=True), nullable=False),
@@ -151,6 +152,10 @@ jobs_table = Table(
         name="ck_control_plane_jobs_updated_at",
     ),
     CheckConstraint("version >= 0", name="ck_control_plane_jobs_version"),
+    CheckConstraint(
+        "traceparent IS NULL OR length(traceparent) = 55",
+        name="ck_control_plane_jobs_traceparent_length",
+    ),
     CheckConstraint(
         "(status = 'failed' AND error_code IS NOT NULL) OR "
         "(status <> 'failed' AND error_code IS NULL)",
@@ -502,7 +507,7 @@ def _limit(value: int) -> int:
 
 
 _CURSOR_DOMAIN = b"llm-eval-control-plane/keyset-cursor/v1\0"
-_SCHEMA_REVISION = "20260823_0002"
+_SCHEMA_REVISION = "20260825_0003"
 _DEFAULT_MAX_DOCUMENT_BYTES = 64 * 1024 * 1024
 _MAX_JOB_PAYLOAD_BYTES = 4 * 1024 * 1024
 _MIGRATION_WORKER_ID = "phase5-migration"
@@ -820,6 +825,7 @@ class SqlAlchemyControlPlaneRepository:
             "idempotency_key": record.idempotency_key,
             "request_digest": record.request_digest,
             "resource_id": record.resource_id,
+            "traceparent": record.traceparent,
             "attempt_count": record.attempt_count,
             "max_attempts": record.max_attempts,
             "available_at": record.available_at,
@@ -2348,6 +2354,7 @@ class SqlAlchemyControlPlaneRepository:
                 error_code=row["error_code"],
                 created_at=_aware(row["created_at"]),
                 updated_at=_aware(row["updated_at"]),
+                traceparent=row["traceparent"],
             )
         except (KeyError, TypeError, ValidationError, ValueError) as error:
             raise CorruptRecordError("Stored control-plane job is invalid") from error

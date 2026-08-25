@@ -22,7 +22,8 @@ from llm_eval_control_plane.adapters.control_plane_db import (
 from llm_eval_control_plane.domain.canonical import sha256_digest
 
 _REVISION_ONE = "20260820_0001"
-_HEAD = "20260823_0002"
+_REVISION_TWO = "20260823_0002"
+_HEAD = "20260825_0003"
 _CREATED_AT = datetime(2020, 1, 2, 3, tzinfo=UTC)
 _FUTURE_CREATED_AT = datetime(2099, 1, 2, 3, tzinfo=UTC)
 _FUTURE_UPDATED_AT = _FUTURE_CREATED_AT + timedelta(minutes=1)
@@ -192,6 +193,82 @@ def test_head_accepts_only_the_six_job_statuses(database_url: str) -> None:
         engine.dispose()
 
 
+def test_trace_context_migration_upgrades_and_downgrades_without_schema_drift(
+    database_url: str,
+) -> None:
+    config = Config("alembic.ini")
+    command.upgrade(config, _REVISION_TWO)
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO control_plane_jobs "
+                "(job_id, kind, status, idempotency_key, request_digest, resource_id, "
+                "attempt_count, max_attempts, available_at, error_code, created_at, "
+                "updated_at, version) VALUES "
+                "('trace-upgrade-job', 'run', 'queued', 'trace-upgrade-key', "
+                ":request_digest, 'trace-upgrade-run', 0, 3, :created_at, NULL, "
+                ":created_at, :created_at, 0)"
+            ),
+            {
+                "request_digest": sha256_digest({"trace": "upgrade"}),
+                "created_at": _CREATED_AT,
+            },
+        )
+    engine.dispose()
+
+    command.upgrade(config, _HEAD)
+    upgraded = create_engine(database_url)
+    try:
+        assert "traceparent" in {
+            column["name"]
+            for column in inspect(upgraded).get_columns("control_plane_jobs")
+        }
+        with upgraded.connect() as connection:
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT traceparent FROM control_plane_jobs "
+                        "WHERE job_id = 'trace-upgrade-job'"
+                    )
+                ).scalar_one()
+                is None
+            )
+            context = MigrationContext.configure(connection)
+            assert compare_metadata(context, CONTROL_PLANE_METADATA) == []
+    finally:
+        upgraded.dispose()
+
+    command.downgrade(config, _REVISION_TWO)
+    downgraded = create_engine(database_url)
+    try:
+        assert "traceparent" not in {
+            column["name"]
+            for column in inspect(downgraded).get_columns("control_plane_jobs")
+        }
+        with downgraded.connect() as connection:
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT job_id FROM control_plane_jobs "
+                        "WHERE job_id = 'trace-upgrade-job'"
+                    )
+                ).scalar_one()
+                == "trace-upgrade-job"
+            )
+    finally:
+        downgraded.dispose()
+
+    command.upgrade(config, _HEAD)
+    final_engine = create_engine(database_url)
+    try:
+        with final_engine.connect() as connection:
+            context = MigrationContext.configure(connection)
+            assert compare_metadata(context, CONTROL_PLANE_METADATA) == []
+    finally:
+        final_engine.dispose()
+
+
 def test_payload_and_attempt_tables_allow_only_one_active_lease(
     database_url: str,
 ) -> None:
@@ -347,7 +424,7 @@ def test_downgrade_terminalizes_worker_states_before_removing_payloads(
         assert "control_plane_job_payloads" not in inspector.get_table_names()
         assert {
             column["name"] for column in inspector.get_columns("control_plane_jobs")
-        }.isdisjoint({"attempt_count", "max_attempts", "available_at"})
+        }.isdisjoint({"attempt_count", "max_attempts", "available_at", "traceparent"})
         with downgraded.connect() as connection:
             row = (
                 connection.execute(

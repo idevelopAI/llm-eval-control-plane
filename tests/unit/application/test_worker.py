@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from threading import Event
@@ -56,6 +57,7 @@ from llm_eval_control_plane.domain.control_plane import (
 )
 
 NOW = datetime(2026, 8, 23, 12, tzinfo=UTC)
+TRACEPARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 
 
 def _dataset() -> DatasetVersion:
@@ -80,6 +82,7 @@ def _job(
     resource_id: str = "run-worker-001",
     attempt_count: int = 1,
     max_attempts: int = 3,
+    traceparent: str | None = None,
 ) -> JobRecord:
     return JobRecord(
         job_id="job-worker-001",
@@ -93,11 +96,13 @@ def _job(
         available_at=NOW,
         created_at=NOW,
         updated_at=NOW,
+        traceparent=traceparent,
     )
 
 
 class CountingExecutor(DeterministicEvaluationExecutor):
     def __init__(self) -> None:
+        super().__init__()
         self.calls = 0
 
     async def execute(
@@ -871,6 +876,36 @@ def test_worker_configuration_defaults_and_claim_failures_are_safe() -> None:
     with raises(WorkerUnavailableError) as captured:
         asyncio.run(_service(unavailable, unavailable_executor).run_once())
     assert str(captured.value) == "Worker persistence is unavailable"
+
+
+def test_worker_wraps_only_claimed_processing_in_the_injected_trace_context() -> None:
+    events: list[tuple[str, JobKind, str | None]] = []
+
+    @contextmanager
+    def trace_job(kind: JobKind, traceparent: str | None) -> Iterator[None]:
+        events.append(("enter", kind, traceparent))
+        yield
+        events.append(("exit", kind, traceparent))
+
+    executor = CountingExecutor()
+    dataset = _dataset()
+    repository = FakeRepository(
+        job=_job(traceparent=TRACEPARENT),
+        payload=_run_payload(dataset, executor),
+        dataset=dataset,
+    )
+    service = _service(repository, executor, trace_job=trace_job)
+
+    assert asyncio.run(service.run_once()).status is WorkerResultStatus.SUCCEEDED
+    assert events == [
+        ("enter", JobKind.RUN, TRACEPARENT),
+        ("exit", JobKind.RUN, TRACEPARENT),
+    ]
+    assert executor.calls == 1
+
+    repository.claim = False
+    assert asyncio.run(service.run_once()).status is WorkerResultStatus.IDLE
+    assert len(events) == 2
 
 
 def test_worker_rejects_malformed_claims_and_payload_kinds() -> None:
