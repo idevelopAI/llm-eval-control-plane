@@ -1,0 +1,199 @@
+name: Security Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-vulnerability-audit:
+    name: Dependency Vulnerability Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          python-version: "3.11"
+          enable-cache: true
+
+      - name: Install locked audit environment
+        run: uv sync --locked --group security
+
+      - name: Audit the locked environment
+        run: >-
+          uv run --locked --group security pip-audit
+          --local
+          --strict
+          --skip-editable
+          --progress-spinner off
+          --desc off
+
+  static-security-analysis:
+    name: Static Security Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          python-version: "3.11"
+          enable-cache: true
+
+      - name: Install locked dependencies
+        run: uv sync --locked
+
+      - name: Enforce Python security rules
+        run: uv run ruff check --select S src scripts migrations
+
+      - name: Prove deployment hardening contracts
+        run: uv run pytest -q tests/security/test_deployment_hardening.py
+
+  secret-history-scan:
+    name: Secret History Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITLEAKS_VERSION: "8.28.0"
+      GITLEAKS_LINUX_X64_SHA256: >-
+        a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install checksum-pinned Gitleaks
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/gitleaks.tar.gz"
+          install_dir="$RUNNER_TEMP/gitleaks-bin"
+          curl \
+            --proto '=https' \
+            --tlsv1.2 \
+            --fail \
+            --silent \
+            --show-error \
+            --location \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            --output "$archive"
+          printf '%s  %s\n' "$GITLEAKS_LINUX_X64_SHA256" "$archive" \
+            | sha256sum --check --strict
+          install -d -m 0700 "$install_dir"
+          tar -xzf "$archive" -C "$install_dir" gitleaks
+          chmod 0500 "$install_dir/gitleaks"
+          "$install_dir/gitleaks" version
+
+      - name: Scan every reachable commit with full redaction
+        shell: bash
+        run: >-
+          "$RUNNER_TEMP/gitleaks-bin/gitleaks" git
+          --config=.gitleaks.toml
+          --log-opts="--all"
+          --redact=100
+          --no-banner
+          .
+
+  container-security-gate:
+    name: Container Security Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SECURITY_IMAGE: llm-eval-control-plane:security
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the digest-pinned runtime image
+        run: docker build --tag "$SECURITY_IMAGE" .
+
+      - name: Reject critical runtime vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: "v0.72.0"
+          token-setup-trivy: ""
+          cache: "false"
+          scan-type: image
+          image-ref: ${{ env.SECURITY_IMAGE }}
+          vuln-type: os,library
+          severity: CRITICAL
+          ignore-unfixed: "false"
+          format: table
+          exit-code: "1"
+
+      - name: Reject fixable high runtime vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: "v0.72.0"
+          skip-setup-trivy: "true"
+          cache: "false"
+          scan-type: image
+          image-ref: ${{ env.SECURITY_IMAGE }}
+          vuln-type: os,library
+          severity: HIGH
+          ignore-unfixed: "true"
+          format: table
+          exit-code: "1"
+
+      - name: Reject high-risk deployment misconfiguration
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: "v0.72.0"
+          skip-setup-trivy: "true"
+          cache: "false"
+          scan-type: config
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          format: table
+          exit-code: "1"
+
+  codeql-python:
+    name: CodeQL Python
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
+        with:
+          languages: python
+          queries: security-extended
+
+      - name: Analyze Python
+        uses: github/codeql-action/analyze@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
+        with:
+          category: /language:python
