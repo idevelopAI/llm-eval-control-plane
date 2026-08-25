@@ -392,6 +392,59 @@ def test_claimed_job_span_is_linked_content_free_and_privacy_safe() -> None:
     provider.shutdown()
 
 
+def test_default_span_export_is_linked_and_drops_private_span_data() -> None:
+    lines: list[str] = []
+    telemetry = Observability(
+        service="worker",
+        version="test",
+        log_sink=lines.append,
+        wall_clock=lambda: NOW,
+    )
+    sentinel = "private-span-attribute-sentinel"
+
+    with (
+        telemetry.trace_job(JobKind.RUN, TRACEPARENT),
+        telemetry.tracer.start_as_current_span(
+            "evaluation.run",
+            attributes={"private.attribute": sentinel},
+            record_exception=False,
+            set_status_on_exception=False,
+        ) as span,
+    ):
+        span.add_event(sentinel)
+
+    telemetry.shutdown()
+
+    documents = tuple(json.loads(line) for line in lines)
+    trace_documents = tuple(
+        document
+        for document in documents
+        if document["event"] == "trace.span.completed"
+    )
+    assert {document["operation"] for document in trace_documents} == {
+        "evaluation.run",
+        "worker.job",
+    }
+    worker_span = next(
+        document
+        for document in trace_documents
+        if document["operation"] == "worker.job"
+    )
+    assert worker_span["span_kind"] == "consumer"
+    assert worker_span["linked_trace_id"] == TRACE_ID
+    assert worker_span["linked_span_id"] == PARENT_SPAN_ID
+    evaluation_span = next(
+        document
+        for document in trace_documents
+        if document["operation"] == "evaluation.run"
+    )
+    assert evaluation_span["parent_span_id"] == worker_span["span_id"]
+    rendered = "".join(lines)
+    assert sentinel not in rendered
+    assert "private.attribute" not in rendered
+    assert TRACEPARENT not in rendered
+
+
 def test_invalid_trace_context_and_telemetry_failures_do_not_affect_work(
     tmp_path: Path,
 ) -> None:
@@ -495,6 +548,7 @@ def test_production_composition_shares_worker_tracer_and_shuts_down(
     monkeypatch.setattr(
         "llm_eval_control_plane.worker.database_url_from_environment", object
     )
+
     def build_telemetry(**arguments: object) -> FakeTelemetry:
         captured["telemetry_arguments"] = arguments
         return telemetry
