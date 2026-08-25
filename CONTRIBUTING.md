@@ -6,7 +6,7 @@ Install Python 3.11 or newer and
 [uv](https://docs.astral.sh/uv/getting-started/installation/), then run:
 
 ```bash
-uv sync --locked --group security
+uv sync --locked
 ```
 
 ## Quality checks
@@ -21,7 +21,8 @@ uv run ruff check --select S src scripts migrations
 uv run mypy src tests scripts migrations
 uv run pytest --cov=llm_eval_control_plane --cov-branch --cov-report=term-missing
 uv run pytest -q tests/security/test_deployment_hardening.py
-uv run --locked --group security pip-audit \
+uv sync --locked --group security --no-install-project
+uv run --no-sync pip-audit \
   --local --strict --skip-editable --progress-spinner off --desc off
 uv build
 ```

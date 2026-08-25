@@ -242,6 +242,8 @@ def test_security_workflow_is_redacted_pinned_and_least_privilege() -> None:
     assert 'ignore-unfixed: "false"' in workflow
     assert 'ignore-unfixed: "true"' in workflow
     assert "security-extended" in workflow
+    assert "uv sync --locked --group security --no-install-project" in workflow
+    assert "uv run --no-sync pip-audit" in workflow
 
     reviewed_fixture_commits = {
         "54bddf634893106d7b670c0c2c8f4a2ba6a93702",
