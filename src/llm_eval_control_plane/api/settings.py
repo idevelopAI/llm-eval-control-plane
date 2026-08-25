@@ -239,6 +239,8 @@ def _validated_url(value: str, *, allow_sqlite: bool) -> URL:
         raise RuntimeConfigurationError("Database driver is unsupported")
     if not url.database:
         raise RuntimeConfigurationError("Database URL is incomplete")
+    if url.query:
+        raise RuntimeConfigurationError("Database URL options are unsupported")
     return url
 
 
