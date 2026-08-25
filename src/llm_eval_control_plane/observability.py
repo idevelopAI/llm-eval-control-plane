@@ -125,12 +125,29 @@ _TRACE_KINDS = {
 _DURATION_BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10)
 _MAX_DURATION_NS = 86_400 * 1_000_000_000
 _MAX_RECOVERED_JOBS = 10_000
+_MAX_OPERATIONAL_VALUE = 2**63 - 1
 
 
 class LogSink(Protocol):
     """A destination for one already-sanitized JSON line."""
 
     def __call__(self, document: str, /) -> object: ...
+
+
+class OperationalSnapshot(Protocol):
+    """Fixed aggregate values supplied by the persistence adapter."""
+
+    @property
+    def queued_jobs(self) -> int: ...
+
+    @property
+    def failed_jobs(self) -> int: ...
+
+    @property
+    def input_units(self) -> int: ...
+
+    @property
+    def output_units(self) -> int: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,6 +232,11 @@ class Observability:
         "_http_in_progress",
         "_http_requests",
         "_log_sink",
+        "_operational_failed_jobs",
+        "_operational_queue_depth",
+        "_operational_snapshot_provider",
+        "_operational_snapshot_ready",
+        "_operational_usage",
         "_owns_provider",
         "_provider",
         "_registry",
@@ -237,6 +259,7 @@ class Observability:
         tracer_provider: ApiTracerProvider | None = None,
         registry: CollectorRegistry | None = None,
         log_sink: LogSink | None = None,
+        operational_snapshot_provider: Callable[[], OperationalSnapshot] | None = None,
         clock_ns: Callable[[], int] = time.perf_counter_ns,
         wall_clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
@@ -245,6 +268,7 @@ class Observability:
         self._service = service
         self._registry = registry or CollectorRegistry(auto_describe=True)
         self._log_sink = log_sink
+        self._operational_snapshot_provider = operational_snapshot_provider
         self._clock_ns = clock_ns
         self._wall_clock = wall_clock
 
@@ -314,6 +338,32 @@ class Observability:
             ("outcome",),
             registry=self._registry,
         )
+        self._operational_queue_depth: Gauge | None = None
+        self._operational_failed_jobs: Gauge | None = None
+        self._operational_usage: Gauge | None = None
+        self._operational_snapshot_ready: Gauge | None = None
+        if service == "api":
+            self._operational_queue_depth = Gauge(
+                "control_plane_job_queue_depth",
+                "Persisted jobs currently waiting to be claimed.",
+                registry=self._registry,
+            )
+            self._operational_failed_jobs = Gauge(
+                "control_plane_failed_jobs",
+                "Persisted jobs in the terminal failed state.",
+                registry=self._registry,
+            )
+            self._operational_usage = Gauge(
+                "control_plane_evaluation_usage_units",
+                "Aggregate persisted evaluation usage units.",
+                ("direction",),
+                registry=self._registry,
+            )
+            self._operational_snapshot_ready = Gauge(
+                "control_plane_operational_snapshot_ready",
+                "Whether the latest persisted operational snapshot succeeded.",
+                registry=self._registry,
+            )
         self._worker_polls: Counter | None = None
         self._worker_job_duration: Histogram | None = None
         self._worker_job_results: Counter | None = None
@@ -591,10 +641,38 @@ class Observability:
 
     def render_metrics(self) -> MetricsDocument:
         """Render only this instance's explicitly registered metrics."""
+        self._refresh_operational_snapshot()
         return MetricsDocument(
             body=generate_latest(self._registry),
             content_type=CONTENT_TYPE_LATEST,
         )
+
+    def _refresh_operational_snapshot(self) -> None:
+        ready = self._operational_snapshot_ready
+        provider = self._operational_snapshot_provider
+        if ready is None:
+            return
+        if provider is None:
+            with suppress(Exception):
+                ready.set(0)
+            return
+        try:
+            snapshot = provider()
+            queue_depth = _bounded_operational_value(snapshot.queued_jobs)
+            failed_jobs = _bounded_operational_value(snapshot.failed_jobs)
+            input_units = _bounded_operational_value(snapshot.input_units)
+            output_units = _bounded_operational_value(snapshot.output_units)
+            if self._operational_queue_depth is not None:
+                self._operational_queue_depth.set(queue_depth)
+            if self._operational_failed_jobs is not None:
+                self._operational_failed_jobs.set(failed_jobs)
+            if self._operational_usage is not None:
+                self._operational_usage.labels(direction="input").set(input_units)
+                self._operational_usage.labels(direction="output").set(output_units)
+            ready.set(1)
+        except Exception:
+            with suppress(Exception):
+                ready.set(0)
 
     def shutdown(self) -> None:
         """Shut down an internally owned provider without touching global state."""
@@ -676,6 +754,12 @@ def bounded_duration_ns(value: object) -> int:
     return min(value, _MAX_DURATION_NS)
 
 
+def _bounded_operational_value(value: object) -> int:
+    if type(value) is not int or not 0 <= value <= _MAX_OPERATIONAL_VALUE:
+        raise ValueError("Operational snapshot is invalid")
+    return value
+
+
 def _safe_trace_operation(value: object) -> str:
     return value if isinstance(value, str) and value in _TRACE_OPERATIONS else "unknown"
 
@@ -738,6 +822,7 @@ def _worker_link(value: object) -> Link | None:
 __all__ = [
     "MetricsDocument",
     "Observability",
+    "OperationalSnapshot",
     "bounded_duration_ns",
     "safe_error_code",
     "safe_http_method",

@@ -377,6 +377,41 @@ def test_duplicate_traceparent_is_ignored_and_log_sink_failures_are_isolated() -
     provider.shutdown()
 
 
+def test_operational_metrics_refresh_from_one_fixed_aggregate_snapshot() -> None:
+    class Snapshot:
+        queued_jobs = 2
+        failed_jobs = 3
+        input_units = 5
+        output_units = 7
+
+    calls = 0
+
+    def snapshot_provider() -> Snapshot:
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise RuntimeError("private-persistence-error-sentinel")
+        return Snapshot()
+
+    telemetry = Observability(
+        service="api",
+        operational_snapshot_provider=snapshot_provider,
+    )
+
+    first = telemetry.render_metrics().body.decode("utf-8")
+    second = telemetry.render_metrics().body.decode("utf-8")
+
+    assert "control_plane_job_queue_depth 2.0" in first
+    assert "control_plane_failed_jobs 3.0" in first
+    assert 'control_plane_evaluation_usage_units{direction="input"} 5.0' in first
+    assert 'control_plane_evaluation_usage_units{direction="output"} 7.0' in first
+    assert "control_plane_operational_snapshot_ready 1.0" in first
+    assert "control_plane_operational_snapshot_ready 0.0" in second
+    assert "control_plane_job_queue_depth 2.0" in second
+    assert "private-persistence-error-sentinel" not in first + second
+    telemetry.shutdown()
+
+
 def test_configuration_and_clock_fail_closed_without_retaining_values() -> None:
     def broken_clock() -> int:
         raise RuntimeError("private-clock-value")

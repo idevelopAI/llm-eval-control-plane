@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any
 
@@ -30,7 +31,13 @@ def test_runtime_factory_wires_secret_safe_postgres_dependencies(
     monkeypatch: MonkeyPatch,
 ) -> None:
     engine = DisposableEngine()
-    repository = object()
+    snapshot = object()
+
+    class RuntimeRepository:
+        def operational_snapshot(self) -> object:
+            return snapshot
+
+    repository = RuntimeRepository()
     executor = object()
     service = object()
     authorizer = object()
@@ -69,6 +76,19 @@ def test_runtime_factory_wires_secret_safe_postgres_dependencies(
         captured["app"] = (service, authorizer, telemetry, max_body_bytes)
         return FastAPI()
 
+    def fake_observability(
+        *,
+        service: str,
+        log_sink: object,
+        operational_snapshot_provider: Callable[[], object],
+    ) -> DisposableTelemetry:
+        captured["telemetry"] = (
+            service,
+            callable(log_sink),
+            operational_snapshot_provider(),
+        )
+        return telemetry
+
     monkeypatch.setattr(runtime, "database_url_from_environment", lambda: "safe-url")
     monkeypatch.setattr(
         runtime,
@@ -88,7 +108,7 @@ def test_runtime_factory_wires_secret_safe_postgres_dependencies(
         "ControlPlaneAuthorizer",
         SimpleNamespace(from_file=lambda path: authorizer),
     )
-    monkeypatch.setattr(runtime, "Observability", lambda **_kwargs: telemetry)
+    monkeypatch.setattr(runtime, "Observability", fake_observability)
     monkeypatch.setattr(
         runtime,
         "DeterministicEvaluationExecutor",
@@ -102,6 +122,7 @@ def test_runtime_factory_wires_secret_safe_postgres_dependencies(
     assert captured == {
         "engine": ("safe-url", True, True),
         "repository_engine": engine,
+        "telemetry": ("api", True, snapshot),
         "service": (repository, executor, 5),
         "app": (service, authorizer, telemetry, 4_096),
     }
