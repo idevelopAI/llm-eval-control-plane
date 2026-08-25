@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from itertools import count
 from typing import cast
 
-from pytest import raises
+from pytest import MonkeyPatch, raises
 
 from llm_eval_control_plane.api.execution import DeterministicEvaluationExecutor
 from llm_eval_control_plane.application.control_plane import (
@@ -23,6 +23,9 @@ from llm_eval_control_plane.application.control_plane import (
     StoreInvalidCursorError,
     StoreNotFoundError,
     StoreTransitionError,
+    validate_comparison_inputs,
+    validate_execution_contract,
+    validate_run_result,
 )
 from llm_eval_control_plane.domain import (
     ArtifactKind,
@@ -52,7 +55,12 @@ from llm_eval_control_plane.domain.control_plane import (
     RunListRecord,
     RunRecord,
 )
-from llm_eval_control_plane.domain.results import RunResult
+from llm_eval_control_plane.domain.execution import (
+    ExecutionFailure,
+    FailureCode,
+    FailureStage,
+)
+from llm_eval_control_plane.domain.results import ExecutionMode, RunResult
 
 NOW = datetime(2026, 8, 23, 12, tzinfo=UTC)
 
@@ -106,6 +114,32 @@ class InvalidContractExecutor(DeterministicEvaluationExecutor):
         return contract.model_copy(update={"adapter": "different_adapter"})
 
 
+class RejectingValidationExecutor(DeterministicEvaluationExecutor):
+    """Represent a currently unavailable executor that an exact replay must bypass."""
+
+    def __init__(self) -> None:
+        self.validate_calls = 0
+
+    def validate(
+        self,
+        *,
+        target_name: str,
+        target_revision: int,
+        adapter: str,
+        evaluator_names: tuple[str, ...],
+        scenario_overrides: Mapping[str, str],
+    ) -> ExecutionContract:
+        del (
+            target_name,
+            target_revision,
+            adapter,
+            evaluator_names,
+            scenario_overrides,
+        )
+        self.validate_calls += 1
+        raise ValueError("private current executor validation failure")
+
+
 class MemoryRepository:
     """Application test double for immutable records and atomic job/payload claims."""
 
@@ -119,6 +153,7 @@ class MemoryRepository:
         self.begin_error: Exception | None = None
         self.cancel_error: Exception | None = None
         self.healthy = True
+        self.schema_current = True
 
     def put_dataset(self, record: DatasetRecord) -> DatasetRecord:
         key = (record.dataset.name, record.dataset.revision)
@@ -187,6 +222,16 @@ class MemoryRepository:
             return self.jobs[job_id]
         except KeyError:
             raise StoreNotFoundError("private job details") from None
+
+    def get_job_by_idempotency(
+        self,
+        kind: JobKind,
+        idempotency_key: str,
+    ) -> JobRecord:
+        for record in self.jobs.values():
+            if record.kind is kind and record.idempotency_key == idempotency_key:
+                return record
+        raise StoreNotFoundError("private idempotency details")
 
     def list_jobs(
         self,
@@ -269,7 +314,7 @@ class MemoryRepository:
             raise RuntimeError("private persistence details")
 
     def schema_is_current(self) -> bool:
-        return True
+        return self.schema_current
 
 
 def _dataset() -> DatasetVersion:
@@ -367,6 +412,30 @@ def test_run_replay_keeps_one_job_payload_and_zero_execution_calls() -> None:
     assert len(repository.jobs) == 1
     assert len(repository.payloads) == 1
     assert executor.calls == 0
+
+
+def test_exact_run_replay_bypasses_missing_dataset_and_current_executor() -> None:
+    repository = MemoryRepository()
+    initial_service = _service(repository)
+    initial_service.register_dataset(_dataset())
+    submission = _run_submission("durable-run-replay")
+    first = asyncio.run(initial_service.submit_run(submission))
+    repository.datasets.clear()
+    rejecting_executor = RejectingValidationExecutor()
+    replay_service = _service(repository, executor=rejecting_executor)
+
+    replay = asyncio.run(replay_service.submit_run(submission))
+
+    assert replay.job == first.job
+    assert replay.created is False
+    assert rejecting_executor.validate_calls == 0
+    with raises(IdempotencyConflictError):
+        asyncio.run(
+            replay_service.submit_run(
+                _run_submission("durable-run-replay", target_revision=3)
+            )
+        )
+    assert rejecting_executor.validate_calls == 0
 
 
 def test_run_preflight_and_repository_errors_are_content_safe() -> None:
@@ -531,6 +600,41 @@ def test_comparison_enqueues_immutable_result_digests_and_replays() -> None:
     assert payload.spec == submission.spec
 
 
+def test_exact_comparison_replay_bypasses_removed_dependencies() -> None:
+    repository = MemoryRepository()
+    dataset, baseline, candidate = _seed_runs(repository)
+    service = _service(repository)
+    spec = _spec(dataset, baseline, candidate)
+    submission = _comparison_submission(
+        "durable-comparison-replay",
+        dataset,
+        baseline,
+        candidate,
+        spec,
+    )
+    first = asyncio.run(service.submit_comparison(submission))
+    repository.datasets.clear()
+    repository.runs.clear()
+
+    replay = asyncio.run(service.submit_comparison(submission))
+
+    assert replay.job == first.job
+    assert replay.created is False
+    changed = submission.spec.model_copy(update={"name": "changed-policy"})
+    with raises(IdempotencyConflictError):
+        asyncio.run(
+            service.submit_comparison(
+                _comparison_submission(
+                    "durable-comparison-replay",
+                    dataset,
+                    baseline,
+                    candidate,
+                    changed,
+                )
+            )
+        )
+
+
 def test_comparison_preflight_and_idempotency_conflicts_are_safe() -> None:
     repository = MemoryRepository()
     dataset, baseline, candidate = _seed_runs(repository)
@@ -640,3 +744,218 @@ def test_job_identity_collision_and_readiness_failure_are_safe() -> None:
     assert service.ready() is True
     repository.healthy = False
     assert service.ready() is False
+
+
+def test_service_configuration_reads_and_schema_readiness_are_bounded() -> None:
+    repository = MemoryRepository()
+    service = _service(repository)
+
+    for invalid in (True, 0, 11):
+        with raises(ValueError, match="maximum attempts"):
+            ControlPlaneService(
+                repository=cast(ControlPlaneRepository, repository),
+                executor=DeterministicEvaluationExecutor(),
+                max_attempts=invalid,
+            )
+
+    with raises(ResourceNotFoundError):
+        service.get_dataset("missing", 1)
+    with raises(ResourceNotFoundError):
+        service.get_job("missing")
+    with raises(ResourceNotFoundError):
+        service.get_run("missing")
+    with raises(ResourceNotFoundError):
+        service.get_release_decision("missing")
+
+    repository.schema_current = False
+    assert service.ready() is False
+
+
+def test_dataset_bounds_are_translated_without_content_leaks(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    import llm_eval_control_plane.application.control_plane as control_plane_module
+
+    repository = MemoryRepository()
+    service = _service(repository)
+    dataset = _dataset()
+
+    monkeypatch.setattr(control_plane_module, "_MAX_DATASET_CASES", 0)
+    with raises(InvalidSubmissionError, match="service limits"):
+        service.register_dataset(dataset)
+
+    monkeypatch.setattr(control_plane_module, "_MAX_DATASET_CASES", 1)
+    monkeypatch.setattr(control_plane_module, "_MAX_SLICES_PER_CASE", 0)
+    sliced = DatasetVersion.create(
+        name="sliced",
+        revision=1,
+        cases=(
+            EvaluationCase(
+                case_id="case-001",
+                input=CanonicalJson.from_value("input"),
+                slices=("private-slice",),
+            ),
+        ),
+    )
+    with raises(InvalidSubmissionError) as per_case:
+        service.register_dataset(sliced)
+    assert "private-slice" not in str(per_case.value)
+
+    monkeypatch.setattr(control_plane_module, "_MAX_SLICES_PER_CASE", 1)
+    monkeypatch.setattr(control_plane_module, "_MAX_DATASET_SLICES", 0)
+    with raises(InvalidSubmissionError):
+        service.register_dataset(sliced)
+
+
+def test_execution_contract_and_run_evidence_must_match_pinned_inputs() -> None:
+    dataset = _dataset()
+    dataset_record = DatasetRecord(dataset=dataset, created_at=NOW)
+    executor = DeterministicEvaluationExecutor()
+    contract = executor.validate(
+        target_name="fake/candidate",
+        target_revision=2,
+        adapter="deterministic_fake",
+        evaluator_names=("exact_match",),
+        scenario_overrides={},
+    )
+    result = asyncio.run(
+        _result(
+            run_id="run-candidate",
+            dataset=dataset,
+            target_name="fake/candidate",
+            target_revision=2,
+        )
+    )
+
+    for arguments in (
+        {"adapter": "different"},
+        {"evaluator_names": ("different",)},
+        {"target_name": "fake/different"},
+    ):
+        values: dict[str, object] = {
+            "target_name": "fake/candidate",
+            "target_revision": 2,
+            "adapter": "deterministic_fake",
+            "evaluator_names": ("exact_match",),
+        }
+        values.update(arguments)
+        with raises(ValueError):
+            validate_execution_contract(contract, **values)  # type: ignore[arg-type]
+
+    other_evaluator = ArtifactRef(
+        kind=ArtifactKind.EVALUATOR,
+        name="builtin/other",
+        revision=1,
+        digest=sha256_digest("other evaluator"),
+    )
+    other_dataset = ArtifactRef(
+        kind=ArtifactKind.DATASET,
+        name="different",
+        revision=1,
+        digest=sha256_digest("other dataset"),
+    )
+    other_target = ArtifactRef(
+        kind=ArtifactKind.TARGET,
+        name="fake/different",
+        revision=1,
+        digest=sha256_digest("other target"),
+    )
+    metric = result.metrics[0].model_copy(update={"evaluator": other_evaluator})
+    observation = (
+        result.cases[0]
+        .observations[0]
+        .model_copy(update={"evaluator": other_evaluator})
+    )
+    observation_case = result.cases[0].model_copy(
+        update={"observations": (observation,)}
+    )
+    failure = ExecutionFailure(
+        stage=FailureStage.EVALUATOR,
+        code=FailureCode.EVALUATOR_EXCEPTION,
+        message="safe failure",
+        evaluator=other_evaluator,
+    )
+    failure_case = result.cases[0].model_copy(update={"evaluator_failures": (failure,)})
+    variants = (
+        result.model_copy(update={"run_id": "different-run"}),
+        result.model_copy(update={"dataset": other_dataset}),
+        result.model_copy(update={"target": other_target}),
+        result.model_copy(update={"evaluators": (other_evaluator,)}),
+        result.model_copy(update={"metrics": (metric,)}),
+        result.model_copy(update={"cases": (observation_case,)}),
+        result.model_copy(update={"cases": (failure_case,)}),
+        result.model_copy(update={"execution_mode": ExecutionMode.LIVE}),
+        result.model_copy(
+            update={
+                "cases": (
+                    result.cases[0].model_copy(update={"case_id": "different-case"}),
+                )
+            }
+        ),
+    )
+    for variant in variants:
+        with raises(ValueError):
+            validate_run_result(
+                variant,
+                resource_id=result.run_id,
+                dataset=dataset_record,
+                contract=contract,
+            )
+
+
+def test_comparison_input_identities_and_work_limits_are_enforced(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    import llm_eval_control_plane.application.control_plane as control_plane_module
+
+    repository = MemoryRepository()
+    dataset, baseline, candidate = _seed_runs(repository)
+    dataset_record = repository.get_dataset(dataset.name, dataset.revision)
+    baseline_record = repository.get_run(baseline.run_id)
+    candidate_record = repository.get_run(candidate.run_id)
+    spec = _spec(dataset, baseline, candidate)
+    valid: dict[str, object] = {
+        "dataset_name": dataset.name,
+        "dataset_revision": dataset.revision,
+        "baseline_run_id": baseline.run_id,
+        "candidate_run_id": candidate.run_id,
+        "spec": spec,
+        "dataset": dataset_record,
+        "baseline": baseline_record,
+        "candidate": candidate_record,
+    }
+    mismatches = (
+        {"dataset_name": "different"},
+        {
+            "spec": spec.model_copy(
+                update={
+                    "dataset": ArtifactRef(
+                        kind=ArtifactKind.DATASET,
+                        name="different",
+                        revision=1,
+                        digest=sha256_digest("different dataset"),
+                    )
+                }
+            )
+        },
+        {"baseline_run_id": "different-baseline"},
+        {"candidate_run_id": "different-candidate"},
+        {"spec": spec.model_copy(update={"baseline": candidate.target})},
+        {"spec": spec.model_copy(update={"candidate": baseline.target})},
+    )
+    for mismatch in mismatches:
+        arguments = {**valid, **mismatch}
+        with raises(ValueError):
+            validate_comparison_inputs(**arguments)  # type: ignore[arg-type]
+
+    limits = (
+        ("_MAX_COMPARISON_GATES", 0),
+        ("_MAX_COMPARISON_METRICS", 0),
+        ("_MAX_COMPARISON_AGGREGATE_WORK", 0),
+        ("_MAX_COMPARISON_CASE_RECORDS", 0),
+    )
+    for name, value in limits:
+        with monkeypatch.context() as context:
+            context.setattr(control_plane_module, name, value)
+            with raises(ValueError):
+                validate_comparison_inputs(**valid)  # type: ignore[arg-type]

@@ -118,6 +118,16 @@ class ReadyRepository:
         except KeyError:
             raise StoreNotFoundError("private job missing") from None
 
+    def get_job_by_idempotency(
+        self,
+        kind: JobKind,
+        idempotency_key: str,
+    ) -> JobRecord:
+        for record in self.jobs.values():
+            if record.kind is kind and record.idempotency_key == idempotency_key:
+                return record
+        raise StoreNotFoundError("private idempotency missing")
+
     def list_jobs(
         self,
         *,
