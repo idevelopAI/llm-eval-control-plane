@@ -312,26 +312,32 @@ def test_distinct_resource_ids_do_not_increase_metric_label_cardinality() -> Non
 
 def test_invalid_trace_context_and_auth_values_are_not_propagated() -> None:
     telemetry, lines, exporter, provider = _telemetry()
+    ambient_provider = TracerProvider()
     client = TestClient(
         _app(telemetry), headers=AUTH_HEADERS, raise_server_exceptions=False
     )
     uppercase_trace = TRACEPARENT.upper()
 
-    response = client.get(
-        "/v1/jobs/safe-job",
-        headers={
-            "Baggage": "private-baggage=private-value",
-            "Traceparent": uppercase_trace,
-            "Tracestate": "private-vendor=private-state",
-            "X-Request-ID": "trace-request",
-        },
-    )
+    with ambient_provider.get_tracer("private-ambient-provider").start_as_current_span(
+        "private-ambient-span"
+    ) as ambient_span:
+        ambient_context = ambient_span.get_span_context()
+        response = client.get(
+            "/v1/jobs/safe-job",
+            headers={
+                "Baggage": "private-baggage=private-value",
+                "Traceparent": uppercase_trace,
+                "Tracestate": "private-vendor=private-state",
+                "X-Request-ID": "trace-request",
+            },
+        )
     telemetry.record_auth_decision("private-auth-outcome")
 
     assert response.status_code == 200
     span = _finished(exporter)[0]
     assert span.context is not None
     assert f"{span.context.trace_id:032x}" != TRACE_ID
+    assert span.context.trace_id != ambient_context.trace_id
     assert span.parent is None
     metrics = telemetry.render_metrics().body.decode()
     assert 'control_plane_auth_decisions_total{outcome="other"} 1.0' in metrics
@@ -343,8 +349,11 @@ def test_invalid_trace_context_and_auth_values_are_not_propagated() -> None:
         "private-vendor",
         "private-state",
         "private-auth-outcome",
+        "private-ambient-provider",
+        "private-ambient-span",
     ):
         assert sentinel not in captured
+    ambient_provider.shutdown()
     provider.shutdown()
 
 

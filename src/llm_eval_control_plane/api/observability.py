@@ -67,7 +67,7 @@ class ApiObservabilityMiddleware:
             parent = trace_context_from_scope(scope)
             span_context = self._telemetry.tracer.start_as_current_span(
                 "HTTP request",
-                context=parent,
+                context=parent if parent is not None else Context(),
                 kind=SpanKind.SERVER,
                 record_exception=False,
                 set_status_on_exception=False,
