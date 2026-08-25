@@ -16,6 +16,16 @@ class DisposableEngine:
         self.disposed = True
 
 
+class DisposableTelemetry:
+    tracer = object()
+
+    def __init__(self) -> None:
+        self.stopped = False
+
+    def shutdown(self) -> None:
+        self.stopped = True
+
+
 def test_runtime_factory_wires_secret_safe_postgres_dependencies(
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -23,6 +33,8 @@ def test_runtime_factory_wires_secret_safe_postgres_dependencies(
     repository = object()
     executor = object()
     service = object()
+    authorizer = object()
+    telemetry = DisposableTelemetry()
     captured: dict[str, Any] = {}
 
     def fake_create_engine(
@@ -47,11 +59,22 @@ def test_runtime_factory_wires_secret_safe_postgres_dependencies(
         captured["service"] = (repository, executor, max_attempts)
         return service
 
-    def fake_create_app(*, service: object, max_body_bytes: int) -> FastAPI:
-        captured["app"] = (service, max_body_bytes)
+    def fake_create_app(
+        *,
+        service: object,
+        authorizer: object,
+        telemetry: object,
+        max_body_bytes: int,
+    ) -> FastAPI:
+        captured["app"] = (service, authorizer, telemetry, max_body_bytes)
         return FastAPI()
 
     monkeypatch.setattr(runtime, "database_url_from_environment", lambda: "safe-url")
+    monkeypatch.setattr(
+        runtime,
+        "authentication_file_from_environment",
+        lambda: "safe-auth-file",
+    )
     monkeypatch.setattr(runtime, "max_body_bytes_from_environment", lambda: 4_096)
     monkeypatch.setattr(
         runtime,
@@ -60,7 +83,17 @@ def test_runtime_factory_wires_secret_safe_postgres_dependencies(
     )
     monkeypatch.setattr(runtime, "create_engine", fake_create_engine)
     monkeypatch.setattr(runtime, "SqlAlchemyControlPlaneRepository", fake_repository)
-    monkeypatch.setattr(runtime, "DeterministicEvaluationExecutor", lambda: executor)
+    monkeypatch.setattr(
+        runtime,
+        "ControlPlaneAuthorizer",
+        SimpleNamespace(from_file=lambda path: authorizer),
+    )
+    monkeypatch.setattr(runtime, "Observability", lambda **_kwargs: telemetry)
+    monkeypatch.setattr(
+        runtime,
+        "DeterministicEvaluationExecutor",
+        lambda *, tracer: executor if tracer is telemetry.tracer else None,
+    )
     monkeypatch.setattr(runtime, "ControlPlaneService", fake_service)
     monkeypatch.setattr(runtime, "create_app", fake_create_app)
 
@@ -70,7 +103,7 @@ def test_runtime_factory_wires_secret_safe_postgres_dependencies(
         "engine": ("safe-url", True, True),
         "repository_engine": engine,
         "service": (repository, executor, 5),
-        "app": (service, 4_096),
+        "app": (service, authorizer, telemetry, 4_096),
     }
     assert app.state.control_plane_engine is engine
     shutdown_handlers = tuple(app.router.on_shutdown)
@@ -79,6 +112,7 @@ def test_runtime_factory_wires_secret_safe_postgres_dependencies(
     assert callable(handler)
     handler()
     assert engine.disposed is True
+    assert telemetry.stopped is True
 
 
 def test_deterministic_executor_rejects_unknown_evaluator_names() -> None:

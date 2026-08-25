@@ -10,11 +10,18 @@ from pathlib import Path
 from typing import cast
 
 from llm_eval_control_plane.api.app import create_app
+from llm_eval_control_plane.api.security import (
+    AuthenticationConfiguration,
+    ControlPlaneAuthorizer,
+    ControlPlaneScope,
+    PrincipalConfiguration,
+)
 from llm_eval_control_plane.application.control_plane import (
     ControlPlaneRepository,
     ControlPlaneService,
     EvaluationExecutor,
 )
+from llm_eval_control_plane.observability import Observability
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = _REPOSITORY_ROOT / "docs" / "openapi-v1.json"
@@ -27,7 +34,26 @@ def rendered_openapi() -> bytes:
         repository=cast(ControlPlaneRepository, unavailable_dependency),
         executor=cast(EvaluationExecutor, unavailable_dependency),
     )
-    document = create_app(service=service).openapi()
+    authorizer = ControlPlaneAuthorizer(
+        AuthenticationConfiguration(
+            schema_version="control-plane-auth/v1",
+            project_id="project-documentation",
+            principals=(
+                PrincipalConfiguration(
+                    principal_id="documentation-only",
+                    token_digest="sha256:" + ("0" * 64),
+                    scopes=tuple(
+                        sorted(ControlPlaneScope, key=lambda item: item.value)
+                    ),
+                ),
+            ),
+        )
+    )
+    document = create_app(
+        service=service,
+        authorizer=authorizer,
+        telemetry=Observability(service="api"),
+    ).openapi()
     return (
         json.dumps(
             document,

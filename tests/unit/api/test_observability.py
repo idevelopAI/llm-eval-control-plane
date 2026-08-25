@@ -20,6 +20,8 @@ from llm_eval_control_plane.api.observability import (
 )
 from llm_eval_control_plane.observability import Observability
 
+from .conftest import AUTH_HEADERS, build_authorizer
+
 NOW = datetime(2026, 8, 25, 12, 34, 56, 789_000, tzinfo=UTC)
 TRACE_ID = "1234567890abcdef1234567890abcdef"
 PARENT_SPAN_ID = "1234567890abcdef"
@@ -88,7 +90,11 @@ def _app(
         await request.json()
         return JSONResponse(content={"status": "ok"})
 
-    app.add_middleware(ApiBoundaryMiddleware, max_body_bytes=4_096)
+    app.add_middleware(
+        ApiBoundaryMiddleware,
+        max_body_bytes=4_096,
+        authorizer=build_authorizer(),
+    )
     app.add_middleware(ApiObservabilityMiddleware, telemetry=telemetry)
     return app
 
@@ -99,7 +105,9 @@ def _finished(exporter: InMemorySpanExporter) -> tuple[ReadableSpan, ...]:
 
 def test_request_telemetry_uses_only_route_template_and_allowlisted_fields() -> None:
     telemetry, lines, exporter, provider = _telemetry()
-    client = TestClient(_app(telemetry), raise_server_exceptions=False)
+    client = TestClient(
+        _app(telemetry), headers=AUTH_HEADERS, raise_server_exceptions=False
+    )
     sentinels = (
         "private-path-sentinel",
         "private-query-sentinel",
@@ -113,8 +121,8 @@ def test_request_telemetry_uses_only_route_template_and_allowlisted_fields() -> 
         "/v1/jobs/private-path-sentinel/cancellation?cursor=private-query-sentinel",
         json={"value": "private-body-sentinel"},
         headers={
-            "Authorization": "Bearer private-auth-sentinel",
             "Baggage": "customer=private-baggage-sentinel",
+            "X-Credential-Probe": "private-auth-sentinel",
             "Traceparent": TRACEPARENT,
             "Tracestate": "vendor=private-tracestate-sentinel",
             "X-Request-ID": "request-telemetry",
@@ -180,7 +188,11 @@ def test_request_telemetry_uses_only_route_template_and_allowlisted_fields() -> 
 
 def test_errors_are_bounded_and_never_record_exception_details() -> None:
     telemetry, lines, exporter, provider = _telemetry()
-    client = TestClient(_app(telemetry, fail=True), raise_server_exceptions=False)
+    client = TestClient(
+        _app(telemetry, fail=True),
+        headers=AUTH_HEADERS,
+        raise_server_exceptions=False,
+    )
 
     response = client.get(
         "/v1/jobs/private-error-path?token=private-query-token",
@@ -223,7 +235,9 @@ def test_errors_are_bounded_and_never_record_exception_details() -> None:
 
 def test_unmatched_targets_and_error_codes_collapse_to_fixed_labels() -> None:
     telemetry, lines, exporter, provider = _telemetry()
-    client = TestClient(_app(telemetry), raise_server_exceptions=False)
+    client = TestClient(
+        _app(telemetry), headers=AUTH_HEADERS, raise_server_exceptions=False
+    )
 
     missing = client.get(
         "/private-unmatched-sentinel?cursor=private-cursor-sentinel",
@@ -260,7 +274,9 @@ def test_unmatched_targets_and_error_codes_collapse_to_fixed_labels() -> None:
 
 def test_distinct_resource_ids_do_not_increase_metric_label_cardinality() -> None:
     telemetry, lines, exporter, provider = _telemetry()
-    client = TestClient(_app(telemetry), raise_server_exceptions=False)
+    client = TestClient(
+        _app(telemetry), headers=AUTH_HEADERS, raise_server_exceptions=False
+    )
 
     for index in range(25):
         response = client.get(
@@ -288,7 +304,9 @@ def test_distinct_resource_ids_do_not_increase_metric_label_cardinality() -> Non
 
 def test_invalid_trace_context_and_auth_values_are_not_propagated() -> None:
     telemetry, lines, exporter, provider = _telemetry()
-    client = TestClient(_app(telemetry), raise_server_exceptions=False)
+    client = TestClient(
+        _app(telemetry), headers=AUTH_HEADERS, raise_server_exceptions=False
+    )
     uppercase_trace = TRACEPARENT.upper()
 
     response = client.get(
@@ -338,7 +356,9 @@ def test_duplicate_traceparent_is_ignored_and_log_sink_failures_are_isolated() -
         clock_ns=StepClock(),
         wall_clock=lambda: NOW,
     )
-    client = TestClient(_app(telemetry), raise_server_exceptions=False)
+    client = TestClient(
+        _app(telemetry), headers=AUTH_HEADERS, raise_server_exceptions=False
+    )
 
     response = client.get(
         "/v1/jobs/safe-job",

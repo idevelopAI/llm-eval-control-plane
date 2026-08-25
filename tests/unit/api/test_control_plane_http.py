@@ -412,7 +412,7 @@ def test_comparison_submission_enqueues_pinned_runs_and_replays(
     created = api_harness.client.post(
         "/v1/comparisons",
         json=body,
-        headers={"Idempotency-Key": "comparison-001"},
+        headers={"Idempotency-Key": "comparison-one"},
     )
     explicit_defaults = json.loads(json.dumps(body))
     explicit_defaults["spec"]["schema_version"] = "1"
@@ -420,7 +420,7 @@ def test_comparison_submission_enqueues_pinned_runs_and_replays(
     replay = api_harness.client.post(
         "/v1/comparisons",
         json=explicit_defaults,
-        headers={"Idempotency-Key": "comparison-001"},
+        headers={"Idempotency-Key": "comparison-one"},
     )
 
     assert unresolved_response.status_code == 422

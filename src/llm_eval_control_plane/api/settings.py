@@ -33,6 +33,8 @@ _WORKER_REAPER_BATCH = "CONTROL_PLANE_WORKER_REAPER_BATCH"
 _WORKER_BACKOFF_BASE_SECONDS = "CONTROL_PLANE_WORKER_BACKOFF_BASE_SECONDS"
 _WORKER_BACKOFF_MAX_SECONDS = "CONTROL_PLANE_WORKER_BACKOFF_MAX_SECONDS"
 _WORKER_HEALTH_FILE = "CONTROL_PLANE_WORKER_HEALTH_FILE"
+_AUTH_FILE = "CONTROL_PLANE_AUTH_FILE"
+_MAX_AUTH_FILE_BYTES = 4 * 1024
 
 
 class RuntimeConfigurationError(RuntimeError):
@@ -114,6 +116,33 @@ def max_body_bytes_from_environment(
     if not 1 <= value <= _MAX_BODY_BYTES:
         raise RuntimeConfigurationError("Request body limit is invalid")
     return value
+
+
+def authentication_file_from_environment(
+    environ: Mapping[str, str] = os.environ,
+) -> Path:
+    """Resolve the required absolute authentication configuration path."""
+    raw = environ.get(_AUTH_FILE)
+    if not isinstance(raw, str):
+        raise RuntimeConfigurationError("Authentication configuration is required")
+    try:
+        encoded = raw.encode("utf-8")
+    except UnicodeEncodeError:
+        raise RuntimeConfigurationError(
+            "Authentication configuration path is invalid"
+        ) from None
+    path = Path(raw)
+    if (
+        not raw
+        or len(encoded) > _MAX_AUTH_FILE_BYTES
+        or any(character in raw for character in ("\x00", "\r", "\n"))
+        or not path.is_absolute()
+        or not path.name
+        or raw != str(path)
+        or any(part in {".", ".."} for part in path.parts)
+    ):
+        raise RuntimeConfigurationError("Authentication configuration path is invalid")
+    return path
 
 
 def worker_settings_from_environment(
@@ -331,6 +360,7 @@ def _read_password(path: Path) -> str:
 __all__ = [
     "RuntimeConfigurationError",
     "WorkerSettings",
+    "authentication_file_from_environment",
     "database_url_from_environment",
     "max_body_bytes_from_environment",
     "worker_settings_from_environment",

@@ -17,6 +17,7 @@ from opentelemetry.trace import (
     StatusCode,
     TraceFlags,
     TraceState,
+    get_current_span,
     set_span_in_context,
 )
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -107,6 +108,9 @@ class ApiObservabilityMiddleware:
                     error_code=error_code,
                     duration_ns=duration_ns,
                 )
+                auth_outcome = _auth_outcome_from_scope(scope)
+                if auth_outcome is not None:
+                    self._telemetry.record_auth_decision(auth_outcome)
                 self._telemetry.emit_http_event(
                     request_id=request_id,
                     trace_id=trace_id,
@@ -148,6 +152,18 @@ def trace_context_from_scope(scope: Scope) -> Context | None:
     return set_span_in_context(NonRecordingSpan(parent))
 
 
+def current_traceparent() -> str | None:
+    """Return the active span as strict W3C coordination metadata."""
+    try:
+        context = get_current_span().get_span_context()
+    except Exception:
+        return None
+    if not context.is_valid:
+        return None
+    flags = "01" if context.trace_flags.sampled else "00"
+    return f"00-{context.trace_id:032x}-{context.span_id:016x}-{flags}"
+
+
 def route_template_from_scope(scope: Scope) -> str:
     """Return a fixed route template, never the path or raw request target."""
     route = scope.get("route")
@@ -183,8 +199,15 @@ def _set_error_code(scope: Scope, code: str) -> None:
         state["observability_error_code"] = code
 
 
+def _auth_outcome_from_scope(scope: Scope) -> str | None:
+    state = scope.get("state")
+    value = state.get("auth_outcome") if isinstance(state, dict) else None
+    return value if value in {"allowed", "denied", "invalid"} else None
+
+
 __all__ = [
     "ApiObservabilityMiddleware",
+    "current_traceparent",
     "error_code_from_scope",
     "request_id_from_scope",
     "route_template_from_scope",

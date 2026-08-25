@@ -126,3 +126,32 @@ def test_openapi_documents_required_idempotency_header_and_bounds(
     )
     resolved_reference = document["components"]["schemas"]["ResolvedArtifactRefInput"]
     assert "digest" in resolved_reference["required"]
+
+
+def test_openapi_applies_project_bearer_security_only_to_v1_operations(
+    api_harness: ApiHarness,
+) -> None:
+    document = api_harness.client.get("/openapi.json").json()
+
+    assert document["components"]["securitySchemes"]["ProjectBearer"] == {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "cpk_<base64url>",
+        "description": "Project-bound opaque API credential",
+    }
+    assert "/metrics" not in document["paths"]
+    for path, path_item in document["paths"].items():
+        for operation in path_item.values():
+            if not isinstance(operation, dict) or "operationId" not in operation:
+                continue
+            if path.startswith("/v1"):
+                assert operation["security"] == [{"ProjectBearer": []}]
+                project_headers = [
+                    parameter
+                    for parameter in operation.get("parameters", [])
+                    if parameter.get("name") == "X-Project-ID"
+                ]
+                assert len(project_headers) == 1
+                assert project_headers[0]["required"] is True
+            else:
+                assert "security" not in operation
