@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import base64
+import re
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Any, TypeVar
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from sqlalchemy import (
     CheckConstraint,
     Column,
@@ -23,19 +24,22 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     and_,
+    func,
     insert,
     select,
     text,
     update,
 )
-from sqlalchemy.engine import Engine, RowMapping
+from sqlalchemy.engine import Connection, Engine, RowMapping
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from llm_eval_control_plane.application.control_plane import (
+    ClaimedJob,
     ControlPlaneStoreError,
     StoreConflictError,
     StoreIdempotencyConflictError,
     StoreInvalidCursorError,
+    StoreLeaseLostError,
     StoreNotFoundError,
     StoreTransitionError,
 )
@@ -50,14 +54,18 @@ from llm_eval_control_plane.domain.control_plane import (
     CursorPage,
     DatasetListRecord,
     DatasetRecord,
+    JobAttemptRecord,
+    JobAttemptStatus,
     JobKind,
+    JobPayload,
     JobRecord,
     JobStatus,
-    JobTransitionError,
+    LeaseToken,
     ReleaseDecisionListRecord,
     ReleaseDecisionRecord,
     RunListRecord,
     RunRecord,
+    WorkerId,
 )
 from llm_eval_control_plane.domain.datasets import DatasetVersion
 from llm_eval_control_plane.domain.results import RunResult
@@ -430,6 +438,10 @@ class IllegalJobTransitionError(ControlPlaneRepositoryError, StoreTransitionErro
     """Raised when a requested lifecycle transition is not legal."""
 
 
+class LeaseLostError(ControlPlaneRepositoryError, StoreLeaseLostError):
+    """Raised when a worker no longer owns an active unexpired lease."""
+
+
 class CorruptRecordError(ControlPlaneRepositoryError):
     """Raised when stored canonical evidence fails integrity validation."""
 
@@ -492,6 +504,37 @@ def _limit(value: int) -> int:
 _CURSOR_DOMAIN = b"llm-eval-control-plane/keyset-cursor/v1\0"
 _SCHEMA_REVISION = "20260823_0002"
 _DEFAULT_MAX_DOCUMENT_BYTES = 64 * 1024 * 1024
+_MAX_JOB_PAYLOAD_BYTES = 4 * 1024 * 1024
+_MIGRATION_WORKER_ID = "phase5-migration"
+_MIGRATION_LEASE_TOKEN = "phase5-migration-token-000000000000"
+_SAFE_CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_WORKER_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_LEASE_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
+_JOB_PAYLOAD_ADAPTER: TypeAdapter[JobPayload] = TypeAdapter(JobPayload)
+
+
+def _bounded_int(value: int, *, lower: int, upper: int, name: str) -> int:
+    if type(value) is not int or not lower <= value <= upper:
+        raise ValueError(f"{name} is outside its supported range")
+    return value
+
+
+def _safe_code(value: str) -> str:
+    if not isinstance(value, str) or _SAFE_CODE_PATTERN.fullmatch(value) is None:
+        raise ValueError("error code is invalid")
+    return value
+
+
+def _lease_token_value(value: LeaseToken) -> str:
+    if not isinstance(value, str) or _LEASE_TOKEN_PATTERN.fullmatch(value) is None:
+        raise ValueError("lease token is invalid")
+    return value
+
+
+def _worker_id_value(value: WorkerId) -> str:
+    if not isinstance(value, str) or _WORKER_ID_PATTERN.fullmatch(value) is None:
+        raise ValueError("worker identity is invalid")
+    return value
 
 
 def _encode_cursor(
@@ -607,6 +650,13 @@ class SqlAlchemyControlPlaneRepository:
         if len(document.encode("utf-8")) > self._max_document_bytes:
             raise PayloadTooLargeError(
                 "Canonical evidence exceeds the configured size limit"
+            )
+
+    @staticmethod
+    def _require_payload_size(document: str) -> None:
+        if len(document.encode("utf-8")) > _MAX_JOB_PAYLOAD_BYTES:
+            raise PayloadTooLargeError(
+                "Canonical worker payload exceeds its size limit"
             )
 
     def check_health(self) -> None:
@@ -751,10 +801,18 @@ class SqlAlchemyControlPlaneRepository:
             )
         return CursorPage(items=records, next_cursor=next_cursor)
 
-    def begin_job(self, record: JobRecord) -> tuple[JobRecord, bool]:
-        """Atomically claim one idempotency key and report the unique winner."""
-        if record.status is not JobStatus.QUEUED:
-            raise ValueError("new jobs must start in the queued state")
+    def begin_job(
+        self,
+        record: JobRecord,
+        payload: JobPayload,
+    ) -> tuple[JobRecord, bool]:
+        """Atomically insert one queued job and its canonical private payload."""
+        if record.status is not JobStatus.QUEUED or record.attempt_count != 0:
+            raise ValueError("new jobs must start as an unattempted queued job")
+        if payload.kind is not record.kind:
+            raise ValueError("job payload kind does not match the job")
+        document = _model_text(payload)
+        self._require_payload_size(document)
         values = {
             "job_id": record.job_id,
             "kind": record.kind.value,
@@ -770,9 +828,16 @@ class SqlAlchemyControlPlaneRepository:
             "updated_at": record.updated_at,
             "version": 0,
         }
+        payload_values = {
+            "job_id": record.job_id,
+            "payload_digest": payload.payload_digest,
+            "document": document,
+            "created_at": record.created_at,
+        }
         try:
             with self._engine.begin() as connection:
                 connection.execute(insert(jobs_table).values(**values))
+                connection.execute(insert(job_payloads_table).values(**payload_values))
             return record, True
         except IntegrityError:
             try:
@@ -801,12 +866,14 @@ class SqlAlchemyControlPlaneRepository:
         return self._get_job(jobs_table.c.job_id == job_id)
 
     def get_job_by_idempotency(self, kind: JobKind, idempotency_key: str) -> JobRecord:
-        return self._get_job(
+        job = self._get_job(
             and_(
                 jobs_table.c.kind == kind.value,
                 jobs_table.c.idempotency_key == idempotency_key,
             )
         )
+        self._validate_existing_job_payload(job)
+        return job
 
     def get_job_by_resource(self, kind: JobKind, resource_id: str) -> JobRecord:
         return self._get_job(
@@ -878,71 +945,885 @@ class SqlAlchemyControlPlaneRepository:
             )
         return CursorPage(items=records, next_cursor=next_cursor)
 
-    def transition_job(
+    def claim_next_job(
         self,
-        job_id: str,
-        status: JobStatus,
         *,
-        at: datetime,
-        error_code: str | None = None,
-    ) -> JobRecord:
+        worker_id: WorkerId,
+        lease_token: LeaseToken,
+        lease_seconds: int,
+    ) -> ClaimedJob | None:
+        worker = _worker_id_value(worker_id)
+        token = _lease_token_value(lease_token)
+        duration = _bounded_int(
+            lease_seconds,
+            lower=5,
+            upper=3_600,
+            name="lease duration",
+        )
+        self._require_postgresql_coordination()
         try:
             with self._engine.begin() as connection:
+                selection_time = self._database_now(connection)
                 row = (
                     connection.execute(
-                        select(jobs_table).where(jobs_table.c.job_id == job_id)
+                        select(jobs_table)
+                        .where(
+                            jobs_table.c.status == JobStatus.QUEUED.value,
+                            jobs_table.c.available_at <= selection_time,
+                        )
+                        .order_by(
+                            jobs_table.c.available_at,
+                            jobs_table.c.created_at,
+                            jobs_table.c.job_id,
+                        )
+                        .with_for_update(skip_locked=True, of=jobs_table)
+                        .limit(1)
                     )
                     .mappings()
                     .one_or_none()
                 )
                 if row is None:
-                    raise RecordNotFoundError("Job was not found")
+                    return None
                 current = self._job_record(row)
+                payload = self._load_job_payload(
+                    connection,
+                    current,
+                    required=True,
+                    lock=True,
+                )
+                if payload is None:  # pragma: no cover - required=True is exhaustive
+                    raise CorruptRecordError("Queued job has no worker payload")
+                lease_started_at = self._database_now(connection)
+                transition_at = max(lease_started_at, current.updated_at)
                 try:
-                    next_record = current.transition_to(
-                        status,
-                        at=at,
-                        error_code=error_code,
+                    running = current.transition_to(
+                        JobStatus.RUNNING,
+                        at=transition_at,
                     )
-                except JobTransitionError as error:
-                    raise IllegalJobTransitionError(
-                        "Job lifecycle transition is not allowed"
-                    ) from error
-                if next_record is current:
-                    return current
+                except ValueError as error:
+                    raise IllegalJobTransitionError("Job cannot be claimed") from error
+                lease_expires_at = lease_started_at + timedelta(seconds=duration)
+                self._update_job(connection, row=row, record=running)
+                connection.execute(
+                    insert(job_attempts_table).values(
+                        job_id=running.job_id,
+                        attempt_number=running.attempt_count,
+                        status=JobAttemptStatus.RUNNING.value,
+                        worker_id=worker,
+                        lease_token=token,
+                        error_code=None,
+                        started_at=lease_started_at,
+                        heartbeat_at=lease_started_at,
+                        lease_expires_at=lease_expires_at,
+                        finished_at=None,
+                    )
+                )
+                attempt = JobAttemptRecord(
+                    job_id=running.job_id,
+                    attempt_number=running.attempt_count,
+                    status=JobAttemptStatus.RUNNING,
+                    started_at=lease_started_at,
+                    heartbeat_at=lease_started_at,
+                    lease_expires_at=lease_expires_at,
+                )
+                return ClaimedJob(
+                    job=running,
+                    payload=payload,
+                    attempt=attempt,
+                    lease_token=token,
+                )
+        except ControlPlaneRepositoryError:
+            raise
+        except IntegrityError as error:
+            raise ConcurrentTransitionError(
+                "Job claim conflicted with another writer"
+            ) from error
+        except SQLAlchemyError as error:
+            raise ControlPlaneRepositoryError("Could not claim queued job") from error
+
+    def heartbeat_job(
+        self,
+        job_id: str,
+        attempt_number: int,
+        lease_token: LeaseToken,
+        *,
+        lease_seconds: int,
+    ) -> JobRecord:
+        number = _bounded_int(
+            attempt_number,
+            lower=1,
+            upper=10,
+            name="attempt number",
+        )
+        token = _lease_token_value(lease_token)
+        duration = _bounded_int(
+            lease_seconds,
+            lower=5,
+            upper=3_600,
+            name="lease duration",
+        )
+        try:
+            with self._engine.begin() as connection:
+                _, current, _, locked_at = self._lock_active_lease(
+                    connection,
+                    job_id=job_id,
+                    attempt_number=number,
+                    lease_token=token,
+                )
                 changed = connection.execute(
-                    update(jobs_table)
+                    update(job_attempts_table)
                     .where(
-                        jobs_table.c.job_id == job_id,
-                        jobs_table.c.version == row["version"],
+                        job_attempts_table.c.job_id == job_id,
+                        job_attempts_table.c.attempt_number == number,
+                        job_attempts_table.c.status == JobAttemptStatus.RUNNING.value,
+                        job_attempts_table.c.lease_token == token,
+                        job_attempts_table.c.lease_expires_at
+                        > self._database_time_expression(connection),
                     )
                     .values(
-                        status=next_record.status.value,
-                        attempt_count=next_record.attempt_count,
-                        available_at=next_record.available_at,
-                        error_code=next_record.error_code,
-                        updated_at=next_record.updated_at,
-                        version=row["version"] + 1,
+                        heartbeat_at=locked_at,
+                        lease_expires_at=locked_at + timedelta(seconds=duration),
                     )
                 )
                 if changed.rowcount != 1:
-                    raise ConcurrentTransitionError(
-                        "Job changed during lifecycle transition"
-                    )
-                return next_record
+                    raise LeaseLostError("Worker lease is no longer active")
+                return current
         except ControlPlaneRepositoryError:
             raise
         except SQLAlchemyError as error:
-            raise ControlPlaneRepositoryError("Could not transition job") from error
+            raise ControlPlaneRepositoryError(
+                "Could not heartbeat worker lease"
+            ) from error
+
+    def retry_job(
+        self,
+        job_id: str,
+        attempt_number: int,
+        lease_token: LeaseToken,
+        *,
+        delay_seconds: int,
+        error_code: str,
+    ) -> JobRecord:
+        number = _bounded_int(
+            attempt_number,
+            lower=1,
+            upper=10,
+            name="attempt number",
+        )
+        token = _lease_token_value(lease_token)
+        delay = _bounded_int(
+            delay_seconds,
+            lower=1,
+            upper=3_600,
+            name="retry delay",
+        )
+        safe_error = _safe_code(error_code)
+        try:
+            with self._engine.begin() as connection:
+                row, current, _, locked_at = self._lock_active_lease(
+                    connection,
+                    job_id=job_id,
+                    attempt_number=number,
+                    lease_token=token,
+                )
+                if current.status is JobStatus.CANCEL_REQUESTED:
+                    return self._cancel_active_attempt(
+                        connection,
+                        row=row,
+                        current=current,
+                        attempt_number=number,
+                        lease_token=token,
+                        now=locked_at,
+                    )
+                transition_at = max(locked_at, current.updated_at)
+                try:
+                    queued = current.transition_to(
+                        JobStatus.QUEUED,
+                        at=transition_at,
+                        available_at=transition_at + timedelta(seconds=delay),
+                    )
+                except ValueError as error:
+                    raise IllegalJobTransitionError(
+                        "Job cannot be scheduled for another attempt"
+                    ) from error
+                self._finish_attempt(
+                    connection,
+                    job_id=job_id,
+                    attempt_number=number,
+                    lease_token=token,
+                    status=JobAttemptStatus.RETRY_SCHEDULED,
+                    error_code=safe_error,
+                    finished_at=transition_at,
+                )
+                self._update_job(connection, row=row, record=queued)
+                return queued
+        except ControlPlaneRepositoryError:
+            raise
+        except SQLAlchemyError as error:
+            raise ControlPlaneRepositoryError("Could not schedule job retry") from error
+
+    def fail_job(
+        self,
+        job_id: str,
+        attempt_number: int,
+        lease_token: LeaseToken,
+        *,
+        error_code: str,
+    ) -> JobRecord:
+        number = _bounded_int(
+            attempt_number,
+            lower=1,
+            upper=10,
+            name="attempt number",
+        )
+        token = _lease_token_value(lease_token)
+        safe_error = _safe_code(error_code)
+        try:
+            with self._engine.begin() as connection:
+                row, current, _, locked_at = self._lock_active_lease(
+                    connection,
+                    job_id=job_id,
+                    attempt_number=number,
+                    lease_token=token,
+                )
+                if current.status is JobStatus.CANCEL_REQUESTED:
+                    return self._cancel_active_attempt(
+                        connection,
+                        row=row,
+                        current=current,
+                        attempt_number=number,
+                        lease_token=token,
+                        now=locked_at,
+                    )
+                transition_at = max(locked_at, current.updated_at)
+                try:
+                    failed = current.transition_to(
+                        JobStatus.FAILED,
+                        at=transition_at,
+                        error_code=safe_error,
+                    )
+                except ValueError as error:
+                    raise IllegalJobTransitionError("Job cannot fail") from error
+                self._finish_attempt(
+                    connection,
+                    job_id=job_id,
+                    attempt_number=number,
+                    lease_token=token,
+                    status=JobAttemptStatus.FAILED,
+                    error_code=safe_error,
+                    finished_at=transition_at,
+                )
+                self._update_job(connection, row=row, record=failed)
+                return failed
+        except ControlPlaneRepositoryError:
+            raise
+        except SQLAlchemyError as error:
+            raise ControlPlaneRepositoryError("Could not fail job") from error
+
+    def reap_expired_jobs(
+        self,
+        *,
+        limit: int,
+        retry_base_seconds: int,
+        retry_max_seconds: int,
+    ) -> tuple[JobRecord, ...]:
+        batch_limit = _bounded_int(limit, lower=1, upper=100, name="reaper limit")
+        retry_base = _bounded_int(
+            retry_base_seconds,
+            lower=1,
+            upper=300,
+            name="retry base",
+        )
+        retry_max = _bounded_int(
+            retry_max_seconds,
+            lower=1,
+            upper=3_600,
+            name="retry maximum",
+        )
+        if retry_max < retry_base:
+            raise ValueError("retry maximum cannot be below retry base")
+        self._require_postgresql_coordination()
+        try:
+            with self._engine.begin() as connection:
+                selection_time = self._database_now(connection)
+                candidates = connection.execute(
+                    select(
+                        jobs_table.c.job_id,
+                        job_attempts_table.c.attempt_number,
+                    )
+                    .join(
+                        job_attempts_table,
+                        and_(
+                            job_attempts_table.c.job_id == jobs_table.c.job_id,
+                            job_attempts_table.c.attempt_number
+                            == jobs_table.c.attempt_count,
+                        ),
+                    )
+                    .where(
+                        jobs_table.c.status.in_(
+                            (
+                                JobStatus.RUNNING.value,
+                                JobStatus.CANCEL_REQUESTED.value,
+                            )
+                        ),
+                        job_attempts_table.c.status == JobAttemptStatus.RUNNING.value,
+                        job_attempts_table.c.lease_expires_at <= selection_time,
+                    )
+                    .order_by(
+                        job_attempts_table.c.lease_expires_at,
+                        jobs_table.c.job_id,
+                    )
+                    .with_for_update(
+                        skip_locked=True,
+                        of=(jobs_table, job_attempts_table),
+                    )
+                    .limit(batch_limit)
+                ).all()
+                recovered: list[JobRecord] = []
+                for job_id, attempt_number in candidates:
+                    job_row = self._locked_job_row(connection, job_id)
+                    attempt_row = self._locked_attempt_row(
+                        connection,
+                        job_id=job_id,
+                        attempt_number=attempt_number,
+                    )
+                    if job_row is None or attempt_row is None:
+                        raise CorruptRecordError("Expired worker state is incomplete")
+                    current = self._job_record(job_row)
+                    transition_time = self._database_now(connection)
+                    transition_at = max(transition_time, current.updated_at)
+                    token = attempt_row["lease_token"]
+                    if not isinstance(token, str):
+                        raise CorruptRecordError("Stored worker lease is invalid")
+                    if current.status is JobStatus.CANCEL_REQUESTED:
+                        recovered.append(
+                            self._cancel_active_attempt(
+                                connection,
+                                row=job_row,
+                                current=current,
+                                attempt_number=attempt_number,
+                                lease_token=token,
+                                now=transition_at,
+                                allow_expired_lease=True,
+                            )
+                        )
+                        continue
+                    self._finish_attempt(
+                        connection,
+                        job_id=job_id,
+                        attempt_number=attempt_number,
+                        lease_token=token,
+                        status=JobAttemptStatus.LEASE_EXPIRED,
+                        error_code="lease_expired",
+                        finished_at=transition_at,
+                        allow_expired_lease=True,
+                    )
+                    if current.attempt_count >= current.max_attempts:
+                        next_record = current.transition_to(
+                            JobStatus.FAILED,
+                            at=transition_at,
+                            error_code="lease_expired",
+                        )
+                    else:
+                        delay = min(
+                            retry_base * 2 ** (current.attempt_count - 1),
+                            retry_max,
+                        )
+                        next_record = current.transition_to(
+                            JobStatus.QUEUED,
+                            at=transition_at,
+                            available_at=transition_at + timedelta(seconds=delay),
+                        )
+                    self._update_job(
+                        connection,
+                        row=job_row,
+                        record=next_record,
+                    )
+                    recovered.append(next_record)
+                return tuple(recovered)
+        except ControlPlaneRepositoryError:
+            raise
+        except SQLAlchemyError as error:
+            raise ControlPlaneRepositoryError(
+                "Could not recover expired jobs"
+            ) from error
+
+    def cancel_job(self, job_id: str) -> JobRecord:
+        try:
+            with self._engine.begin() as connection:
+                row = self._locked_job_row(connection, job_id)
+                if row is None:
+                    raise RecordNotFoundError("Job was not found")
+                current = self._job_record(row)
+                if current.status is JobStatus.CANCELED:
+                    return current
+                if current.status is JobStatus.CANCEL_REQUESTED:
+                    return current
+                if current.status in (JobStatus.SUCCEEDED, JobStatus.FAILED):
+                    raise IllegalJobTransitionError("Terminal job cannot be canceled")
+                if current.status is JobStatus.RUNNING:
+                    attempt = self._locked_attempt_row(
+                        connection,
+                        job_id=job_id,
+                        attempt_number=current.attempt_count,
+                    )
+                    if (
+                        attempt is None
+                        or attempt["status"] != JobAttemptStatus.RUNNING.value
+                    ):
+                        raise CorruptRecordError("Running job has no active attempt")
+                transition_time = self._database_now(connection)
+                transition_at = max(transition_time, current.updated_at)
+                canceled = current.request_cancellation(at=transition_at)
+                self._update_job(connection, row=row, record=canceled)
+                return canceled
+        except ControlPlaneRepositoryError:
+            raise
+        except SQLAlchemyError as error:
+            raise ControlPlaneRepositoryError("Could not cancel job") from error
+
+    def acknowledge_cancellation(
+        self,
+        job_id: str,
+        attempt_number: int,
+        lease_token: LeaseToken,
+    ) -> JobRecord:
+        number = _bounded_int(
+            attempt_number,
+            lower=1,
+            upper=10,
+            name="attempt number",
+        )
+        token = _lease_token_value(lease_token)
+        try:
+            with self._engine.begin() as connection:
+                row = self._locked_job_row(connection, job_id)
+                if row is None:
+                    raise LeaseLostError("Worker lease is no longer active")
+                current = self._job_record(row)
+                if current.status is JobStatus.CANCELED:
+                    self._require_terminal_attempt(
+                        connection,
+                        job_id=job_id,
+                        attempt_number=number,
+                        lease_token=token,
+                        status=JobAttemptStatus.CANCELED,
+                    )
+                    return current
+                row, current, _, locked_at = self._lock_active_lease(
+                    connection,
+                    job_id=job_id,
+                    attempt_number=number,
+                    lease_token=token,
+                    locked_job=row,
+                )
+                if current.status is not JobStatus.CANCEL_REQUESTED:
+                    raise IllegalJobTransitionError("Job has no cancellation request")
+                return self._cancel_active_attempt(
+                    connection,
+                    row=row,
+                    current=current,
+                    attempt_number=number,
+                    lease_token=token,
+                    now=locked_at,
+                )
+        except ControlPlaneRepositoryError:
+            raise
+        except SQLAlchemyError as error:
+            raise ControlPlaneRepositoryError(
+                "Could not acknowledge job cancellation"
+            ) from error
+
+    def list_job_attempts(self, job_id: str) -> tuple[JobAttemptRecord, ...]:
+        statement = (
+            select(
+                jobs_table,
+                job_attempts_table.c.job_id.label("_attempt_job_id"),
+                job_attempts_table.c.attempt_number.label("_attempt_attempt_number"),
+                job_attempts_table.c.status.label("_attempt_status"),
+                job_attempts_table.c.worker_id.label("_attempt_worker_id"),
+                job_attempts_table.c.lease_token.label("_attempt_lease_token"),
+                job_attempts_table.c.error_code.label("_attempt_error_code"),
+                job_attempts_table.c.started_at.label("_attempt_started_at"),
+                job_attempts_table.c.heartbeat_at.label("_attempt_heartbeat_at"),
+                job_attempts_table.c.lease_expires_at.label(
+                    "_attempt_lease_expires_at"
+                ),
+                job_attempts_table.c.finished_at.label("_attempt_finished_at"),
+            )
+            .select_from(
+                jobs_table.outerjoin(
+                    job_attempts_table,
+                    job_attempts_table.c.job_id == jobs_table.c.job_id,
+                )
+            )
+            .where(jobs_table.c.job_id == job_id)
+            .order_by(job_attempts_table.c.attempt_number)
+        )
+        try:
+            with self._engine.connect() as connection:
+                rows = connection.execute(statement).mappings().all()
+        except SQLAlchemyError as error:
+            raise ControlPlaneRepositoryError("Could not list job attempts") from error
+        if not rows:
+            raise RecordNotFoundError("Job was not found")
+        job = self._job_record(rows[0])
+        records = tuple(
+            self._attempt_record(
+                {
+                    "job_id": row["_attempt_job_id"],
+                    "attempt_number": row["_attempt_attempt_number"],
+                    "status": row["_attempt_status"],
+                    "worker_id": row["_attempt_worker_id"],
+                    "lease_token": row["_attempt_lease_token"],
+                    "error_code": row["_attempt_error_code"],
+                    "started_at": row["_attempt_started_at"],
+                    "heartbeat_at": row["_attempt_heartbeat_at"],
+                    "lease_expires_at": row["_attempt_lease_expires_at"],
+                    "finished_at": row["_attempt_finished_at"],
+                }
+            )
+            for row in rows
+            if row["_attempt_job_id"] is not None
+        )
+        if tuple(item.attempt_number for item in records) != tuple(
+            range(1, job.attempt_count + 1)
+        ):
+            raise CorruptRecordError("Stored job attempt history is incomplete")
+        return records
+
+    def _validate_existing_job_payload(
+        self,
+        job: JobRecord,
+    ) -> None:
+        terminal = job.status in (
+            JobStatus.SUCCEEDED,
+            JobStatus.FAILED,
+            JobStatus.CANCELED,
+        )
+        try:
+            with self._engine.connect() as connection:
+                self._load_job_payload(
+                    connection,
+                    job,
+                    required=not terminal,
+                )
+        except ControlPlaneRepositoryError:
+            raise
+        except SQLAlchemyError as error:
+            raise ControlPlaneRepositoryError(
+                "Could not validate job payload"
+            ) from error
+
+    def _load_job_payload(
+        self,
+        connection: Connection,
+        job: JobRecord,
+        *,
+        required: bool,
+        lock: bool = False,
+    ) -> JobPayload | None:
+        statement = select(job_payloads_table).where(
+            job_payloads_table.c.job_id == job.job_id
+        )
+        if lock:
+            statement = statement.with_for_update(of=job_payloads_table)
+        row = connection.execute(statement).mappings().one_or_none()
+        if row is None:
+            if not required and self._is_migrated_terminal_job(connection, job):
+                return None
+            raise CorruptRecordError("Stored job has no worker payload")
+        try:
+            document = row["document"]
+            if not isinstance(document, str):
+                raise TypeError("worker payload must be text")
+            self._require_payload_size(document)
+            value = parse_json(document)
+            if canonical_json_bytes(value).decode("utf-8") != document:
+                raise ValueError("worker payload is not canonical")
+            payload = _JOB_PAYLOAD_ADAPTER.validate_python(value)
+            if row["payload_digest"] != payload.payload_digest:
+                raise ValueError("worker payload digest does not match")
+            if payload.kind is not job.kind:
+                raise ValueError("worker payload kind does not match")
+            if _aware(row["created_at"]) != job.created_at:
+                raise ValueError("worker payload timestamp does not match")
+            return payload
+        except (
+            CanonicalJsonError,
+            KeyError,
+            PayloadTooLargeError,
+            TypeError,
+            UnicodeError,
+            ValidationError,
+            ValueError,
+        ) as error:
+            raise CorruptRecordError("Stored worker payload is invalid") from error
+
+    def _is_migrated_terminal_job(
+        self,
+        connection: Connection,
+        job: JobRecord,
+    ) -> bool:
+        if (
+            job.status not in (JobStatus.SUCCEEDED, JobStatus.FAILED)
+            or job.attempt_count != 1
+            or job.max_attempts != 3
+            or job.available_at != job.created_at
+        ):
+            return False
+        row = (
+            connection.execute(
+                select(job_attempts_table).where(
+                    job_attempts_table.c.job_id == job.job_id,
+                    job_attempts_table.c.attempt_number == 1,
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            return False
+        attempt = self._attempt_record(row)
+        lease_delta = attempt.lease_expires_at - job.updated_at
+        return (
+            row["worker_id"] == _MIGRATION_WORKER_ID
+            and row["lease_token"] == _MIGRATION_LEASE_TOKEN
+            and attempt.status.value == job.status.value
+            and attempt.error_code == job.error_code
+            and attempt.started_at == job.created_at
+            and attempt.heartbeat_at == job.updated_at
+            and attempt.finished_at == job.updated_at
+            and timedelta(0) < lease_delta <= timedelta(seconds=1)
+        )
+
+    def _require_postgresql_coordination(self) -> None:
+        if self._engine.dialect.name != "postgresql":
+            raise ControlPlaneRepositoryError(
+                "Leased worker coordination requires PostgreSQL"
+            )
+
+    @staticmethod
+    def _database_time_expression(connection: Connection) -> Any:
+        return (
+            func.statement_timestamp()
+            if connection.dialect.name == "postgresql"
+            else func.current_timestamp()
+        )
+
+    @classmethod
+    def _database_now(cls, connection: Connection) -> datetime:
+        return _aware(
+            connection.execute(
+                select(cls._database_time_expression(connection))
+            ).scalar_one()
+        )
+
+    @staticmethod
+    def _locked_job_row(
+        connection: Connection,
+        job_id: str,
+    ) -> RowMapping | None:
+        return (
+            connection.execute(
+                select(jobs_table)
+                .where(jobs_table.c.job_id == job_id)
+                .with_for_update(of=jobs_table)
+            )
+            .mappings()
+            .one_or_none()
+        )
+
+    @staticmethod
+    def _locked_attempt_row(
+        connection: Connection,
+        *,
+        job_id: str,
+        attempt_number: int,
+    ) -> RowMapping | None:
+        return (
+            connection.execute(
+                select(job_attempts_table)
+                .where(
+                    job_attempts_table.c.job_id == job_id,
+                    job_attempts_table.c.attempt_number == attempt_number,
+                )
+                .with_for_update(of=job_attempts_table)
+            )
+            .mappings()
+            .one_or_none()
+        )
+
+    def _lock_active_lease(
+        self,
+        connection: Connection,
+        *,
+        job_id: str,
+        attempt_number: int,
+        lease_token: str,
+        locked_job: RowMapping | None = None,
+    ) -> tuple[RowMapping, JobRecord, RowMapping, datetime]:
+        job_row = (
+            self._locked_job_row(connection, job_id)
+            if locked_job is None
+            else locked_job
+        )
+        if job_row is None:
+            raise LeaseLostError("Worker lease is no longer active")
+        current = self._job_record(job_row)
+        attempt_row = self._locked_attempt_row(
+            connection,
+            job_id=job_id,
+            attempt_number=attempt_number,
+        )
+        if attempt_row is None:
+            raise LeaseLostError("Worker lease is no longer active")
+        self._attempt_record(attempt_row)
+        locked_at = self._database_now(connection)
+        if (
+            current.status not in (JobStatus.RUNNING, JobStatus.CANCEL_REQUESTED)
+            or current.attempt_count != attempt_number
+            or attempt_row["status"] != JobAttemptStatus.RUNNING.value
+            or attempt_row["lease_token"] != lease_token
+            or _aware(attempt_row["lease_expires_at"]) <= locked_at
+        ):
+            raise LeaseLostError("Worker lease is no longer active")
+        return job_row, current, attempt_row, locked_at
+
+    @staticmethod
+    def _update_job(
+        connection: Connection,
+        *,
+        row: RowMapping,
+        record: JobRecord,
+    ) -> None:
+        version = row["version"]
+        if isinstance(version, bool) or not isinstance(version, int) or version < 0:
+            raise CorruptRecordError("Stored job version is invalid")
+        changed = connection.execute(
+            update(jobs_table)
+            .where(
+                jobs_table.c.job_id == record.job_id,
+                jobs_table.c.version == version,
+            )
+            .values(
+                status=record.status.value,
+                attempt_count=record.attempt_count,
+                max_attempts=record.max_attempts,
+                available_at=record.available_at,
+                error_code=record.error_code,
+                updated_at=record.updated_at,
+                version=version + 1,
+            )
+        )
+        if changed.rowcount != 1:
+            raise ConcurrentTransitionError("Job changed during worker transition")
+
+    @staticmethod
+    def _finish_attempt(
+        connection: Connection,
+        *,
+        job_id: str,
+        attempt_number: int,
+        lease_token: str,
+        status: JobAttemptStatus,
+        error_code: str | None,
+        finished_at: datetime,
+        allow_expired_lease: bool = False,
+    ) -> None:
+        conditions = [
+            job_attempts_table.c.job_id == job_id,
+            job_attempts_table.c.attempt_number == attempt_number,
+            job_attempts_table.c.status == JobAttemptStatus.RUNNING.value,
+            job_attempts_table.c.lease_token == lease_token,
+        ]
+        if not allow_expired_lease:
+            conditions.append(
+                job_attempts_table.c.lease_expires_at
+                > SqlAlchemyControlPlaneRepository._database_time_expression(connection)
+            )
+        changed = connection.execute(
+            update(job_attempts_table)
+            .where(*conditions)
+            .values(
+                status=status.value,
+                error_code=error_code,
+                finished_at=finished_at,
+            )
+        )
+        if changed.rowcount != 1:
+            raise LeaseLostError("Worker lease is no longer active")
+
+    def _cancel_active_attempt(
+        self,
+        connection: Connection,
+        *,
+        row: RowMapping,
+        current: JobRecord,
+        attempt_number: int,
+        lease_token: str,
+        now: datetime,
+        allow_expired_lease: bool = False,
+    ) -> JobRecord:
+        transition_at = max(now, current.updated_at)
+        try:
+            canceled = current.transition_to(
+                JobStatus.CANCELED,
+                at=transition_at,
+            )
+        except ValueError as error:
+            raise IllegalJobTransitionError("Job cannot be canceled") from error
+        self._finish_attempt(
+            connection,
+            job_id=current.job_id,
+            attempt_number=attempt_number,
+            lease_token=lease_token,
+            status=JobAttemptStatus.CANCELED,
+            error_code=None,
+            finished_at=transition_at,
+            allow_expired_lease=allow_expired_lease,
+        )
+        self._update_job(connection, row=row, record=canceled)
+        return canceled
+
+    def _require_terminal_attempt(
+        self,
+        connection: Connection,
+        *,
+        job_id: str,
+        attempt_number: int,
+        lease_token: str,
+        status: JobAttemptStatus,
+    ) -> JobAttemptRecord:
+        row = self._locked_attempt_row(
+            connection,
+            job_id=job_id,
+            attempt_number=attempt_number,
+        )
+        if (
+            row is None
+            or row["lease_token"] != lease_token
+            or row["status"] != status.value
+        ):
+            raise LeaseLostError("Worker lease is no longer active")
+        return self._attempt_record(row)
 
     def complete_run(
         self,
         job_id: str,
         record: RunRecord,
         *,
-        at: datetime,
+        attempt_number: int,
+        lease_token: LeaseToken,
     ) -> JobRecord:
-        """Atomically append run evidence and mark its running job succeeded."""
+        """Publish immutable run evidence through one unexpired fenced attempt."""
+        number = _bounded_int(
+            attempt_number,
+            lower=1,
+            upper=10,
+            name="attempt number",
+        )
+        token = _lease_token_value(lease_token)
         document = _model_text(record.result)
         self._require_document_size(document)
         values = {
@@ -957,16 +1838,16 @@ class SqlAlchemyControlPlaneRepository:
         }
         try:
             with self._engine.begin() as connection:
-                row = (
-                    connection.execute(
-                        select(jobs_table).where(jobs_table.c.job_id == job_id)
-                    )
-                    .mappings()
-                    .one_or_none()
-                )
+                row = self._locked_job_row(connection, job_id)
                 if row is None:
-                    raise RecordNotFoundError("Job was not found")
+                    raise LeaseLostError("Worker lease is no longer active")
                 current = self._job_record(row)
+                if current.status not in (
+                    JobStatus.RUNNING,
+                    JobStatus.CANCEL_REQUESTED,
+                    JobStatus.SUCCEEDED,
+                ):
+                    raise LeaseLostError("Worker lease is no longer active")
                 self._require_completion_identity(
                     current,
                     expected_kind=JobKind.RUN,
@@ -980,24 +1861,60 @@ class SqlAlchemyControlPlaneRepository:
                     .one_or_none()
                 )
                 if current.status is JobStatus.SUCCEEDED:
+                    self._require_terminal_attempt(
+                        connection,
+                        job_id=job_id,
+                        attempt_number=number,
+                        lease_token=token,
+                        status=JobAttemptStatus.SUCCEEDED,
+                    )
                     self._require_identical_run(stored, document)
                     return current
-                next_record = self._completion_transition(current, at=at)
+                row, current, _, locked_at = self._lock_active_lease(
+                    connection,
+                    job_id=job_id,
+                    attempt_number=number,
+                    lease_token=token,
+                    locked_job=row,
+                )
+                if current.status is JobStatus.CANCEL_REQUESTED:
+                    return self._cancel_active_attempt(
+                        connection,
+                        row=row,
+                        current=current,
+                        attempt_number=number,
+                        lease_token=token,
+                        now=locked_at,
+                    )
                 if stored is None:
                     connection.execute(insert(runs_table).values(**values))
                 else:
                     self._require_identical_run(stored, document)
-                self._cas_succeeded_job(
-                    connection=connection,
-                    row=row,
-                    next_record=next_record,
+                transition_at = max(locked_at, current.updated_at)
+                succeeded = current.transition_to(
+                    JobStatus.SUCCEEDED,
+                    at=transition_at,
                 )
-                return next_record
+                self._finish_attempt(
+                    connection,
+                    job_id=job_id,
+                    attempt_number=number,
+                    lease_token=token,
+                    status=JobAttemptStatus.SUCCEEDED,
+                    error_code=None,
+                    finished_at=transition_at,
+                )
+                self._update_job(
+                    connection,
+                    row=row,
+                    record=succeeded,
+                )
+                return succeeded
         except ControlPlaneRepositoryError:
             raise
         except IntegrityError as error:
-            raise ConcurrentTransitionError(
-                "Run completion conflicted with another writer"
+            raise ImmutableRecordConflictError(
+                "Run evidence conflicts with stored metadata"
             ) from error
         except SQLAlchemyError as error:
             raise ControlPlaneRepositoryError("Could not complete run job") from error
@@ -1007,9 +1924,17 @@ class SqlAlchemyControlPlaneRepository:
         job_id: str,
         record: ReleaseDecisionRecord,
         *,
-        at: datetime,
+        attempt_number: int,
+        lease_token: LeaseToken,
     ) -> JobRecord:
-        """Atomically append decision evidence and mark its job succeeded."""
+        """Publish immutable decision evidence through one fenced attempt."""
+        number = _bounded_int(
+            attempt_number,
+            lower=1,
+            upper=10,
+            name="attempt number",
+        )
+        token = _lease_token_value(lease_token)
         document = _model_text(record.decision)
         self._require_document_size(document)
         values = {
@@ -1023,16 +1948,16 @@ class SqlAlchemyControlPlaneRepository:
         }
         try:
             with self._engine.begin() as connection:
-                row = (
-                    connection.execute(
-                        select(jobs_table).where(jobs_table.c.job_id == job_id)
-                    )
-                    .mappings()
-                    .one_or_none()
-                )
+                row = self._locked_job_row(connection, job_id)
                 if row is None:
-                    raise RecordNotFoundError("Job was not found")
+                    raise LeaseLostError("Worker lease is no longer active")
                 current = self._job_record(row)
+                if current.status not in (
+                    JobStatus.RUNNING,
+                    JobStatus.CANCEL_REQUESTED,
+                    JobStatus.SUCCEEDED,
+                ):
+                    raise LeaseLostError("Worker lease is no longer active")
                 self._require_completion_identity(
                     current,
                     expected_kind=JobKind.COMPARISON,
@@ -1048,19 +1973,55 @@ class SqlAlchemyControlPlaneRepository:
                     .one_or_none()
                 )
                 if current.status is JobStatus.SUCCEEDED:
+                    self._require_terminal_attempt(
+                        connection,
+                        job_id=job_id,
+                        attempt_number=number,
+                        lease_token=token,
+                        status=JobAttemptStatus.SUCCEEDED,
+                    )
                     self._require_identical_decision(stored, document)
                     return current
-                next_record = self._completion_transition(current, at=at)
+                row, current, _, locked_at = self._lock_active_lease(
+                    connection,
+                    job_id=job_id,
+                    attempt_number=number,
+                    lease_token=token,
+                    locked_job=row,
+                )
+                if current.status is JobStatus.CANCEL_REQUESTED:
+                    return self._cancel_active_attempt(
+                        connection,
+                        row=row,
+                        current=current,
+                        attempt_number=number,
+                        lease_token=token,
+                        now=locked_at,
+                    )
                 if stored is None:
                     connection.execute(insert(release_decisions_table).values(**values))
                 else:
                     self._require_identical_decision(stored, document)
-                self._cas_succeeded_job(
-                    connection=connection,
-                    row=row,
-                    next_record=next_record,
+                transition_at = max(locked_at, current.updated_at)
+                succeeded = current.transition_to(
+                    JobStatus.SUCCEEDED,
+                    at=transition_at,
                 )
-                return next_record
+                self._finish_attempt(
+                    connection,
+                    job_id=job_id,
+                    attempt_number=number,
+                    lease_token=token,
+                    status=JobAttemptStatus.SUCCEEDED,
+                    error_code=None,
+                    finished_at=transition_at,
+                )
+                self._update_job(
+                    connection,
+                    row=row,
+                    record=succeeded,
+                )
+                return succeeded
         except ControlPlaneRepositoryError:
             raise
         except IntegrityError as error:
@@ -1081,43 +2042,14 @@ class SqlAlchemyControlPlaneRepository:
     ) -> None:
         if current.kind is not expected_kind or current.resource_id != resource_id:
             raise IllegalJobTransitionError("Job does not own the completed resource")
-        if current.status not in (JobStatus.RUNNING, JobStatus.SUCCEEDED):
+        if current.status not in (
+            JobStatus.RUNNING,
+            JobStatus.CANCEL_REQUESTED,
+            JobStatus.SUCCEEDED,
+        ):
             raise IllegalJobTransitionError(
                 "Only running jobs can publish completed evidence"
             )
-
-    @staticmethod
-    def _completion_transition(current: JobRecord, *, at: datetime) -> JobRecord:
-        try:
-            return current.transition_to(JobStatus.SUCCEEDED, at=at)
-        except JobTransitionError as error:
-            raise IllegalJobTransitionError(
-                "Job lifecycle transition is not allowed"
-            ) from error
-
-    @staticmethod
-    def _cas_succeeded_job(
-        *,
-        connection: Any,
-        row: RowMapping,
-        next_record: JobRecord,
-    ) -> None:
-        changed = connection.execute(
-            update(jobs_table)
-            .where(
-                jobs_table.c.job_id == next_record.job_id,
-                jobs_table.c.version == row["version"],
-                jobs_table.c.status == JobStatus.RUNNING.value,
-            )
-            .values(
-                status=JobStatus.SUCCEEDED.value,
-                error_code=None,
-                updated_at=next_record.updated_at,
-                version=row["version"] + 1,
-            )
-        )
-        if changed.rowcount != 1:
-            raise ConcurrentTransitionError("Job changed during evidence completion")
 
     def _require_identical_run(
         self, row: RowMapping | None, expected_document: str
@@ -1419,6 +2351,37 @@ class SqlAlchemyControlPlaneRepository:
             )
         except (KeyError, TypeError, ValidationError, ValueError) as error:
             raise CorruptRecordError("Stored control-plane job is invalid") from error
+
+    @staticmethod
+    def _attempt_record(
+        row: RowMapping | Mapping[str, Any],
+    ) -> JobAttemptRecord:
+        try:
+            worker_id = row["worker_id"]
+            lease_token = row["lease_token"]
+            if (
+                not isinstance(worker_id, str)
+                or _WORKER_ID_PATTERN.fullmatch(worker_id) is None
+                or not isinstance(lease_token, str)
+                or _LEASE_TOKEN_PATTERN.fullmatch(lease_token) is None
+            ):
+                raise ValueError("stored private lease identity is invalid")
+            return JobAttemptRecord(
+                job_id=row["job_id"],
+                attempt_number=row["attempt_number"],
+                status=row["status"],
+                error_code=row["error_code"],
+                started_at=_aware(row["started_at"]),
+                heartbeat_at=_aware(row["heartbeat_at"]),
+                lease_expires_at=_aware(row["lease_expires_at"]),
+                finished_at=(
+                    None if row["finished_at"] is None else _aware(row["finished_at"])
+                ),
+            )
+        except (KeyError, TypeError, ValidationError, ValueError) as error:
+            raise CorruptRecordError(
+                "Stored control-plane attempt is invalid"
+            ) from error
 
     def _run_record(self, row: RowMapping) -> RunRecord:
         result = _validated_model(

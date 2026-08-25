@@ -12,9 +12,19 @@ from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from pytest import MonkeyPatch, fixture, mark, raises
-from sqlalchemy import create_engine, delete, event, inspect, select, text, update
+from sqlalchemy import (
+    create_engine,
+    delete,
+    event,
+    insert,
+    inspect,
+    select,
+    text,
+    update,
+)
 from sqlalchemy.engine import Engine, RowMapping
 
+from llm_eval_control_plane.adapters import control_plane_db
 from llm_eval_control_plane.adapters.control_plane_db import (
     CONTROL_PLANE_METADATA,
     ConcurrentTransitionError,
@@ -24,6 +34,7 @@ from llm_eval_control_plane.adapters.control_plane_db import (
     IllegalJobTransitionError,
     ImmutableRecordConflictError,
     InvalidCursorError,
+    LeaseLostError,
     PayloadTooLargeError,
     RecordNotFoundError,
     ResourceAlreadySubmittedError,
@@ -31,6 +42,8 @@ from llm_eval_control_plane.adapters.control_plane_db import (
     _aware,
     _encode_cursor,
     datasets_table,
+    job_attempts_table,
+    job_payloads_table,
     jobs_table,
     release_decisions_table,
     runs_table,
@@ -40,6 +53,7 @@ from llm_eval_control_plane.adapters.scorers import (
     BuiltInEvaluatorKind,
     build_evaluators,
 )
+from llm_eval_control_plane.api.execution import DeterministicEvaluationExecutor
 from llm_eval_control_plane.application.comparison import compare_runs
 from llm_eval_control_plane.application.runner import InProcessRunner
 from llm_eval_control_plane.domain import (
@@ -53,16 +67,22 @@ from llm_eval_control_plane.domain import (
 from llm_eval_control_plane.domain.canonical import canonical_json_bytes, sha256_digest
 from llm_eval_control_plane.domain.comparison import ReleaseDecision, ReleaseStatus
 from llm_eval_control_plane.domain.control_plane import (
+    ComparisonJobPayload,
     DatasetRecord,
+    JobAttemptStatus,
     JobKind,
+    JobPayload,
     JobRecord,
     JobStatus,
     ReleaseDecisionRecord,
+    RunJobPayload,
     RunRecord,
 )
 from llm_eval_control_plane.domain.results import RunResult
 
 NOW = datetime(2026, 8, 20, 12, tzinfo=UTC)
+LEASE_TOKEN_A = "lease_token_a_0123456789abcdef0123456789abcdef"
+LEASE_TOKEN_B = "lease_token_b_0123456789abcdef0123456789abcdef"
 
 
 class SequenceClock:
@@ -131,6 +151,59 @@ def decision(
     )
 
 
+def run_payload(
+    dataset_version: DatasetVersion | None = None,
+    *,
+    target_name: str = "fake/worker",
+    target_revision: int = 1,
+) -> RunJobPayload:
+    selected = dataset() if dataset_version is None else dataset_version
+    executor = DeterministicEvaluationExecutor()
+    evaluator_names = ("exact_match",)
+    return RunJobPayload(
+        dataset=selected.artifact_ref,
+        target_name=target_name,
+        target_revision=target_revision,
+        adapter="deterministic_fake",
+        evaluator_names=evaluator_names,
+        execution_contract=executor.validate(
+            target_name=target_name,
+            target_revision=target_revision,
+            adapter="deterministic_fake",
+            evaluator_names=evaluator_names,
+            scenario_overrides={},
+        ),
+    )
+
+
+def comparison_payload(
+    dataset_version: DatasetVersion,
+    baseline: RunResult,
+    candidate: RunResult,
+) -> ComparisonJobPayload:
+    policy = EvaluationSpec(
+        name="release-policy",
+        dataset=dataset_version.artifact_ref,
+        baseline=baseline.target.model_copy(update={"digest": None}),
+        candidate=candidate.target.model_copy(update={"digest": None}),
+        gates=(
+            MetricGate(
+                metric="quality.exact_match",
+                direction=MetricDirection.HIGHER_IS_BETTER,
+                threshold=1.0,
+            ),
+        ),
+    )
+    return ComparisonJobPayload(
+        dataset=dataset_version.artifact_ref,
+        baseline_run_id=baseline.run_id,
+        baseline_result_digest=baseline.result_digest,
+        candidate_run_id=candidate.run_id,
+        candidate_result_digest=candidate.result_digest,
+        spec=policy,
+    )
+
+
 def job(
     *,
     job_id: str = "job-001",
@@ -139,6 +212,7 @@ def job(
     resource_id: str = "run-001",
     request: object = "same",
     created_at: datetime = NOW,
+    max_attempts: int = 3,
 ) -> JobRecord:
     return JobRecord(
         job_id=job_id,
@@ -147,9 +221,64 @@ def job(
         idempotency_key=idempotency_key,
         request_digest=sha256_digest(request),
         resource_id=resource_id,
+        attempt_count=0,
+        max_attempts=max_attempts,
+        available_at=created_at,
         created_at=created_at,
         updated_at=created_at,
     )
+
+
+def activate_job(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+    record: JobRecord,
+    payload: JobPayload,
+    *,
+    lease_token: str = LEASE_TOKEN_A,
+    worker_id: str = "worker-a",
+    expired: bool = False,
+) -> JobRecord:
+    """Seed one SQLite attempt so portable fenced mutations can be exercised."""
+    repository.begin_job(record, payload)
+    with engine.begin() as connection:
+        database_now = repository._database_now(connection)
+        transition_at = max(database_now, record.available_at, record.updated_at)
+        running = record.transition_to(JobStatus.RUNNING, at=transition_at)
+        changed = connection.execute(
+            update(jobs_table)
+            .where(jobs_table.c.job_id == record.job_id, jobs_table.c.version == 0)
+            .values(
+                status=running.status.value,
+                attempt_count=running.attempt_count,
+                updated_at=running.updated_at,
+                version=1,
+            )
+        )
+        assert changed.rowcount == 1
+        if expired:
+            started_at = database_now - timedelta(seconds=3)
+            heartbeat_at = database_now - timedelta(seconds=2)
+            lease_expires_at = database_now - timedelta(seconds=1)
+        else:
+            started_at = database_now
+            heartbeat_at = database_now
+            lease_expires_at = database_now + timedelta(hours=1)
+        connection.execute(
+            insert(job_attempts_table).values(
+                job_id=record.job_id,
+                attempt_number=1,
+                status=JobAttemptStatus.RUNNING.value,
+                worker_id=worker_id,
+                lease_token=lease_token,
+                error_code=None,
+                started_at=started_at,
+                heartbeat_at=heartbeat_at,
+                lease_expires_at=lease_expires_at,
+                finished_at=None,
+            )
+        )
+    return repository.get_job(record.job_id)
 
 
 @fixture
@@ -217,21 +346,32 @@ def test_document_size_is_bounded_before_insert(engine: Engine) -> None:
 
 
 def test_begin_job_identifies_only_one_winner_and_detects_conflicts(
+    engine: Engine,
     repository: SqlAlchemyControlPlaneRepository,
 ) -> None:
     proposed = job()
-    stored, created = repository.begin_job(proposed)
+    payload = run_payload()
+    stored, created = repository.begin_job(proposed, payload)
     retry, retry_created = repository.begin_job(
-        job(job_id="job-retry", resource_id="run-retry")
+        job(job_id="job-retry", resource_id="run-retry"), payload
     )
 
     assert (stored, created) == (proposed, True)
     assert retry == proposed
     assert retry_created is False
+    with engine.connect() as connection:
+        payload_row = connection.execute(select(job_payloads_table)).mappings().one()
+    assert payload_row["job_id"] == proposed.job_id
+    assert payload_row["payload_digest"] == payload.payload_digest
+    assert (
+        payload_row["document"]
+        == canonical_json_bytes(payload.model_dump(mode="json")).decode()
+    )
 
     with raises(IdempotencyConflictError, match="different request"):
         repository.begin_job(
-            job(job_id="job-other", resource_id="run-other", request="changed")
+            job(job_id="job-other", resource_id="run-other", request="changed"),
+            payload,
         )
     with raises(ResourceAlreadySubmittedError, match="already submitted"):
         repository.begin_job(
@@ -239,16 +379,32 @@ def test_begin_job_identifies_only_one_winner_and_detects_conflicts(
                 job_id="job-resource",
                 idempotency_key="request-resource",
                 resource_id="run-001",
-            )
+            ),
+            payload,
         )
+    with raises(ImmutableRecordConflictError, match="identity conflicts"):
+        repository.begin_job(
+            job(
+                job_id=proposed.job_id,
+                idempotency_key="request-identity-conflict",
+                resource_id="run-identity-conflict",
+            ),
+            payload,
+        )
+    authoritative, authoritative_created = repository.begin_job(
+        job(job_id="job-payload", resource_id="run-payload"),
+        run_payload(target_name="fake/different"),
+    )
+    assert (authoritative, authoritative_created) == (proposed, False)
 
 
 def test_concurrent_begin_job_has_exactly_one_insert_winner(engine: Engine) -> None:
     barrier = Barrier(2)
+    payload = run_payload()
 
     def submit(record: JobRecord) -> tuple[JobRecord, bool]:
         barrier.wait()
-        return SqlAlchemyControlPlaneRepository(engine).begin_job(record)
+        return SqlAlchemyControlPlaneRepository(engine).begin_job(record, payload)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = tuple(
@@ -265,35 +421,319 @@ def test_concurrent_begin_job_has_exactly_one_insert_winner(engine: Engine) -> N
     assert results[0][0] == results[1][0]
 
 
-def test_job_transitions_are_atomic_legal_and_filterable(
+def test_job_and_private_payload_insert_roll_back_together(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+) -> None:
+    def reject_payload_insert(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: object,
+    ) -> None:
+        if (
+            statement.lstrip()
+            .upper()
+            .startswith("INSERT INTO CONTROL_PLANE_JOB_PAYLOADS")
+        ):
+            raise RuntimeError("injected payload insert failure")
+
+    event.listen(engine, "before_cursor_execute", reject_payload_insert)
+    try:
+        with raises(RuntimeError, match="injected payload insert failure"):
+            repository.begin_job(job(), run_payload())
+    finally:
+        event.remove(engine, "before_cursor_execute", reject_payload_insert)
+
+    with engine.connect() as connection:
+        assert connection.execute(select(jobs_table)).first() is None
+        assert connection.execute(select(job_payloads_table)).first() is None
+
+
+def test_job_payload_has_a_hard_four_mib_bound_before_insert(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    assert control_plane_db._MAX_JOB_PAYLOAD_BYTES == 4 * 1024 * 1024
+    monkeypatch.setattr(control_plane_db, "_MAX_JOB_PAYLOAD_BYTES", 16)
+
+    with raises(PayloadTooLargeError, match="size limit"):
+        repository.begin_job(job(), run_payload())
+
+    with engine.connect() as connection:
+        assert connection.execute(select(jobs_table)).first() is None
+        assert connection.execute(select(job_payloads_table)).first() is None
+
+
+def test_job_payload_kind_digest_and_required_absence_are_validated(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+) -> None:
+    payload = run_payload()
+    proposed = job()
+    repository.begin_job(proposed, payload)
+    assert (
+        repository.get_job_by_idempotency(JobKind.RUN, proposed.idempotency_key)
+        == proposed
+    )
+
+    comparison = job(
+        job_id="job-comparison-kind",
+        kind=JobKind.COMPARISON,
+        idempotency_key="request-comparison-kind",
+        resource_id="decision-comparison-kind",
+    )
+    with raises(ValueError, match="kind does not match"):
+        repository.begin_job(comparison, payload)
+
+    with engine.begin() as connection:
+        connection.execute(
+            update(job_payloads_table)
+            .where(job_payloads_table.c.job_id == proposed.job_id)
+            .values(payload_digest=f"sha256:{'0' * 64}")
+        )
+    with raises(CorruptRecordError, match="payload is invalid"):
+        repository.get_job_by_idempotency(JobKind.RUN, proposed.idempotency_key)
+    with raises(CorruptRecordError, match="payload is invalid"):
+        repository.begin_job(
+            job(job_id="job-retry", resource_id="run-retry"),
+            payload,
+        )
+
+    with engine.begin() as connection:
+        connection.execute(
+            delete(job_payloads_table).where(
+                job_payloads_table.c.job_id == proposed.job_id
+            )
+        )
+    with raises(CorruptRecordError, match="no worker payload"):
+        repository.get_job_by_idempotency(JobKind.RUN, proposed.idempotency_key)
+    with raises(CorruptRecordError, match="no worker payload"):
+        repository.begin_job(
+            job(job_id="job-retry-2", resource_id="run-retry-2"),
+            payload,
+        )
+
+
+def test_only_fixed_migration_terminal_shape_may_lack_a_payload(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+) -> None:
+    migrated = JobRecord(
+        job_id="job-migrated",
+        kind=JobKind.RUN,
+        status=JobStatus.FAILED,
+        idempotency_key="request-migrated",
+        request_digest=sha256_digest("same"),
+        resource_id="run-migrated",
+        attempt_count=1,
+        max_attempts=3,
+        available_at=NOW,
+        error_code="legacy_payload_missing",
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    with engine.begin() as connection:
+        connection.execute(
+            insert(jobs_table).values(
+                job_id=migrated.job_id,
+                kind=migrated.kind.value,
+                status=migrated.status.value,
+                idempotency_key=migrated.idempotency_key,
+                request_digest=migrated.request_digest,
+                resource_id=migrated.resource_id,
+                attempt_count=migrated.attempt_count,
+                max_attempts=migrated.max_attempts,
+                available_at=migrated.available_at,
+                error_code=migrated.error_code,
+                created_at=migrated.created_at,
+                updated_at=migrated.updated_at,
+                version=1,
+            )
+        )
+        connection.execute(
+            insert(job_attempts_table).values(
+                job_id=migrated.job_id,
+                attempt_number=1,
+                status=JobAttemptStatus.FAILED.value,
+                worker_id=control_plane_db._MIGRATION_WORKER_ID,
+                lease_token=control_plane_db._MIGRATION_LEASE_TOKEN,
+                error_code=migrated.error_code,
+                started_at=NOW,
+                heartbeat_at=NOW,
+                lease_expires_at=NOW + timedelta(seconds=1),
+                finished_at=NOW,
+            )
+        )
+
+    assert (
+        repository.get_job_by_idempotency(JobKind.RUN, migrated.idempotency_key)
+        == migrated
+    )
+    replay, created = repository.begin_job(
+        job(
+            job_id="job-migrated-retry",
+            idempotency_key=migrated.idempotency_key,
+            resource_id="run-migrated-retry",
+        ),
+        run_payload(),
+    )
+    assert (replay, created) == (migrated, False)
+
+
+def test_new_terminal_jobs_with_deleted_payloads_fail_closed(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+) -> None:
+    data = dataset()
+    repository.put_dataset(DatasetRecord(dataset=data, created_at=NOW))
+    canceled_job = job(
+        job_id="job-new-canceled",
+        idempotency_key="request-new-canceled",
+        resource_id="run-new-canceled",
+    )
+    repository.begin_job(canceled_job, run_payload(data))
+    repository.cancel_job(canceled_job.job_id)
+
+    succeeded_job = job(
+        job_id="job-new-succeeded",
+        idempotency_key="request-new-succeeded",
+        resource_id="run-new-succeeded",
+    )
+    activate_job(engine, repository, succeeded_job, run_payload(data))
+    repository.complete_run(
+        succeeded_job.job_id,
+        RunRecord(
+            result=execute(data, run_id=succeeded_job.resource_id),
+            created_at=NOW,
+        ),
+        attempt_number=1,
+        lease_token=LEASE_TOKEN_A,
+    )
+
+    failed_job = job(
+        job_id="job-new-failed",
+        idempotency_key="request-new-failed",
+        resource_id="run-new-failed",
+    )
+    activate_job(engine, repository, failed_job, run_payload(data))
+    repository.fail_job(
+        failed_job.job_id,
+        1,
+        LEASE_TOKEN_A,
+        error_code="execution_failed",
+    )
+
+    with engine.begin() as connection:
+        connection.execute(
+            delete(job_payloads_table).where(
+                job_payloads_table.c.job_id.in_(
+                    (canceled_job.job_id, succeeded_job.job_id, failed_job.job_id)
+                )
+            )
+        )
+
+    for terminal in (canceled_job, succeeded_job, failed_job):
+        with raises(CorruptRecordError, match="no worker payload"):
+            repository.get_job_by_idempotency(
+                terminal.kind,
+                terminal.idempotency_key,
+            )
+
+
+def test_private_payload_read_path_rejects_canonical_and_index_corruption(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    payload = run_payload()
+    records = tuple(
+        job(
+            job_id=f"job-payload-{label}",
+            idempotency_key=f"request-payload-{label}",
+            resource_id=f"run-payload-{label}",
+        )
+        for label in ("text", "canonical", "time", "kind", "size")
+    )
+    for record in records:
+        repository.begin_job(record, payload)
+    with engine.connect() as connection:
+        document = connection.execute(
+            select(job_payloads_table.c.document).where(
+                job_payloads_table.c.job_id == records[0].job_id
+            )
+        ).scalar_one()
+    assert isinstance(document, str)
+
+    with engine.begin() as connection:
+        connection.execute(
+            update(job_payloads_table)
+            .where(job_payloads_table.c.job_id == records[0].job_id)
+            .values(document=b"not-text")
+        )
+        connection.execute(
+            update(job_payloads_table)
+            .where(job_payloads_table.c.job_id == records[1].job_id)
+            .values(document=f" {document}")
+        )
+        connection.execute(
+            update(job_payloads_table)
+            .where(job_payloads_table.c.job_id == records[2].job_id)
+            .values(created_at=NOW + timedelta(seconds=1))
+        )
+
+    data = dataset()
+    baseline = execute(data, run_id="payload-baseline", target_revision=1)
+    candidate = execute(data, run_id="payload-candidate", target_revision=2)
+    wrong_kind = comparison_payload(data, baseline, candidate)
+    wrong_document = canonical_json_bytes(wrong_kind.model_dump(mode="json")).decode()
+    with engine.begin() as connection:
+        connection.execute(
+            update(job_payloads_table)
+            .where(job_payloads_table.c.job_id == records[3].job_id)
+            .values(
+                document=wrong_document,
+                payload_digest=wrong_kind.payload_digest,
+            )
+        )
+
+    for record in records[:4]:
+        with raises(CorruptRecordError, match="payload is invalid"):
+            repository.get_job_by_idempotency(record.kind, record.idempotency_key)
+
+    monkeypatch.setattr(
+        control_plane_db,
+        "_MAX_JOB_PAYLOAD_BYTES",
+        len(document.encode()) - 1,
+    )
+    with raises(CorruptRecordError, match="payload is invalid"):
+        repository.get_job_by_idempotency(
+            records[4].kind,
+            records[4].idempotency_key,
+        )
+
+
+def test_queued_cancellation_is_immediate_idempotent_and_filterable(
     repository: SqlAlchemyControlPlaneRepository,
 ) -> None:
     proposed = job()
-    repository.begin_job(proposed)
+    repository.begin_job(proposed, run_payload())
 
-    with raises(IllegalJobTransitionError, match="not allowed"):
-        repository.transition_job(
-            proposed.job_id,
-            JobStatus.FAILED,
-            at=NOW + timedelta(seconds=1),
-            error_code="execution_failed",
-        )
+    canceled = repository.cancel_job(proposed.job_id)
 
-    running = repository.transition_job(
-        proposed.job_id, JobStatus.RUNNING, at=NOW + timedelta(seconds=1)
+    assert canceled.status is JobStatus.CANCELED
+    assert repository.cancel_job(proposed.job_id) == canceled
+    assert repository.list_jobs(limit=10, status=JobStatus.CANCELED).items == (
+        canceled,
     )
-    failed = repository.transition_job(
-        proposed.job_id,
-        JobStatus.FAILED,
-        at=NOW + timedelta(seconds=2),
-        error_code="execution_failed",
-    )
-    assert running.status is JobStatus.RUNNING
-    assert failed.status is JobStatus.FAILED
-    assert repository.list_jobs(limit=10, status=JobStatus.FAILED).items == (failed,)
+    assert repository.list_job_attempts(proposed.job_id) == ()
 
 
 def test_complete_run_is_atomic_idempotent_and_result_digest_is_not_unique(
+    engine: Engine,
     repository: SqlAlchemyControlPlaneRepository,
 ) -> None:
     data = dataset()
@@ -301,20 +741,33 @@ def test_complete_run_is_atomic_idempotent_and_result_digest_is_not_unique(
     first_result = execute(data, run_id="run-001")
     record = RunRecord(result=first_result, created_at=NOW + timedelta(seconds=2))
     proposed = job()
-    repository.begin_job(proposed)
-    repository.transition_job(
-        proposed.job_id, JobStatus.RUNNING, at=NOW + timedelta(seconds=1)
-    )
+    activate_job(engine, repository, proposed, run_payload(data))
 
     completed = repository.complete_run(
-        proposed.job_id, record, at=NOW + timedelta(seconds=3)
+        proposed.job_id,
+        record,
+        attempt_number=1,
+        lease_token=LEASE_TOKEN_A,
     )
     retried = repository.complete_run(
-        proposed.job_id, record, at=NOW + timedelta(seconds=4)
+        proposed.job_id,
+        record,
+        attempt_number=1,
+        lease_token=LEASE_TOKEN_A,
     )
     assert completed.status is JobStatus.SUCCEEDED
     assert retried == completed
     assert repository.get_run("run-001") == record
+    assert repository.list_job_attempts(proposed.job_id)[0].status is (
+        JobAttemptStatus.SUCCEEDED
+    )
+    with raises(LeaseLostError, match="no longer active"):
+        repository.complete_run(
+            proposed.job_id,
+            record,
+            attempt_number=1,
+            lease_token=LEASE_TOKEN_B,
+        )
 
     second_result = first_result.model_copy(update={"run_id": "run-002"})
     second = RunRecord(result=second_result, created_at=NOW + timedelta(seconds=4))
@@ -328,10 +781,7 @@ def test_completion_failure_rolls_back_evidence_insert(
     data = dataset()
     repository.put_dataset(DatasetRecord(dataset=data, created_at=NOW))
     proposed = job()
-    repository.begin_job(proposed)
-    repository.transition_job(
-        proposed.job_id, JobStatus.RUNNING, at=NOW + timedelta(seconds=1)
-    )
+    activate_job(engine, repository, proposed, run_payload(data))
     record = RunRecord(
         result=execute(data, run_id="run-001"),
         created_at=NOW + timedelta(seconds=2),
@@ -352,7 +802,10 @@ def test_completion_failure_rolls_back_evidence_insert(
     try:
         with raises(RuntimeError, match="injected transaction failure"):
             repository.complete_run(
-                proposed.job_id, record, at=NOW + timedelta(seconds=3)
+                proposed.job_id,
+                record,
+                attempt_number=1,
+                lease_token=LEASE_TOKEN_A,
             )
     finally:
         event.remove(engine, "before_cursor_execute", fail_job_update)
@@ -363,6 +816,7 @@ def test_completion_failure_rolls_back_evidence_insert(
 
 
 def test_release_decision_completion_is_append_only(
+    engine: Engine,
     repository: SqlAlchemyControlPlaneRepository,
 ) -> None:
     data = dataset()
@@ -384,13 +838,18 @@ def test_release_decision_completion_is_append_only(
         idempotency_key="compare-001",
         resource_id="decision-001",
     )
-    repository.begin_job(proposed)
-    repository.transition_job(
-        proposed.job_id, JobStatus.RUNNING, at=NOW + timedelta(seconds=2)
+    activate_job(
+        engine,
+        repository,
+        proposed,
+        comparison_payload(data, baseline, candidate),
     )
 
     completed = repository.complete_release_decision(
-        proposed.job_id, evidence, at=NOW + timedelta(seconds=4)
+        proposed.job_id,
+        evidence,
+        attempt_number=1,
+        lease_token=LEASE_TOKEN_A,
     )
 
     assert completed.status is JobStatus.SUCCEEDED
@@ -652,7 +1111,10 @@ def test_job_run_and_decision_lists_use_filter_bound_keyset_cursors(
             resource_id=f"run-{index}",
             created_at=created_at,
         )
-        repository.begin_job(proposed)
+        repository.begin_job(
+            proposed,
+            run_payload(data, target_revision=index + 1),
+        )
         result = execute(
             data,
             run_id=f"run-{index}",
@@ -823,27 +1285,63 @@ def test_unavailable_database_operations_raise_sanitized_adapter_errors(
         ),
         ("load dataset revision", lambda: empty.get_dataset("private-dataset", 1)),
         ("list dataset revisions", lambda: empty.list_datasets(limit=1)),
-        ("submit job", lambda: empty.begin_job(job())),
+        ("submit job", lambda: empty.begin_job(job(), run_payload(data))),
         ("load job", lambda: empty.get_job("private-job")),
         ("list jobs", lambda: empty.list_jobs(limit=1)),
+        ("cancel job", lambda: empty.cancel_job("private-job")),
+        ("list job attempts", lambda: empty.list_job_attempts("private-job")),
         (
-            "transition job",
-            lambda: empty.transition_job(
+            "heartbeat worker lease",
+            lambda: empty.heartbeat_job(
                 "private-job",
-                JobStatus.RUNNING,
-                at=NOW,
+                1,
+                LEASE_TOKEN_A,
+                lease_seconds=30,
+            ),
+        ),
+        (
+            "schedule job retry",
+            lambda: empty.retry_job(
+                "private-job",
+                1,
+                LEASE_TOKEN_A,
+                error_code="retryable_error",
+                delay_seconds=1,
+            ),
+        ),
+        (
+            "fail job",
+            lambda: empty.fail_job(
+                "private-job",
+                1,
+                LEASE_TOKEN_A,
+                error_code="terminal_error",
+            ),
+        ),
+        (
+            "acknowledge job cancellation",
+            lambda: empty.acknowledge_cancellation(
+                "private-job",
+                1,
+                LEASE_TOKEN_A,
             ),
         ),
         (
             "complete run job",
-            lambda: empty.complete_run("private-job", run_record, at=NOW),
+            lambda: empty.complete_run(
+                "private-job",
+                run_record,
+                attempt_number=1,
+                lease_token=LEASE_TOKEN_A,
+            ),
         ),
         (
             "complete comparison job",
             lambda: empty.complete_release_decision(
                 "private-job",
                 decision_record,
-                at=NOW,
+                attempt_number=1,
+                lease_token=LEASE_TOKEN_A,
             ),
         ),
         ("store run evidence", lambda: empty.put_run(run_record)),
@@ -916,7 +1414,7 @@ def test_corrupt_documents_and_rows_fail_closed(
     assert _aware(NOW) == NOW
 
     proposed = job()
-    repository.begin_job(proposed)
+    repository.begin_job(proposed, run_payload(data))
     with engine.connect() as connection:
         job_row = dict(connection.execute(select(jobs_table)).mappings().one())
     invalid_job = {**job_row, "status": "not-a-status"}
@@ -975,128 +1473,866 @@ def test_repository_rejects_invalid_limits_and_nonqueued_job_claims(
 
     repository = SqlAlchemyControlPlaneRepository(engine)
     running = job().model_copy(update={"status": JobStatus.RUNNING})
-    with raises(ValueError, match="queued state"):
-        repository.begin_job(running)
+    with raises(ValueError, match="unattempted queued job"):
+        repository.begin_job(running, run_payload())
 
     for limit in (True, 101):
         with raises(ValueError, match="between 1 and 100"):
             repository.list_jobs(limit=limit)
 
 
-def test_transition_retries_and_compare_and_set_failures_are_safe(
+def test_sqlite_rejects_claim_and_reaper_coordination_explicitly(
+    repository: SqlAlchemyControlPlaneRepository,
+) -> None:
+    with raises(ControlPlaneRepositoryError, match="requires PostgreSQL"):
+        repository.claim_next_job(
+            worker_id="worker-a",
+            lease_token=LEASE_TOKEN_A,
+            lease_seconds=30,
+        )
+    with raises(ControlPlaneRepositoryError, match="requires PostgreSQL"):
+        repository.reap_expired_jobs(
+            limit=10,
+            retry_base_seconds=2,
+            retry_max_seconds=60,
+        )
+
+    with raises(ValueError, match="supported range"):
+        repository.claim_next_job(
+            worker_id="worker-a",
+            lease_token=LEASE_TOKEN_A,
+            lease_seconds=4,
+        )
+    with raises(ValueError, match="cannot be below"):
+        repository.reap_expired_jobs(
+            limit=10,
+            retry_base_seconds=10,
+            retry_max_seconds=5,
+        )
+
+
+def test_private_coordination_sql_failures_are_sanitized_on_sqlite(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    empty_engine = create_engine("sqlite+pysqlite:///:memory:")
+    repository = SqlAlchemyControlPlaneRepository(empty_engine)
+    monkeypatch.setattr(repository, "_require_postgresql_coordination", lambda: None)
+    try:
+        with raises(ControlPlaneRepositoryError, match="claim queued job") as claim:
+            repository.claim_next_job(
+                worker_id="worker-portable",
+                lease_token=LEASE_TOKEN_A,
+                lease_seconds=30,
+            )
+        with raises(ControlPlaneRepositoryError, match="recover expired jobs") as reap:
+            repository.reap_expired_jobs(
+                limit=10,
+                retry_base_seconds=2,
+                retry_max_seconds=60,
+            )
+        assert "control_plane_jobs" not in str(claim.value)
+        assert "control_plane_jobs" not in str(reap.value)
+    finally:
+        empty_engine.dispose()
+
+
+def test_missing_records_and_corrupt_private_lease_state_fail_closed(
     engine: Engine,
     repository: SqlAlchemyControlPlaneRepository,
 ) -> None:
     with raises(RecordNotFoundError, match="not found"):
-        repository.transition_job("missing-job", JobStatus.RUNNING, at=NOW)
+        repository.get_dataset("missing-dataset", 1)
+    with raises(RecordNotFoundError, match="not found"):
+        repository.get_release_decision("missing-decision")
+    with raises(LeaseLostError, match="no longer active"):
+        repository.heartbeat_job(
+            "job-missing",
+            1,
+            LEASE_TOKEN_A,
+            lease_seconds=30,
+        )
 
-    proposed = job()
-    repository.begin_job(proposed)
-    running = repository.transition_job(
-        proposed.job_id,
+    incomplete = job(
+        job_id="job-missing-attempt",
+        idempotency_key="request-missing-attempt",
+        resource_id="run-missing-attempt",
+    )
+    repository.begin_job(incomplete, run_payload())
+    running = incomplete.transition_to(
         JobStatus.RUNNING,
-        at=NOW + timedelta(seconds=1),
+        at=incomplete.updated_at + timedelta(seconds=1),
+    )
+    with engine.begin() as connection:
+        connection.execute(
+            update(jobs_table)
+            .where(jobs_table.c.job_id == incomplete.job_id)
+            .values(
+                status=running.status.value,
+                attempt_count=running.attempt_count,
+                updated_at=running.updated_at,
+                version=1,
+            )
+        )
+    with raises(CorruptRecordError, match="no active attempt"):
+        repository.cancel_job(incomplete.job_id)
+    with raises(LeaseLostError, match="no longer active"):
+        repository.heartbeat_job(
+            incomplete.job_id,
+            1,
+            LEASE_TOKEN_A,
+            lease_seconds=30,
+        )
+
+    terminal = job(
+        job_id="job-terminal-without-attempt",
+        idempotency_key="request-terminal-without-attempt",
+        resource_id="run-terminal-without-attempt",
+    )
+    repository.begin_job(terminal, run_payload())
+    terminal_running = terminal.transition_to(
+        JobStatus.RUNNING,
+        at=terminal.updated_at + timedelta(seconds=1),
+    )
+    failed = terminal_running.transition_to(
+        JobStatus.FAILED,
+        at=terminal_running.updated_at + timedelta(seconds=1),
+        error_code="legacy_payload_missing",
+    )
+    with engine.begin() as connection:
+        connection.execute(
+            update(jobs_table)
+            .where(jobs_table.c.job_id == terminal.job_id)
+            .values(
+                status=failed.status.value,
+                attempt_count=failed.attempt_count,
+                error_code=failed.error_code,
+                updated_at=failed.updated_at,
+                version=1,
+            )
+        )
+        connection.execute(
+            delete(job_payloads_table).where(
+                job_payloads_table.c.job_id == terminal.job_id
+            )
+        )
+    with raises(CorruptRecordError, match="no worker payload"):
+        repository.get_job_by_idempotency(terminal.kind, terminal.idempotency_key)
+
+    invalid_attempt = {
+        "job_id": "job-corrupt-attempt",
+        "attempt_number": 1,
+        "status": JobAttemptStatus.RUNNING.value,
+        "worker_id": "private worker identity",
+        "lease_token": LEASE_TOKEN_A,
+        "error_code": None,
+        "started_at": NOW,
+        "heartbeat_at": NOW,
+        "lease_expires_at": NOW + timedelta(seconds=30),
+        "finished_at": None,
+    }
+    with raises(CorruptRecordError, match="attempt is invalid") as captured:
+        repository._attempt_record(invalid_attempt)
+    assert "private worker identity" not in str(captured.value)
+
+
+def test_claim_transaction_algorithm_is_portable_in_one_sqlite_connection(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(repository, "_require_postgresql_coordination", lambda: None)
+    payload = run_payload()
+    eligible = job()
+    future_time = datetime.now(UTC) + timedelta(hours=1)
+    future = job(
+        job_id="job-future",
+        idempotency_key="request-future",
+        resource_id="run-future",
+        created_at=future_time,
+    )
+    repository.begin_job(eligible, payload)
+    repository.begin_job(future, payload)
+
+    claim = repository.claim_next_job(
+        worker_id="worker-portable",
+        lease_token=LEASE_TOKEN_A,
+        lease_seconds=30,
+    )
+
+    assert claim is not None
+    assert claim.job.job_id == eligible.job_id
+    assert claim.payload == payload
+    assert claim.attempt.attempt_number == 1
+    assert claim.attempt.lease_expires_at - claim.attempt.heartbeat_at == timedelta(
+        seconds=30
     )
     assert (
-        repository.transition_job(
-            proposed.job_id,
-            JobStatus.RUNNING,
-            at=NOW + timedelta(seconds=2),
+        repository.claim_next_job(
+            worker_id="worker-portable",
+            lease_token=LEASE_TOKEN_B,
+            lease_seconds=30,
         )
-        == running
+        is None
     )
 
     contender = job(
-        job_id="job-contender",
-        idempotency_key="request-contender",
-        resource_id="run-contender",
+        job_id="job-claim-conflict",
+        idempotency_key="request-claim-conflict",
+        resource_id="run-claim-conflict",
     )
-    repository.begin_job(contender)
+    repository.begin_job(contender, payload)
     with engine.begin() as connection:
         connection.execute(
             text(
-                "CREATE TRIGGER reject_job_transition "
-                "BEFORE UPDATE ON control_plane_jobs "
+                "CREATE TRIGGER reject_claim_attempt "
+                "BEFORE INSERT ON control_plane_job_attempts "
+                "BEGIN SELECT RAISE(ABORT, 'private trigger detail'); END"
+            )
+        )
+    with raises(ConcurrentTransitionError, match="conflicted") as captured:
+        repository.claim_next_job(
+            worker_id="worker-portable",
+            lease_token=LEASE_TOKEN_B,
+            lease_seconds=30,
+        )
+    assert "private trigger detail" not in str(captured.value)
+    assert repository.get_job(contender.job_id).status is JobStatus.QUEUED
+    assert repository.list_job_attempts(contender.job_id) == ()
+
+
+def test_reaper_transaction_algorithm_handles_retry_exhaustion_and_cancel(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(repository, "_require_postgresql_coordination", lambda: None)
+    retry_record = job(
+        job_id="job-reaper-retry",
+        idempotency_key="request-reaper-retry",
+        resource_id="run-reaper-retry",
+    )
+    exhausted_record = job(
+        job_id="job-reaper-exhausted",
+        idempotency_key="request-reaper-exhausted",
+        resource_id="run-reaper-exhausted",
+        max_attempts=1,
+    )
+    canceled_record = job(
+        job_id="job-reaper-canceled",
+        idempotency_key="request-reaper-canceled",
+        resource_id="run-reaper-canceled",
+    )
+    for record, token in (
+        (retry_record, LEASE_TOKEN_A),
+        (exhausted_record, LEASE_TOKEN_B),
+        (canceled_record, "lease_token_c_0123456789abcdef0123456789abcdef"),
+    ):
+        activate_job(
+            engine,
+            repository,
+            record,
+            run_payload(),
+            lease_token=token,
+            expired=True,
+        )
+    requested = repository.cancel_job(canceled_record.job_id)
+    assert requested.status is JobStatus.CANCEL_REQUESTED
+
+    recovered = repository.reap_expired_jobs(
+        limit=10,
+        retry_base_seconds=2,
+        retry_max_seconds=3,
+    )
+    by_id = {record.job_id: record for record in recovered}
+
+    assert by_id[retry_record.job_id].status is JobStatus.QUEUED
+    assert (
+        by_id[retry_record.job_id].available_at > by_id[retry_record.job_id].updated_at
+    )
+    assert by_id[exhausted_record.job_id].status is JobStatus.FAILED
+    assert by_id[exhausted_record.job_id].error_code == "lease_expired"
+    assert by_id[canceled_record.job_id].status is JobStatus.CANCELED
+    assert repository.list_job_attempts(retry_record.job_id)[0].status is (
+        JobAttemptStatus.LEASE_EXPIRED
+    )
+    assert repository.list_job_attempts(exhausted_record.job_id)[0].status is (
+        JobAttemptStatus.LEASE_EXPIRED
+    )
+    assert repository.list_job_attempts(canceled_record.job_id)[0].status is (
+        JobAttemptStatus.CANCELED
+    )
+    assert (
+        repository.reap_expired_jobs(
+            limit=10,
+            retry_base_seconds=2,
+            retry_max_seconds=3,
+        )
+        == ()
+    )
+
+
+def test_worker_inputs_fail_before_private_values_reach_storage_errors(
+    repository: SqlAlchemyControlPlaneRepository,
+) -> None:
+    with raises(ValueError, match="worker identity is invalid") as worker_error:
+        repository.claim_next_job(
+            worker_id="private worker identity",
+            lease_token=LEASE_TOKEN_A,
+            lease_seconds=30,
+        )
+    assert "private worker identity" not in str(worker_error.value)
+
+    with raises(ValueError, match="lease token is invalid") as token_error:
+        repository.heartbeat_job(
+            "job-private",
+            1,
+            "private-token",
+            lease_seconds=30,
+        )
+    assert "private-token" not in str(token_error.value)
+
+    with raises(ValueError, match="error code is invalid") as code_error:
+        repository.retry_job(
+            "job-private",
+            1,
+            LEASE_TOKEN_A,
+            delay_seconds=5,
+            error_code="Private Error",
+        )
+    assert "Private Error" not in str(code_error.value)
+
+
+def test_heartbeat_and_attempt_history_are_fenced_and_public_safe(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+) -> None:
+    proposed = job()
+    running = activate_job(engine, repository, proposed, run_payload())
+
+    heartbeat = repository.heartbeat_job(
+        proposed.job_id,
+        1,
+        LEASE_TOKEN_A,
+        lease_seconds=30,
+    )
+    attempt = repository.list_job_attempts(proposed.job_id)[0]
+
+    assert heartbeat == running
+    assert attempt.status is JobAttemptStatus.RUNNING
+    assert attempt.heartbeat_at >= attempt.started_at
+    assert attempt.lease_expires_at > attempt.heartbeat_at
+    assert "lease_token" not in attempt.model_dump()
+    assert "worker_id" not in attempt.model_dump()
+    with raises(LeaseLostError, match="no longer active"):
+        repository.heartbeat_job(
+            proposed.job_id,
+            1,
+            LEASE_TOKEN_B,
+            lease_seconds=30,
+        )
+
+
+def test_active_lease_samples_database_time_after_both_row_locks(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+) -> None:
+    proposed = job()
+    activate_job(engine, repository, proposed, run_payload())
+    statements: list[str] = []
+
+    def capture_statements(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: object,
+    ) -> None:
+        statements.append(" ".join(statement.upper().split()))
+
+    event.listen(engine, "before_cursor_execute", capture_statements)
+    try:
+        repository.heartbeat_job(
+            proposed.job_id,
+            1,
+            LEASE_TOKEN_A,
+            lease_seconds=30,
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", capture_statements)
+
+    job_lock = next(
+        index
+        for index, statement in enumerate(statements)
+        if statement.startswith("SELECT") and "FROM CONTROL_PLANE_JOBS" in statement
+    )
+    attempt_lock = next(
+        index
+        for index, statement in enumerate(statements)
+        if statement.startswith("SELECT")
+        and "FROM CONTROL_PLANE_JOB_ATTEMPTS" in statement
+    )
+    sampled_time = next(
+        index
+        for index, statement in enumerate(statements)
+        if statement.startswith("SELECT CURRENT_TIMESTAMP")
+    )
+    heartbeat_update = next(
+        statement
+        for statement in statements
+        if statement.startswith("UPDATE CONTROL_PLANE_JOB_ATTEMPTS")
+    )
+    assert job_lock < attempt_lock < sampled_time
+    assert "LEASE_EXPIRES_AT > CURRENT_TIMESTAMP" in heartbeat_update
+
+
+def test_attempt_history_uses_one_snapshot_and_detects_gaps(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+) -> None:
+    proposed = job()
+    repository.begin_job(proposed, run_payload())
+    statements: list[str] = []
+
+    def capture_selects(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: object,
+    ) -> None:
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", capture_selects)
+    try:
+        assert repository.list_job_attempts(proposed.job_id) == ()
+    finally:
+        event.remove(engine, "before_cursor_execute", capture_selects)
+    assert len(statements) == 1
+    assert "LEFT OUTER JOIN control_plane_job_attempts" in statements[0]
+
+    activate_job(engine, repository, proposed, run_payload())
+    assert len(repository.list_job_attempts(proposed.job_id)) == 1
+    with engine.begin() as connection:
+        connection.execute(
+            delete(job_attempts_table).where(
+                job_attempts_table.c.job_id == proposed.job_id
+            )
+        )
+    with raises(CorruptRecordError, match="history is incomplete"):
+        repository.list_job_attempts(proposed.job_id)
+    with raises(RecordNotFoundError, match="not found"):
+        repository.list_job_attempts("job-missing")
+
+
+def test_cancel_acknowledgement_and_terminal_conflicts_cover_public_states(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+) -> None:
+    with raises(RecordNotFoundError, match="not found"):
+        repository.cancel_job("job-missing")
+    with raises(LeaseLostError, match="no longer active"):
+        repository.acknowledge_cancellation(
+            "job-missing",
+            1,
+            LEASE_TOKEN_A,
+        )
+
+    proposed = job()
+    activate_job(engine, repository, proposed, run_payload())
+    with raises(IllegalJobTransitionError, match="no cancellation request"):
+        repository.acknowledge_cancellation(
+            proposed.job_id,
+            1,
+            LEASE_TOKEN_A,
+        )
+    requested = repository.cancel_job(proposed.job_id)
+    assert requested.status is JobStatus.CANCEL_REQUESTED
+    assert repository.cancel_job(proposed.job_id) == requested
+    canceled = repository.acknowledge_cancellation(
+        proposed.job_id,
+        1,
+        LEASE_TOKEN_A,
+    )
+    assert canceled.status is JobStatus.CANCELED
+
+    failed_record = job(
+        job_id="job-terminal-cancel",
+        idempotency_key="request-terminal-cancel",
+        resource_id="run-terminal-cancel",
+    )
+    activate_job(engine, repository, failed_record, run_payload())
+    repository.fail_job(
+        failed_record.job_id,
+        1,
+        LEASE_TOKEN_A,
+        error_code="execution_failed",
+    )
+    with raises(IllegalJobTransitionError, match="Terminal job"):
+        repository.cancel_job(failed_record.job_id)
+
+    fail_after_cancel = job(
+        job_id="job-fail-after-cancel",
+        idempotency_key="request-fail-after-cancel",
+        resource_id="run-fail-after-cancel",
+    )
+    activate_job(engine, repository, fail_after_cancel, run_payload())
+    repository.cancel_job(fail_after_cancel.job_id)
+    canceled_by_failure = repository.fail_job(
+        fail_after_cancel.job_id,
+        1,
+        LEASE_TOKEN_A,
+        error_code="execution_failed",
+    )
+    assert canceled_by_failure.status is JobStatus.CANCELED
+
+
+def test_retry_at_attempt_limit_and_fenced_update_failures_do_not_mutate(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+) -> None:
+    limited = job(max_attempts=1)
+    activate_job(engine, repository, limited, run_payload())
+    with raises(IllegalJobTransitionError, match="another attempt"):
+        repository.retry_job(
+            limited.job_id,
+            1,
+            LEASE_TOKEN_A,
+            delay_seconds=5,
+            error_code="temporary_failure",
+        )
+    assert repository.get_job(limited.job_id).status is JobStatus.RUNNING
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TRIGGER reject_heartbeat "
+                "BEFORE UPDATE OF heartbeat_at ON control_plane_job_attempts "
                 "BEGIN SELECT RAISE(IGNORE); END"
             )
         )
-    with raises(ConcurrentTransitionError, match="changed"):
-        repository.transition_job(
-            contender.job_id,
-            JobStatus.RUNNING,
-            at=NOW + timedelta(seconds=1),
+    with raises(LeaseLostError, match="no longer active"):
+        repository.heartbeat_job(
+            limited.job_id,
+            1,
+            LEASE_TOKEN_A,
+            lease_seconds=30,
         )
-    assert repository.get_job(contender.job_id).status is JobStatus.QUEUED
 
 
-def test_run_completion_enforces_job_identity_state_and_time(
-    repository: SqlAlchemyControlPlaneRepository,
-) -> None:
-    data = dataset()
-    repository.put_dataset(DatasetRecord(dataset=data, created_at=NOW))
-    evidence = RunRecord(
-        result=execute(data, run_id="run-owned"),
-        created_at=NOW + timedelta(seconds=2),
-    )
-
-    with raises(RecordNotFoundError, match="not found"):
-        repository.complete_run("missing-job", evidence, at=NOW)
-
-    proposed = job(resource_id="run-owned")
-    repository.begin_job(proposed)
-    with raises(IllegalJobTransitionError, match="running jobs"):
-        repository.complete_run(proposed.job_id, evidence, at=NOW)
-
-    repository.transition_job(
-        proposed.job_id,
-        JobStatus.RUNNING,
-        at=NOW + timedelta(seconds=1),
-    )
-    unowned = RunRecord(
-        result=execute(data, run_id="run-unowned"),
-        created_at=NOW + timedelta(seconds=2),
-    )
-    with raises(IllegalJobTransitionError, match="does not own"):
-        repository.complete_run(
-            proposed.job_id,
-            unowned,
-            at=NOW + timedelta(seconds=2),
-        )
-    with raises(IllegalJobTransitionError, match="not allowed"):
-        repository.complete_run(proposed.job_id, evidence, at=NOW)
-
-
-def test_compare_and_set_completion_failure_rolls_back_evidence(
+def test_fenced_completion_rolls_back_when_attempt_or_job_update_loses(
     engine: Engine,
     repository: SqlAlchemyControlPlaneRepository,
 ) -> None:
     data = dataset()
     repository.put_dataset(DatasetRecord(dataset=data, created_at=NOW))
-    proposed = job(resource_id="run-cas")
-    repository.begin_job(proposed)
-    repository.transition_job(
-        proposed.job_id,
-        JobStatus.RUNNING,
-        at=NOW + timedelta(seconds=1),
-    )
-    evidence = RunRecord(
-        result=execute(data, run_id="run-cas"),
-        created_at=NOW + timedelta(seconds=2),
+    attempt_record = job(resource_id="run-attempt-fence")
+    activate_job(engine, repository, attempt_record, run_payload(data))
+    attempt_evidence = RunRecord(
+        result=execute(data, run_id=attempt_record.resource_id),
+        created_at=NOW,
     )
     with engine.begin() as connection:
         connection.execute(
             text(
-                "CREATE TRIGGER reject_job_completion "
+                "CREATE TRIGGER reject_attempt_finish "
+                "BEFORE UPDATE OF status ON control_plane_job_attempts "
+                "BEGIN SELECT RAISE(IGNORE); END"
+            )
+        )
+    with raises(LeaseLostError, match="no longer active"):
+        repository.complete_run(
+            attempt_record.job_id,
+            attempt_evidence,
+            attempt_number=1,
+            lease_token=LEASE_TOKEN_A,
+        )
+    with raises(RecordNotFoundError, match="not found"):
+        repository.get_run(attempt_evidence.run_id)
+
+    with engine.begin() as connection:
+        connection.execute(text("DROP TRIGGER reject_attempt_finish"))
+    job_record = job(
+        job_id="job-update-fence",
+        idempotency_key="request-update-fence",
+        resource_id="run-update-fence",
+    )
+    activate_job(engine, repository, job_record, run_payload(data))
+    job_evidence = RunRecord(
+        result=execute(data, run_id=job_record.resource_id),
+        created_at=NOW,
+    )
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TRIGGER reject_job_finish "
                 "BEFORE UPDATE ON control_plane_jobs "
                 "BEGIN SELECT RAISE(IGNORE); END"
             )
         )
-
     with raises(ConcurrentTransitionError, match="changed"):
+        repository.complete_run(
+            job_record.job_id,
+            job_evidence,
+            attempt_number=1,
+            lease_token=LEASE_TOKEN_A,
+        )
+    with raises(RecordNotFoundError, match="not found"):
+        repository.get_run(job_evidence.run_id)
+
+
+def test_completion_rejects_missing_and_nonrunning_jobs_before_publication(
+    repository: SqlAlchemyControlPlaneRepository,
+) -> None:
+    data = dataset()
+    run_record = RunRecord(
+        result=execute(data, run_id="run-queued-completion"),
+        created_at=NOW,
+    )
+    with raises(LeaseLostError, match="no longer active"):
+        repository.complete_run(
+            "job-missing-completion",
+            run_record,
+            attempt_number=1,
+            lease_token=LEASE_TOKEN_A,
+        )
+
+    queued_run = job(
+        job_id="job-queued-completion",
+        idempotency_key="request-queued-completion",
+        resource_id=run_record.run_id,
+    )
+    repository.begin_job(queued_run, run_payload(data))
+    with raises(LeaseLostError, match="no longer active"):
+        repository.complete_run(
+            queued_run.job_id,
+            run_record,
+            attempt_number=1,
+            lease_token=LEASE_TOKEN_A,
+        )
+
+    baseline = execute(data, run_id="baseline-queued-completion", target_revision=1)
+    candidate = execute(data, run_id="candidate-queued-completion", target_revision=2)
+    decision_record = ReleaseDecisionRecord(
+        decision_id="decision-queued-completion",
+        decision=decision(data, baseline, candidate),
+        created_at=NOW,
+    )
+    queued_decision = job(
+        job_id="job-queued-decision-completion",
+        kind=JobKind.COMPARISON,
+        idempotency_key="request-queued-decision-completion",
+        resource_id=decision_record.decision_id,
+    )
+    repository.begin_job(
+        queued_decision,
+        comparison_payload(data, baseline, candidate),
+    )
+    with raises(LeaseLostError, match="no longer active"):
+        repository.complete_release_decision(
+            queued_decision.job_id,
+            decision_record,
+            attempt_number=1,
+            lease_token=LEASE_TOKEN_A,
+        )
+
+    with raises(RecordNotFoundError, match="not found"):
+        repository.get_run(run_record.run_id)
+    with raises(RecordNotFoundError, match="not found"):
+        repository.get_release_decision(decision_record.decision_id)
+
+
+def test_preexisting_identical_evidence_and_decision_cancellation_are_atomic(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+) -> None:
+    data = dataset()
+    repository.put_dataset(DatasetRecord(dataset=data, created_at=NOW))
+    baseline = execute(data, run_id="run-preexisting", target_revision=1)
+    candidate = execute(data, run_id="candidate-preexisting", target_revision=2)
+    run_record = RunRecord(result=baseline, created_at=NOW)
+    repository.put_run(run_record)
+    repository.put_run(
+        RunRecord(result=candidate, created_at=NOW + timedelta(seconds=1))
+    )
+
+    run_job = job(
+        job_id="job-preexisting-run",
+        idempotency_key="request-preexisting-run",
+        resource_id=run_record.run_id,
+    )
+    activate_job(engine, repository, run_job, run_payload(data))
+    assert (
+        repository.complete_run(
+            run_job.job_id,
+            run_record,
+            attempt_number=1,
+            lease_token=LEASE_TOKEN_A,
+        ).status
+        is JobStatus.SUCCEEDED
+    )
+
+    stored_decision = ReleaseDecisionRecord(
+        decision_id="decision-preexisting",
+        decision=decision(data, baseline, candidate),
+        created_at=NOW + timedelta(seconds=2),
+    )
+    repository.put_release_decision(stored_decision)
+    decision_job = job(
+        job_id="job-preexisting-decision",
+        kind=JobKind.COMPARISON,
+        idempotency_key="request-preexisting-decision",
+        resource_id=stored_decision.decision_id,
+    )
+    payload = comparison_payload(data, baseline, candidate)
+    activate_job(engine, repository, decision_job, payload)
+    assert (
+        repository.complete_release_decision(
+            decision_job.job_id,
+            stored_decision,
+            attempt_number=1,
+            lease_token=LEASE_TOKEN_A,
+        ).status
+        is JobStatus.SUCCEEDED
+    )
+
+    canceled_decision = ReleaseDecisionRecord(
+        decision_id="decision-canceled-before-publication",
+        decision=decision(data, baseline, candidate),
+        created_at=NOW + timedelta(seconds=3),
+    )
+    canceled_job = job(
+        job_id="job-canceled-decision",
+        kind=JobKind.COMPARISON,
+        idempotency_key="request-canceled-decision",
+        resource_id=canceled_decision.decision_id,
+    )
+    activate_job(engine, repository, canceled_job, payload)
+    repository.cancel_job(canceled_job.job_id)
+    assert (
+        repository.complete_release_decision(
+            canceled_job.job_id,
+            canceled_decision,
+            attempt_number=1,
+            lease_token=LEASE_TOKEN_A,
+        ).status
+        is JobStatus.CANCELED
+    )
+    with raises(RecordNotFoundError, match="not found"):
+        repository.get_release_decision(canceled_decision.decision_id)
+
+
+def test_retry_failure_and_cancellation_are_fenced_and_cancellation_wins(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+) -> None:
+    retry_record = job()
+    activate_job(engine, repository, retry_record, run_payload())
+    queued = repository.retry_job(
+        retry_record.job_id,
+        1,
+        LEASE_TOKEN_A,
+        delay_seconds=5,
+        error_code="temporary_failure",
+    )
+    retry_attempt = repository.list_job_attempts(retry_record.job_id)[0]
+    assert queued.status is JobStatus.QUEUED
+    assert queued.available_at > queued.updated_at
+    assert retry_attempt.status is JobAttemptStatus.RETRY_SCHEDULED
+    assert retry_attempt.error_code == "temporary_failure"
+    with raises(LeaseLostError, match="no longer active"):
+        repository.fail_job(
+            retry_record.job_id,
+            1,
+            LEASE_TOKEN_A,
+            error_code="stale_worker",
+        )
+
+    failed_record = job(
+        job_id="job-failed",
+        idempotency_key="request-failed",
+        resource_id="run-failed",
+    )
+    activate_job(engine, repository, failed_record, run_payload())
+    failed = repository.fail_job(
+        failed_record.job_id,
+        1,
+        LEASE_TOKEN_A,
+        error_code="execution_failed",
+    )
+    assert failed.status is JobStatus.FAILED
+    assert failed.error_code == "execution_failed"
+    assert repository.list_job_attempts(failed.job_id)[0].status is (
+        JobAttemptStatus.FAILED
+    )
+
+    canceled_record = job(
+        job_id="job-cancel-running",
+        idempotency_key="request-cancel-running",
+        resource_id="run-cancel-running",
+    )
+    activate_job(engine, repository, canceled_record, run_payload())
+    requested = repository.cancel_job(canceled_record.job_id)
+    canceled = repository.retry_job(
+        canceled_record.job_id,
+        1,
+        LEASE_TOKEN_A,
+        delay_seconds=5,
+        error_code="temporary_failure",
+    )
+    assert requested.status is JobStatus.CANCEL_REQUESTED
+    assert canceled.status is JobStatus.CANCELED
+    assert (
+        repository.acknowledge_cancellation(
+            canceled.job_id,
+            1,
+            LEASE_TOKEN_A,
+        )
+        == canceled
+    )
+    with raises(LeaseLostError, match="no longer active"):
+        repository.acknowledge_cancellation(
+            canceled.job_id,
+            1,
+            LEASE_TOKEN_B,
+        )
+
+
+def test_expired_or_stale_workers_never_mutate_or_publish(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+) -> None:
+    data = dataset()
+    repository.put_dataset(DatasetRecord(dataset=data, created_at=NOW))
+    proposed = job(resource_id="run-expired")
+    activate_job(
+        engine,
+        repository,
+        proposed,
+        run_payload(data),
+        expired=True,
+    )
+    evidence = RunRecord(
+        result=execute(data, run_id="run-expired"),
+        created_at=NOW,
+    )
+
+    with raises(LeaseLostError, match="no longer active"):
         repository.complete_run(
             proposed.job_id,
             evidence,
-            at=NOW + timedelta(seconds=3),
+            attempt_number=1,
+            lease_token=LEASE_TOKEN_A,
+        )
+    with raises(LeaseLostError, match="no longer active"):
+        repository.retry_job(
+            proposed.job_id,
+            1,
+            LEASE_TOKEN_A,
+            delay_seconds=5,
+            error_code="temporary_failure",
         )
 
     assert repository.get_job(proposed.job_id).status is JobStatus.RUNNING
@@ -1138,16 +2374,12 @@ def test_succeeded_replays_require_preserved_identical_evidence(
     repository.put_dataset(DatasetRecord(dataset=data, created_at=NOW))
     first = RunRecord(result=execute(data, run_id="run-replay"), created_at=NOW)
     proposed = job(resource_id="run-replay")
-    repository.begin_job(proposed)
-    repository.transition_job(
-        proposed.job_id,
-        JobStatus.RUNNING,
-        at=NOW + timedelta(seconds=1),
-    )
+    activate_job(engine, repository, proposed, run_payload(data))
     completed = repository.complete_run(
         proposed.job_id,
         first,
-        at=NOW + timedelta(seconds=2),
+        attempt_number=1,
+        lease_token=LEASE_TOKEN_A,
     )
 
     with engine.begin() as connection:
@@ -1158,7 +2390,8 @@ def test_succeeded_replays_require_preserved_identical_evidence(
         repository.complete_run(
             proposed.job_id,
             first,
-            at=NOW + timedelta(seconds=3),
+            attempt_number=1,
+            lease_token=LEASE_TOKEN_A,
         )
 
     different = RunRecord(
@@ -1170,7 +2403,8 @@ def test_succeeded_replays_require_preserved_identical_evidence(
         repository.complete_run(
             proposed.job_id,
             first,
-            at=NOW + timedelta(seconds=3),
+            attempt_number=1,
+            lease_token=LEASE_TOKEN_A,
         )
     assert repository.get_job(proposed.job_id) == completed
 
@@ -1200,25 +2434,32 @@ def test_decision_completion_replays_require_identical_evidence(
         resource_id=first.decision_id,
     )
 
-    with raises(RecordNotFoundError, match="not found"):
-        repository.complete_release_decision("missing-job", first, at=NOW)
+    with raises(LeaseLostError, match="no longer active"):
+        repository.complete_release_decision(
+            "missing-job",
+            first,
+            attempt_number=1,
+            lease_token=LEASE_TOKEN_A,
+        )
 
-    repository.begin_job(proposed)
-    repository.transition_job(
-        proposed.job_id,
-        JobStatus.RUNNING,
-        at=NOW + timedelta(seconds=1),
+    activate_job(
+        engine,
+        repository,
+        proposed,
+        comparison_payload(data, baseline, candidate),
     )
     completed = repository.complete_release_decision(
         proposed.job_id,
         first,
-        at=NOW + timedelta(seconds=4),
+        attempt_number=1,
+        lease_token=LEASE_TOKEN_A,
     )
     assert (
         repository.complete_release_decision(
             proposed.job_id,
             first,
-            at=NOW + timedelta(seconds=5),
+            attempt_number=1,
+            lease_token=LEASE_TOKEN_A,
         )
         == completed
     )
@@ -1233,7 +2474,8 @@ def test_decision_completion_replays_require_identical_evidence(
         repository.complete_release_decision(
             proposed.job_id,
             first,
-            at=NOW + timedelta(seconds=6),
+            attempt_number=1,
+            lease_token=LEASE_TOKEN_A,
         )
 
     different = ReleaseDecisionRecord(
@@ -1246,8 +2488,75 @@ def test_decision_completion_replays_require_identical_evidence(
         repository.complete_release_decision(
             proposed.job_id,
             first,
-            at=NOW + timedelta(seconds=6),
+            attempt_number=1,
+            lease_token=LEASE_TOKEN_A,
         )
+
+
+def test_fenced_completion_lets_cancellation_win_without_evidence(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+) -> None:
+    data = dataset()
+    repository.put_dataset(DatasetRecord(dataset=data, created_at=NOW))
+    proposed = job(resource_id="run-canceled")
+    activate_job(engine, repository, proposed, run_payload(data))
+    requested = repository.cancel_job(proposed.job_id)
+    evidence = RunRecord(
+        result=execute(data, run_id="run-canceled"),
+        created_at=NOW,
+    )
+
+    canceled = repository.complete_run(
+        proposed.job_id,
+        evidence,
+        attempt_number=1,
+        lease_token=LEASE_TOKEN_A,
+    )
+
+    assert requested.status is JobStatus.CANCEL_REQUESTED
+    assert canceled.status is JobStatus.CANCELED
+    assert repository.list_job_attempts(proposed.job_id)[0].status is (
+        JobAttemptStatus.CANCELED
+    )
+    with raises(RecordNotFoundError, match="not found"):
+        repository.get_run(evidence.run_id)
+
+
+def test_completion_rejects_wrong_resource_and_stale_token_before_publish(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+) -> None:
+    data = dataset()
+    repository.put_dataset(DatasetRecord(dataset=data, created_at=NOW))
+    proposed = job(resource_id="run-owned")
+    activate_job(engine, repository, proposed, run_payload(data))
+    wrong = RunRecord(
+        result=execute(data, run_id="run-unowned"),
+        created_at=NOW,
+    )
+    owned = RunRecord(
+        result=execute(data, run_id="run-owned"),
+        created_at=NOW,
+    )
+
+    with raises(IllegalJobTransitionError, match="does not own"):
+        repository.complete_run(
+            proposed.job_id,
+            wrong,
+            attempt_number=1,
+            lease_token=LEASE_TOKEN_A,
+        )
+    with raises(LeaseLostError, match="no longer active"):
+        repository.complete_run(
+            proposed.job_id,
+            owned,
+            attempt_number=1,
+            lease_token=LEASE_TOKEN_B,
+        )
+
+    with raises(RecordNotFoundError, match="not found"):
+        repository.get_run(owned.run_id)
 
 
 def test_each_list_rejects_a_well_formed_cursor_with_the_wrong_key_shape(
