@@ -1,0 +1,14 @@
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Reviewed test-only sentinels in immutable fixture commits"
+commits = [
+  "54bddf634893106d7b670c0c2c8f4a2ba6a93702",
+  "2cca78796618c551ac0142757c0fd28734b40d28",
+  "793ceb127cf2b096bf078fa3b41e8b9346736585",
+  "7dc3608ec2f583d8d5ba1523c8c8220805105ad7",
+]
