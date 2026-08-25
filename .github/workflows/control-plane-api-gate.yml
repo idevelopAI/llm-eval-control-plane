@@ -59,8 +59,29 @@ jobs:
         shell: bash
         run: |
           install -d -m 0700 .secrets
-          printf '%s\n' 'ephemeral-compose-ci-only' > .secrets/postgres-password.txt
-          chmod 0444 .secrets/postgres-password.txt
+          openssl rand -hex 32 > .secrets/postgres-password.txt
+          token_body="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')"
+          token_digest="$(printf 'cpk_%s' "$token_body" | sha256sum | cut -d ' ' -f 1)"
+          unset token_body
+          printf '%s\n' \
+            '{' \
+            '  "schema_version": "control-plane-auth/v1",' \
+            '  "project_id": "project-ci",' \
+            '  "principals": [' \
+            '    {' \
+            '      "principal_id": "ci-operator",' \
+            "      \"token_digest\": \"sha256:$token_digest\"," \
+            '      "scopes": [' \
+            '        "control-plane:cancel",' \
+            '        "control-plane:read",' \
+            '        "control-plane:write",' \
+            '        "observability:read"' \
+            '      ]' \
+            '    }' \
+            '  ]' \
+            '}' > .secrets/control-plane-auth.json
+          unset token_digest
+          chmod 0444 .secrets/postgres-password.txt .secrets/control-plane-auth.json
           docker compose up --build --detach --wait
           curl --fail --silent --show-error http://127.0.0.1:8000/health/ready
 

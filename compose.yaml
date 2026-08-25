@@ -66,6 +66,14 @@ services:
 
   api:
     <<: *control-plane-service
+    environment:
+      <<: *control-plane-environment
+      CONTROL_PLANE_AUTH_FILE: /run/secrets/control_plane_auth_config
+    secrets:
+      - source: control_plane_database_password
+        target: control_plane_database_password
+      - source: control_plane_auth_config
+        target: control_plane_auth_config
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -128,6 +136,8 @@ services:
     stop_grace_period: 45s
 
 secrets:
+  control_plane_auth_config:
+    file: ${CONTROL_PLANE_AUTH_CONFIG_FILE:-.secrets/control-plane-auth.json}
   control_plane_database_password:
     file: ${CONTROL_PLANE_PASSWORD_FILE:-.secrets/postgres-password.txt}
 
