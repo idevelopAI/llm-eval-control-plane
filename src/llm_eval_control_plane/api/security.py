@@ -277,8 +277,8 @@ def _clear_principal(scope: Scope) -> None:
 
 
 def _required_scope(scope: Scope) -> ControlPlaneScope | None:
-    path = scope.get("path")
-    if not isinstance(path, str):
+    path = _route_path(scope)
+    if path is None:
         return None
     if path == "/metrics" or path.startswith("/metrics/"):
         return ControlPlaneScope.OBSERVABILITY_READ
@@ -297,6 +297,22 @@ def _required_scope(scope: Scope) -> ControlPlaneScope | None:
     ):
         return ControlPlaneScope.CANCEL
     return ControlPlaneScope.WRITE
+
+
+def _route_path(scope: Scope) -> str | None:
+    """Mirror Starlette routing when an ASGI root path prefixes the request."""
+    path = scope.get("path")
+    if not isinstance(path, str):
+        return None
+    root_path = scope.get("root_path", "")
+    if not root_path:
+        return path
+    if not isinstance(root_path, str) or not path.startswith(root_path):
+        return path
+    if path == root_path:
+        return ""
+    boundary = len(root_path)
+    return path[boundary:] if path[boundary] == "/" else path
 
 
 def _bounded_headers(scope: Scope) -> dict[bytes, tuple[bytes, ...]] | None:

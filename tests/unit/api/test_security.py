@@ -363,6 +363,33 @@ def test_every_protected_resource_has_one_exact_scope() -> None:
                 assert failure.code == "permission_denied"
 
 
+def test_root_path_prefix_is_removed_before_selecting_the_required_scope() -> None:
+    resources = (
+        ("/control-plane/v1/jobs", "GET", ControlPlaneScope.READ),
+        ("/control-plane/v1/datasets", "POST", ControlPlaneScope.WRITE),
+        (
+            "/control-plane/v1/jobs/job-one/cancellation",
+            "POST",
+            ControlPlaneScope.CANCEL,
+        ),
+        ("/control-plane/metrics", "GET", ControlPlaneScope.OBSERVABILITY_READ),
+    )
+
+    for path, method, required_scope in resources:
+        for granted_scope in ControlPlaneScope:
+            authorizer = ControlPlaneAuthorizer(_configuration(scopes=(granted_scope,)))
+            scope = _scope(path, method=method)
+            scope["root_path"] = "/control-plane"
+
+            result = authorizer.authorize(scope)
+
+            if granted_scope is required_scope:
+                assert result is None, (path, method, granted_scope)
+            else:
+                failure = _failure(result)
+                assert failure.status == 403, (path, method, granted_scope)
+
+
 def test_invalid_credentials_have_one_safe_401_and_never_retain_state() -> None:
     authorizer = ControlPlaneAuthorizer(_configuration())
     invalid_headers: tuple[list[tuple[bytes, bytes]], ...] = (
