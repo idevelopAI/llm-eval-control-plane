@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -18,12 +19,17 @@ from llm_eval_control_plane.adapters.control_plane_db import (
     job_attempts_table,
     job_payloads_table,
     jobs_table,
+    runs_table,
 )
-from llm_eval_control_plane.domain.canonical import sha256_digest
+from llm_eval_control_plane.api.execution import DeterministicEvaluationExecutor
+from llm_eval_control_plane.domain import CanonicalJson, DatasetVersion, EvaluationCase
+from llm_eval_control_plane.domain.canonical import canonical_json_bytes, sha256_digest
+from llm_eval_control_plane.domain.results import RunResult
 
 _REVISION_ONE = "20260820_0001"
 _REVISION_TWO = "20260823_0002"
-_HEAD = "20260825_0003"
+_REVISION_THREE = "20260825_0003"
+_HEAD = "20260825_0004"
 _CREATED_AT = datetime(2020, 1, 2, 3, tzinfo=UTC)
 _FUTURE_CREATED_AT = datetime(2099, 1, 2, 3, tzinfo=UTC)
 _FUTURE_UPDATED_AT = _FUTURE_CREATED_AT + timedelta(minutes=1)
@@ -81,6 +87,99 @@ def _insert_legacy_jobs(engine: Engine) -> None:
                 "updated_at": _FUTURE_UPDATED_AT,
             },
         )
+
+
+def _pre_metrics_evidence() -> tuple[DatasetVersion, RunResult]:
+    dataset = DatasetVersion.create(
+        name="metrics-migration",
+        revision=1,
+        cases=(
+            EvaluationCase(
+                case_id="case-001",
+                input=CanonicalJson.from_value(
+                    {"scenario": "echo", "value": "migration-evidence"}
+                ),
+                expected=CanonicalJson.from_value("migration-evidence"),
+            ),
+        ),
+    )
+    result = asyncio.run(
+        DeterministicEvaluationExecutor().execute(
+            run_id="run-metrics-migration",
+            dataset=dataset,
+            target_name="fake/metrics-migration",
+            target_revision=1,
+            adapter="deterministic_fake",
+            evaluator_names=("exact_match",),
+            scenario_overrides={},
+        )
+    )
+    return dataset, result
+
+
+def _insert_pre_metrics_run(
+    engine: Engine,
+    *,
+    document_override: str | None = None,
+) -> RunResult:
+    dataset, result = _pre_metrics_evidence()
+    dataset_document = canonical_json_bytes(dataset.model_dump(mode="json")).decode()
+    run_document = (
+        canonical_json_bytes(result.model_dump(mode="json")).decode()
+        if document_override is None
+        else document_override
+    )
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO control_plane_datasets "
+                "(name, revision, digest, case_count, document, created_at) VALUES "
+                "(:name, :revision, :digest, :case_count, :document, :created_at)"
+            ),
+            {
+                "name": dataset.name,
+                "revision": dataset.revision,
+                "digest": dataset.digest,
+                "case_count": len(dataset.cases),
+                "document": dataset_document,
+                "created_at": _CREATED_AT,
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO control_plane_runs "
+                "(run_id, result_digest, dataset_name, dataset_revision, status, "
+                "execution_mode, document, created_at) VALUES "
+                "(:run_id, :result_digest, :dataset_name, :dataset_revision, :status, "
+                ":execution_mode, :document, :created_at)"
+            ),
+            {
+                "run_id": result.run_id,
+                "result_digest": result.result_digest,
+                "dataset_name": result.dataset.name,
+                "dataset_revision": result.dataset.revision,
+                "status": result.status.value,
+                "execution_mode": result.execution_mode.value,
+                "document": run_document,
+                "created_at": _CREATED_AT,
+            },
+        )
+    return result
+
+
+def _usage(result: RunResult) -> tuple[int, int]:
+    return (
+        sum(
+            case.target.response.usage.input_units
+            for case in result.cases
+            if case.target is not None
+        ),
+        sum(
+            case.target.response.usage.output_units
+            for case in result.cases
+            if case.target is not None
+        ),
+    )
 
 
 def test_upgrade_terminalizes_unrecoverable_legacy_jobs_and_records_history(
@@ -267,6 +366,109 @@ def test_trace_context_migration_upgrades_and_downgrades_without_schema_drift(
             assert compare_metadata(context, CONTROL_PLANE_METADATA) == []
     finally:
         final_engine.dispose()
+
+
+def test_operational_metrics_migration_truthfully_backfills_and_round_trips(
+    database_url: str,
+) -> None:
+    config = Config("alembic.ini")
+    command.upgrade(config, _REVISION_THREE)
+    previous = create_engine(database_url)
+    result = _insert_pre_metrics_run(previous)
+    previous.dispose()
+    expected_input, expected_output = _usage(result)
+
+    command.upgrade(config, _HEAD)
+    upgraded = create_engine(database_url)
+    try:
+        columns = {
+            column["name"]: column
+            for column in inspect(upgraded).get_columns("control_plane_runs")
+        }
+        assert columns["input_units"]["nullable"] is False
+        assert columns["output_units"]["nullable"] is False
+        with upgraded.connect() as connection:
+            row = connection.execute(
+                select(
+                    runs_table.c.input_units,
+                    runs_table.c.output_units,
+                ).where(runs_table.c.run_id == result.run_id)
+            ).one()
+            assert tuple(row) == (expected_input, expected_output)
+            context = MigrationContext.configure(connection)
+            assert compare_metadata(context, CONTROL_PLANE_METADATA) == []
+    finally:
+        upgraded.dispose()
+
+    command.downgrade(config, _REVISION_THREE)
+    downgraded = create_engine(database_url)
+    try:
+        assert {"input_units", "output_units"}.isdisjoint(
+            column["name"]
+            for column in inspect(downgraded).get_columns("control_plane_runs")
+        )
+        with downgraded.connect() as connection:
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT run_id FROM control_plane_runs WHERE run_id = :run_id"
+                    ),
+                    {"run_id": result.run_id},
+                ).scalar_one()
+                == result.run_id
+            )
+    finally:
+        downgraded.dispose()
+
+    command.upgrade(config, _HEAD)
+    final_engine = create_engine(database_url)
+    try:
+        with final_engine.connect() as connection:
+            row = connection.execute(
+                select(
+                    runs_table.c.input_units,
+                    runs_table.c.output_units,
+                ).where(runs_table.c.run_id == result.run_id)
+            ).one()
+            assert tuple(row) == (expected_input, expected_output)
+            context = MigrationContext.configure(connection)
+            assert compare_metadata(context, CONTROL_PLANE_METADATA) == []
+    finally:
+        final_engine.dispose()
+
+
+def test_operational_metrics_migration_fails_closed_before_mutating_bad_evidence(
+    database_url: str,
+) -> None:
+    config = Config("alembic.ini")
+    command.upgrade(config, _REVISION_THREE)
+    previous = create_engine(database_url)
+    _insert_pre_metrics_run(
+        previous,
+        document_override='{"private":"migration-content-sentinel"}',
+    )
+    previous.dispose()
+
+    with raises(RuntimeError) as captured:
+        command.upgrade(config, _HEAD)
+    assert str(captured.value) == "Stored run evidence is invalid"
+    assert "migration-content-sentinel" not in str(captured.value)
+
+    unchanged = create_engine(database_url)
+    try:
+        assert {"input_units", "output_units"}.isdisjoint(
+            column["name"]
+            for column in inspect(unchanged).get_columns("control_plane_runs")
+        )
+        with unchanged.connect() as connection:
+            assert (
+                connection.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).scalar_one()
+                == _REVISION_THREE
+            )
+    finally:
+        unchanged.dispose()
 
 
 def test_payload_and_attempt_tables_allow_only_one_active_lease(
