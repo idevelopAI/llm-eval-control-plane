@@ -50,6 +50,21 @@ jobs:
     name: Test Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
+        env:
+          POSTGRES_DB: control_plane
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d control_plane"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      CONTROL_PLANE_DATABASE_URL: postgresql+psycopg://postgres@127.0.0.1:5432/control_plane
     strategy:
       fail-fast: false
       matrix:
@@ -69,6 +84,9 @@ jobs:
 
       - name: Install locked dependencies
         run: uv sync --locked
+
+      - name: Migrate test database
+        run: uv run alembic upgrade head
 
       - name: Run test suite
         run: >-
