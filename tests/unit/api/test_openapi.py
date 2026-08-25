@@ -1,3 +1,7 @@
+from typing import cast
+
+from fastapi import FastAPI
+
 from .conftest import ApiHarness
 
 
@@ -155,3 +159,41 @@ def test_openapi_applies_project_bearer_security_only_to_v1_operations(
                 assert project_headers[0]["required"] is True
             else:
                 assert "security" not in operation
+
+
+def test_openapi_security_decoration_is_stable_across_repeat_calls(
+    api_harness: ApiHarness,
+) -> None:
+    app = cast(FastAPI, api_harness.client.app)
+    first = app.openapi()
+    second = app.openapi()
+    third = api_harness.client.get("/openapi.json").json()
+
+    assert first is second
+    assert first == third
+    for path, path_item in first["paths"].items():
+        if not path.startswith("/v1"):
+            continue
+        for operation in path_item.values():
+            if not isinstance(operation, dict) or "operationId" not in operation:
+                continue
+            project_headers = [
+                parameter
+                for parameter in operation.get("parameters", [])
+                if parameter.get("name") == "X-Project-ID"
+            ]
+            assert len(project_headers) == 1
+
+
+def test_interactive_documentation_does_not_load_third_party_assets(
+    api_harness: ApiHarness,
+) -> None:
+    responses = tuple(
+        api_harness.client.get(path)
+        for path in ("/docs", "/docs/oauth2-redirect", "/redoc")
+    )
+
+    assert all(response.status_code == 404 for response in responses)
+    rendered = "".join(response.text for response in responses)
+    assert "<script" not in rendered.casefold()
+    assert "cdn.jsdelivr.net" not in rendered.casefold()

@@ -155,9 +155,8 @@ def create_app(
         summary="Durable, content-addressed evaluation and release decisions",
         version="1.2.0",
         openapi_url="/openapi.json",
-        docs_url="/docs",
+        docs_url=None,
         redoc_url=None,
-        swagger_ui_parameters={"displayOperationId": True},
     )
     app.add_middleware(
         ApiBoundaryMiddleware,
@@ -655,51 +654,46 @@ def _error_response(
 
 def _install_openapi_security(app: FastAPI) -> None:
     """Document the bearer and project headers on every protected operation."""
-    original_openapi = app.openapi
-
-    def secured_openapi() -> dict[str, Any]:
-        document = original_openapi()
-        components = document.setdefault("components", {})
-        schemes = components.setdefault("securitySchemes", {})
-        schemes["ProjectBearer"] = {
-            "type": "http",
-            "scheme": "bearer",
-            "bearerFormat": "cpk_<base64url>",
-            "description": "Project-bound opaque API credential",
-        }
-        project_header = {
-            "name": "X-Project-ID",
-            "in": "header",
-            "required": True,
-            "description": "Configured single-deployment project boundary",
-            "schema": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 128,
-                "pattern": _STABLE_ID_PATTERN,
-            },
-        }
-        for path, path_item in document.get("paths", {}).items():
-            if not path.startswith("/v1") or not isinstance(path_item, dict):
+    document = app.openapi()
+    components = document.setdefault("components", {})
+    schemes = components.setdefault("securitySchemes", {})
+    schemes["ProjectBearer"] = {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "cpk_<base64url>",
+        "description": "Project-bound opaque API credential",
+    }
+    project_header = {
+        "name": "X-Project-ID",
+        "in": "header",
+        "required": True,
+        "description": "Configured single-deployment project boundary",
+        "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": _STABLE_ID_PATTERN,
+        },
+    }
+    for path, path_item in document.get("paths", {}).items():
+        if not path.startswith("/v1") or not isinstance(path_item, dict):
+            continue
+        for method, operation in path_item.items():
+            if method not in {
+                "delete",
+                "get",
+                "head",
+                "options",
+                "patch",
+                "post",
+                "put",
+            } or not isinstance(operation, dict):
                 continue
-            for method, operation in path_item.items():
-                if method not in {
-                    "delete",
-                    "get",
-                    "head",
-                    "options",
-                    "patch",
-                    "post",
-                    "put",
-                } or not isinstance(operation, dict):
-                    continue
-                operation["security"] = [{"ProjectBearer": []}]
-                parameters = operation.setdefault("parameters", [])
-                if isinstance(parameters, list):
-                    parameters.append(project_header)
-        return document
-
-    app.openapi = secured_openapi  # type: ignore[method-assign]
+            operation["security"] = [{"ProjectBearer": []}]
+            parameters = operation.setdefault("parameters", [])
+            if isinstance(parameters, list):
+                parameters.append(project_header)
+    app.openapi_schema = document
 
 
 __all__ = ["create_app"]
