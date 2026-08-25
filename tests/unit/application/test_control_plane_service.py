@@ -63,12 +63,15 @@ from llm_eval_control_plane.domain.execution import (
 from llm_eval_control_plane.domain.results import ExecutionMode, RunResult
 
 NOW = datetime(2026, 8, 23, 12, tzinfo=UTC)
+TRACEPARENT_A = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+TRACEPARENT_B = "00-7a3ce929d0e0e47364bf92f3577b34da-0ba902b700f067aa-00"
 
 
 class CountingExecutor(DeterministicEvaluationExecutor):
     """Count execution calls while retaining real deterministic validation."""
 
     def __init__(self) -> None:
+        super().__init__()
         self.calls = 0
 
     async def execute(
@@ -337,6 +340,7 @@ def _run_submission(
     target_name: str = "fake/candidate",
     target_revision: int = 2,
     adapter: str = "deterministic_fake",
+    traceparent: str | None = None,
 ) -> RunSubmission:
     return RunSubmission(
         idempotency_key=key,
@@ -347,6 +351,7 @@ def _run_submission(
         adapter=adapter,
         evaluator_names=("exact_match",),
         scenario_overrides={"case-001": "uppercase"},
+        traceparent=traceparent,
     )
 
 
@@ -401,17 +406,42 @@ def test_run_replay_keeps_one_job_payload_and_zero_execution_calls() -> None:
     executor = CountingExecutor()
     service = _service(repository, executor=executor)
     service.register_dataset(_dataset())
-    submission = _run_submission("same-key")
+    submission = _run_submission("same-key", traceparent=TRACEPARENT_A)
+    replay_submission = _run_submission("same-key", traceparent=TRACEPARENT_B)
 
     first = asyncio.run(service.submit_run(submission))
-    replay = asyncio.run(service.submit_run(submission))
+    replay = asyncio.run(service.submit_run(replay_submission))
 
     assert first.created is True
     assert replay.created is False
     assert replay.job == first.job
+    assert first.job.traceparent == TRACEPARENT_A
+    assert submission.digest_record() == replay_submission.digest_record()
+    assert "traceparent" not in submission.digest_record()
+    assert TRACEPARENT_A not in repr(submission)
     assert len(repository.jobs) == 1
     assert len(repository.payloads) == 1
     assert executor.calls == 0
+
+
+def test_submissions_reject_non_w3c_trace_context_without_retaining_content() -> None:
+    private_value = f"{TRACEPARENT_A}-private-baggage"
+    with raises(ValueError) as run_error:
+        _run_submission("invalid-trace", traceparent=private_value)
+    assert "private-baggage" not in str(run_error.value)
+
+    repository = MemoryRepository()
+    dataset, baseline, candidate = _seed_runs(repository)
+    with raises(ValueError) as comparison_error:
+        _comparison_submission(
+            "invalid-comparison-trace",
+            dataset,
+            baseline,
+            candidate,
+            _spec(dataset, baseline, candidate),
+            private_value,
+        )
+    assert "private-baggage" not in str(comparison_error.value)
 
 
 def test_exact_run_replay_bypasses_missing_dataset_and_current_executor() -> None:
@@ -561,6 +591,7 @@ def _comparison_submission(
     baseline: RunResult,
     candidate: RunResult,
     spec: EvaluationSpec,
+    traceparent: str | None = None,
 ) -> ComparisonSubmission:
     return ComparisonSubmission(
         idempotency_key=key,
@@ -569,6 +600,7 @@ def _comparison_submission(
         baseline_run_id=baseline.run_id,
         candidate_run_id=candidate.run_id,
         spec=spec,
+        traceparent=traceparent,
     )
 
 
@@ -583,14 +615,26 @@ def test_comparison_enqueues_immutable_result_digests_and_replays() -> None:
         baseline,
         candidate,
         _spec(dataset, baseline, candidate),
+        TRACEPARENT_A,
+    )
+    replay_submission = _comparison_submission(
+        "comparison",
+        dataset,
+        baseline,
+        candidate,
+        submission.spec,
+        TRACEPARENT_B,
     )
 
     first = asyncio.run(service.submit_comparison(submission))
-    replay = asyncio.run(service.submit_comparison(submission))
+    replay = asyncio.run(service.submit_comparison(replay_submission))
 
     assert first.created is True
     assert first.job.status is JobStatus.QUEUED
     assert replay.created is False
+    assert replay.job.traceparent == TRACEPARENT_A
+    assert submission.digest_record() == replay_submission.digest_record()
+    assert "traceparent" not in submission.digest_record()
     assert executor.calls == 0
     payload = repository.payloads[first.job.job_id]
     assert isinstance(payload, ComparisonJobPayload)

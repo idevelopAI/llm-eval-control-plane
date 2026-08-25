@@ -28,7 +28,9 @@ from llm_eval_control_plane.domain.control_plane import (
     RunListRecord,
     RunRecord,
     ScenarioOverride,
+    TraceParent,
     WorkerId,
+    validate_traceparent,
 )
 from llm_eval_control_plane.domain.datasets import DatasetVersion
 from llm_eval_control_plane.domain.evaluation import EvaluationSpec
@@ -225,6 +227,11 @@ class RunSubmission:
     adapter: str
     evaluator_names: tuple[str, ...]
     scenario_overrides: Mapping[str, str]
+    traceparent: TraceParent | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.traceparent is not None:
+            validate_traceparent(self.traceparent)
 
     def digest_record(self) -> dict[str, JsonValue]:
         """Return the request semantics covered by idempotency."""
@@ -253,6 +260,11 @@ class ComparisonSubmission:
     baseline_run_id: str
     candidate_run_id: str
     spec: EvaluationSpec
+    traceparent: TraceParent | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.traceparent is not None:
+            validate_traceparent(self.traceparent)
 
     def digest_record(self) -> dict[str, JsonValue]:
         """Return the request semantics covered by idempotency."""
@@ -470,6 +482,7 @@ class ControlPlaneService:
             available_at=now,
             created_at=now,
             updated_at=now,
+            traceparent=submission.traceparent,
         )
         try:
             job, created = self._repository.begin_job(proposed, payload)
@@ -583,6 +596,7 @@ class ControlPlaneService:
             available_at=now,
             created_at=now,
             updated_at=now,
+            traceparent=submission.traceparent,
         )
         try:
             job, created = self._repository.begin_job(proposed, payload)

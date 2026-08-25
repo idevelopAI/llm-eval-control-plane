@@ -23,6 +23,7 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.engine import Engine, RowMapping
+from sqlalchemy.exc import IntegrityError
 
 from llm_eval_control_plane.adapters import control_plane_db
 from llm_eval_control_plane.adapters.control_plane_db import (
@@ -83,6 +84,8 @@ from llm_eval_control_plane.domain.results import RunResult
 NOW = datetime(2026, 8, 20, 12, tzinfo=UTC)
 LEASE_TOKEN_A = "lease_token_a_0123456789abcdef0123456789abcdef"
 LEASE_TOKEN_B = "lease_token_b_0123456789abcdef0123456789abcdef"
+TRACEPARENT_A = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+TRACEPARENT_B = "00-7a3ce929d0e0e47364bf92f3577b34da-0ba902b700f067aa-00"
 
 
 class SequenceClock:
@@ -213,6 +216,7 @@ def job(
     request: object = "same",
     created_at: datetime = NOW,
     max_attempts: int = 3,
+    traceparent: str | None = None,
 ) -> JobRecord:
     return JobRecord(
         job_id=job_id,
@@ -226,6 +230,7 @@ def job(
         available_at=created_at,
         created_at=created_at,
         updated_at=created_at,
+        traceparent=traceparent,
     )
 
 
@@ -349,16 +354,22 @@ def test_begin_job_identifies_only_one_winner_and_detects_conflicts(
     engine: Engine,
     repository: SqlAlchemyControlPlaneRepository,
 ) -> None:
-    proposed = job()
+    proposed = job(traceparent=TRACEPARENT_A)
     payload = run_payload()
     stored, created = repository.begin_job(proposed, payload)
     retry, retry_created = repository.begin_job(
-        job(job_id="job-retry", resource_id="run-retry"), payload
+        job(
+            job_id="job-retry",
+            resource_id="run-retry",
+            traceparent=TRACEPARENT_B,
+        ),
+        payload,
     )
 
     assert (stored, created) == (proposed, True)
     assert retry == proposed
     assert retry_created is False
+    assert repository.get_job(proposed.job_id).traceparent == TRACEPARENT_A
     with engine.connect() as connection:
         payload_row = connection.execute(select(job_payloads_table)).mappings().one()
     assert payload_row["job_id"] == proposed.job_id
@@ -396,6 +407,31 @@ def test_begin_job_identifies_only_one_winner_and_detects_conflicts(
         run_payload(target_name="fake/different"),
     )
     assert (authoritative, authoritative_created) == (proposed, False)
+
+
+def test_stored_trace_context_is_bounded_and_validated_on_read(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+) -> None:
+    proposed = job(traceparent=TRACEPARENT_A)
+    repository.begin_job(proposed, run_payload())
+
+    with raises(IntegrityError), engine.begin() as connection:
+        connection.execute(
+            update(jobs_table)
+            .where(jobs_table.c.job_id == proposed.job_id)
+            .values(traceparent="00-short")
+        )
+
+    with engine.begin() as connection:
+        connection.execute(
+            update(jobs_table)
+            .where(jobs_table.c.job_id == proposed.job_id)
+            .values(traceparent=TRACEPARENT_A.upper())
+        )
+    with raises(CorruptRecordError) as captured:
+        repository.get_job(proposed.job_id)
+    assert TRACEPARENT_A not in str(captured.value)
 
 
 def test_concurrent_begin_job_has_exactly_one_insert_winner(engine: Engine) -> None:

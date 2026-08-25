@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import re
 import secrets
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -29,6 +30,7 @@ from llm_eval_control_plane.domain.control_plane import (
     ComparisonJobPayload,
     DatasetRecord,
     JobAttemptStatus,
+    JobKind,
     JobStatus,
     ReleaseDecisionRecord,
     RunJobPayload,
@@ -38,6 +40,7 @@ from llm_eval_control_plane.domain.control_plane import (
 Clock = Callable[[], datetime]
 LeaseTokenFactory = Callable[[], str]
 Sleeper = Callable[[float], Awaitable[None]]
+TraceJob = Callable[[JobKind, str | None], AbstractContextManager[None]]
 
 _PRIVATE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _LEASE_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
@@ -49,6 +52,14 @@ def _utc_now() -> datetime:
 
 def _lease_token() -> str:
     return secrets.token_urlsafe(32)
+
+
+@contextmanager
+def _noop_trace_job(
+    _kind: JobKind,
+    _traceparent: str | None,
+) -> Iterator[None]:
+    yield
 
 
 class WorkerError(RuntimeError):
@@ -126,6 +137,7 @@ class WorkerService:
         "_lease_token_factory",
         "_repository",
         "_sleeper",
+        "_trace_job",
         "_worker_id",
     )
 
@@ -142,6 +154,7 @@ class WorkerService:
         clock: Clock = _utc_now,
         lease_token_factory: LeaseTokenFactory = _lease_token,
         sleeper: Sleeper = asyncio.sleep,
+        trace_job: TraceJob = _noop_trace_job,
     ) -> None:
         integers = (
             (lease_seconds, 5, 3_600),
@@ -170,6 +183,7 @@ class WorkerService:
         self._clock = clock
         self._lease_token_factory = lease_token_factory
         self._sleeper = sleeper
+        self._trace_job = trace_job
 
     def __repr__(self) -> str:
         return "WorkerService()"
@@ -196,9 +210,10 @@ class WorkerService:
         if claim is None:
             return WorkerResult(status=WorkerResultStatus.IDLE)
         self._validate_claim(claim, lease_token)
-        if claim.job.kind is not claim.payload.kind:
-            return self._fail(claim, error_code="invalid_job_payload")
-        return await self._process(claim)
+        with self._trace_job(claim.job.kind, claim.job.traceparent):
+            if claim.job.kind is not claim.payload.kind:
+                return self._fail(claim, error_code="invalid_job_payload")
+            return await self._process(claim)
 
     async def _process(self, claim: ClaimedJob) -> WorkerResult:
         execution = asyncio.create_task(self._build_evidence(claim))
@@ -529,6 +544,7 @@ def _compare_job(
 
 
 __all__ = [
+    "TraceJob",
     "TransientExecutionError",
     "WorkerConfigurationError",
     "WorkerError",

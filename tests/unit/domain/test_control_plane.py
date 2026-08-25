@@ -28,6 +28,7 @@ from llm_eval_control_plane.domain.evaluation import (
 from llm_eval_control_plane.domain.results import ExecutionMode
 
 NOW = datetime(2026, 8, 20, 12, tzinfo=UTC)
+TRACEPARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 
 
 def job(*, status: JobStatus = JobStatus.QUEUED) -> JobRecord:
@@ -192,6 +193,38 @@ def test_job_record_rejects_inconsistent_failure_evidence_and_times() -> None:
                 "max_attempts": 3,
             }
         )
+
+
+def test_job_traceparent_is_strict_private_coordination_metadata() -> None:
+    traced = JobRecord.model_validate(
+        {
+            **job().model_dump(mode="python"),
+            "traceparent": TRACEPARENT,
+        }
+    )
+    running = traced.transition_to(JobStatus.RUNNING, at=NOW + timedelta(seconds=1))
+
+    assert traced.traceparent == TRACEPARENT
+    assert running.traceparent == TRACEPARENT
+    assert TRACEPARENT not in repr(traced)
+
+    invalid_values: tuple[object, ...] = (
+        TRACEPARENT.upper(),
+        TRACEPARENT.replace("00-", "01-", 1),
+        "00-00000000000000000000000000000000-00f067aa0ba902b7-01",
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01",
+        f"{TRACEPARENT}-private-baggage",
+        1,
+    )
+    for invalid in invalid_values:
+        with raises(ValidationError) as captured:
+            JobRecord.model_validate(
+                {
+                    **job().model_dump(mode="python"),
+                    "traceparent": invalid,
+                }
+            )
+        assert "private-baggage" not in str(captured.value)
 
 
 def _artifact(kind: ArtifactKind, name: str, revision: int) -> ArtifactRef:

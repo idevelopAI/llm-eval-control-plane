@@ -7,6 +7,8 @@ from enum import StrEnum
 from typing import Annotated, Generic, Literal, Self, TypeAlias, TypeVar
 
 from pydantic import (
+    BeforeValidator,
+    ConfigDict,
     Field,
     NonNegativeInt,
     PositiveInt,
@@ -81,6 +83,32 @@ ScenarioName = Annotated[
 MaxAttempts = Annotated[int, Field(ge=1, le=10)]
 
 
+def validate_traceparent(value: object) -> str:
+    """Return one strict lowercase W3C Trace Context version 00 header."""
+    if not isinstance(value, str) or len(value) != 55:
+        raise ValueError("traceparent is invalid")
+    if value[0:2] != "00" or value[2] != "-" or value[35] != "-" or value[52] != "-":
+        raise ValueError("traceparent is invalid")
+    hexadecimal = frozenset("0123456789abcdef")
+    trace_id = value[3:35]
+    parent_id = value[36:52]
+    trace_flags = value[53:55]
+    if (
+        not set(trace_id + parent_id + trace_flags) <= hexadecimal
+        or trace_id == "0" * 32
+        or parent_id == "0" * 16
+    ):
+        raise ValueError("traceparent is invalid")
+    return value
+
+
+TraceParent = Annotated[
+    str,
+    BeforeValidator(validate_traceparent),
+    Field(min_length=55, max_length=55),
+]
+
+
 def _utc(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("control-plane timestamps must include a timezone")
@@ -146,6 +174,8 @@ class JobTransitionError(ValueError):
 class JobRecord(FrozenModel):
     """Durable idempotent work submission and its current lifecycle state."""
 
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     job_id: StableId
     kind: JobKind
     status: JobStatus
@@ -158,6 +188,7 @@ class JobRecord(FrozenModel):
     error_code: SafeCode | None = None
     created_at: datetime
     updated_at: datetime
+    traceparent: TraceParent | None = Field(default=None, repr=False)
 
     _normalize_available_at = field_validator("available_at")(_utc)
     _normalize_created_at = field_validator("created_at")(_utc)
