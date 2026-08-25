@@ -17,6 +17,7 @@ COMPOSE_FILE = PROJECT_ROOT / "compose.yaml"
 DOCKERIGNORE = PROJECT_ROOT / ".dockerignore"
 GITLEAKS_CONFIG = PROJECT_ROOT / ".gitleaks.toml"
 SECURITY_WORKFLOW = PROJECT_ROOT / ".github" / "workflows" / "security-gate.yml"
+DEPENDABOT_CONFIG = PROJECT_ROOT / ".github" / "dependabot.yml"
 WORKFLOW_ROOT = PROJECT_ROOT / ".github" / "workflows"
 
 _DIGEST_PIN = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
@@ -114,6 +115,17 @@ def test_runtime_image_ends_as_a_fixed_non_root_user() -> None:
     assert "--no-create-home" in runtime_stage
     assert "--shell /sbin/nologin" in runtime_stage
     assert "python -m pip uninstall --yes pip" in runtime_stage
+
+
+def test_dependabot_covers_every_pinned_dependency_source() -> None:
+    ecosystems = set(
+        re.findall(
+            r"(?m)^\s+- package-ecosystem:\s+([^\s]+)\s*$",
+            _read(DEPENDABOT_CONFIG),
+        )
+    )
+
+    assert ecosystems == {"docker", "docker-compose", "github-actions", "uv"}
 
 
 def test_build_context_excludes_secrets_evidence_and_vcs_metadata() -> None:
