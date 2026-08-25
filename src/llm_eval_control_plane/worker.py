@@ -9,6 +9,7 @@ import secrets
 import signal
 import socket
 import sys
+from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 from types import FrameType
@@ -38,6 +39,7 @@ from llm_eval_control_plane.application.worker import (
     WorkerService,
     WorkerUnavailableError,
 )
+from llm_eval_control_plane.observability import Observability
 
 _WORKER_COMPONENT = re.compile(r"[^A-Za-z0-9._:-]+")
 
@@ -49,7 +51,7 @@ class AttemptRunner(Protocol):
 class WorkerRuntime:
     """Poll durable work, reap expired attempts, and manage readiness state."""
 
-    __slots__ = ("_repository", "_runner", "_settings")
+    __slots__ = ("_repository", "_runner", "_settings", "_telemetry")
 
     def __init__(
         self,
@@ -57,16 +59,21 @@ class WorkerRuntime:
         repository: ControlPlaneRepository,
         runner: AttemptRunner,
         settings: WorkerSettings,
+        telemetry: Observability | None = None,
     ) -> None:
         self._repository = repository
         self._runner = runner
         self._settings = settings
+        self._telemetry = telemetry
 
     def __repr__(self) -> str:
         return "WorkerRuntime()"
 
     async def serve(self, stop: asyncio.Event) -> None:
         """Run until stopped, draining an active attempt before returning."""
+        ready = False
+        persistence_unavailable = False
+        self._observe(lambda telemetry: telemetry.emit_worker_lifecycle("started"))
         try:
             while not stop.is_set():
                 try:
@@ -75,21 +82,77 @@ class WorkerRuntime:
                         raise ControlPlaneStoreError(
                             "Control-plane schema is unavailable"
                         )
-                    self._repository.reap_expired_jobs(
+                    recovered = self._repository.reap_expired_jobs(
                         limit=self._settings.reaper_batch,
                         retry_base_seconds=self._settings.backoff_base_seconds,
                         retry_max_seconds=self._settings.backoff_max_seconds,
                     )
+                    self._record_worker_recovery(len(recovered))
+                    if persistence_unavailable:
+                        self._observe(
+                            lambda telemetry: telemetry.emit_worker_lifecycle(
+                                "persistence_recovered"
+                            )
+                        )
+                        persistence_unavailable = False
                     _write_health_file(self._settings.health_file)
+                    if not ready:
+                        self._observe(
+                            lambda telemetry: telemetry.set_worker_ready(True)
+                        )
+                        ready = True
                     result = await self._runner.run_once()
                 except (ControlPlaneStoreError, WorkerUnavailableError):
                     _remove_health_file(self._settings.health_file)
+                    if ready:
+                        self._observe(
+                            lambda telemetry: telemetry.set_worker_ready(False)
+                        )
+                        ready = False
+                    if not persistence_unavailable:
+                        self._observe(
+                            lambda telemetry: telemetry.emit_worker_lifecycle(
+                                "persistence_unavailable"
+                            )
+                        )
+                        persistence_unavailable = True
+                    self._observe(
+                        lambda telemetry: telemetry.record_worker_poll("unavailable")
+                    )
                     await self._wait_for_poll(stop)
                     continue
                 if result.status is WorkerResultStatus.IDLE:
+                    self._observe(
+                        lambda telemetry: telemetry.record_worker_poll("idle")
+                    )
                     await self._wait_for_poll(stop)
+                else:
+                    self._observe(
+                        lambda telemetry: telemetry.record_worker_poll("processed")
+                    )
+                    self._record_worker_job_result(str(result.status))
         finally:
             _remove_health_file(self._settings.health_file)
+            if ready:
+                self._observe(lambda telemetry: telemetry.set_worker_ready(False))
+            self._observe(lambda telemetry: telemetry.emit_worker_lifecycle("stopped"))
+
+    def _observe(self, callback: Callable[[Observability], object]) -> None:
+        telemetry = self._telemetry
+        if telemetry is None:
+            return
+        try:
+            callback(telemetry)
+        except Exception:
+            return
+
+    def _record_worker_recovery(self, recovered_jobs: int) -> None:
+        self._observe(
+            lambda telemetry: telemetry.record_worker_recovery(recovered_jobs)
+        )
+
+    def _record_worker_job_result(self, result: str) -> None:
+        self._observe(lambda telemetry: telemetry.record_worker_job_result(result))
 
     async def _wait_for_poll(self, stop: asyncio.Event) -> None:
         try:
@@ -155,7 +218,9 @@ def _install_signal_handlers(stop: asyncio.Event) -> None:
 async def _run() -> None:
     settings = worker_settings_from_environment()
     engine: Engine | None = None
+    telemetry: Observability | None = None
     try:
+        telemetry = Observability(service="worker", log_sink=_stdout_log_sink)
         engine = create_engine(
             database_url_from_environment(),
             pool_pre_ping=True,
@@ -165,17 +230,19 @@ async def _run() -> None:
         worker_repository = cast(ControlPlaneRepository, repository)
         worker = WorkerService(
             repository=worker_repository,
-            executor=DeterministicEvaluationExecutor(),
+            executor=DeterministicEvaluationExecutor(tracer=telemetry.tracer),
             worker_id=_worker_id(),
             lease_seconds=settings.lease_seconds,
             heartbeat_seconds=settings.heartbeat_seconds,
             backoff_base_seconds=settings.backoff_base_seconds,
             backoff_max_seconds=settings.backoff_max_seconds,
+            trace_job=telemetry.trace_job,
         )
         runtime = WorkerRuntime(
             repository=worker_repository,
             runner=worker,
             settings=settings,
+            telemetry=telemetry,
         )
         stop = asyncio.Event()
         _install_signal_handlers(stop)
@@ -184,6 +251,14 @@ async def _run() -> None:
         _remove_health_file(settings.health_file)
         if engine is not None:
             engine.dispose()
+        if telemetry is not None:
+            telemetry.shutdown()
+
+
+def _stdout_log_sink(document: str) -> None:
+    """Write one already-sanitized event line to the process log stream."""
+    sys.stdout.write(document)
+    sys.stdout.flush()
 
 
 def main() -> int:

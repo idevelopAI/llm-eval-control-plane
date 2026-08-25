@@ -10,14 +10,26 @@ from __future__ import annotations
 import json
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 
+from opentelemetry.context import Context
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import SpanLimits, TracerProvider
-from opentelemetry.trace import Tracer
+from opentelemetry.trace import (
+    INVALID_SPAN,
+    Link,
+    NonRecordingSpan,
+    Span,
+    SpanContext,
+    SpanKind,
+    TraceFlags,
+    Tracer,
+    TraceState,
+)
 from opentelemetry.trace import TracerProvider as ApiTracerProvider
 from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
 from prometheus_client.exposition import CONTENT_TYPE_LATEST, generate_latest
@@ -32,6 +44,7 @@ _HTTP_ROUTES = frozenset(
         "/docs/oauth2-redirect",
         "/health/live",
         "/health/ready",
+        "/metrics",
         "/openapi.json",
         "/v1/comparisons",
         "/v1/dataset-revisions/{revision}/{name:path}",
@@ -49,6 +62,7 @@ _HTTP_ROUTES = frozenset(
 _ERROR_CODES = frozenset(
     {
         "control_plane_error",
+        "authentication_required",
         "idempotency_conflict",
         "internal_error",
         "invalid_cursor",
@@ -57,6 +71,8 @@ _ERROR_CODES = frozenset(
         "invalid_submission",
         "method_not_allowed",
         "persistence_unavailable",
+        "permission_denied",
+        "readiness_unavailable",
         "request_body_too_large",
         "resource_conflict",
         "resource_not_found",
@@ -66,8 +82,27 @@ _ERROR_CODES = frozenset(
     }
 )
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+_WORKER_TRACEPARENT = re.compile(
+    r"^00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$"
+)
+_WORKER_JOB_KINDS = frozenset({"comparison", "run"})
+_WORKER_JOB_RESULTS = frozenset(
+    {"canceled", "failed", "lease_lost", "retry_scheduled", "succeeded"}
+)
+_WORKER_POLL_OUTCOMES = frozenset({"idle", "processed", "unavailable"})
+_WORKER_LIFECYCLE_STATES = frozenset(
+    {
+        "not_ready",
+        "persistence_recovered",
+        "persistence_unavailable",
+        "ready",
+        "started",
+        "stopped",
+    }
+)
 _DURATION_BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10)
 _MAX_DURATION_NS = 86_400 * 1_000_000_000
+_MAX_RECOVERED_JOBS = 10_000
 
 
 class LogSink(Protocol):
@@ -101,6 +136,12 @@ class Observability:
         "_service",
         "_tracer",
         "_wall_clock",
+        "_worker_job_duration",
+        "_worker_job_results",
+        "_worker_polls",
+        "_worker_ready",
+        "_worker_reaper_recovered_jobs",
+        "_worker_reaper_runs",
     )
 
     def __init__(
@@ -177,6 +218,48 @@ class Observability:
             ("outcome",),
             registry=self._registry,
         )
+        self._worker_polls: Counter | None = None
+        self._worker_job_duration: Histogram | None = None
+        self._worker_job_results: Counter | None = None
+        self._worker_reaper_runs: Counter | None = None
+        self._worker_reaper_recovered_jobs: Counter | None = None
+        self._worker_ready: Gauge | None = None
+        if service == "worker":
+            self._worker_polls = Counter(
+                "control_plane_worker_polls_total",
+                "Completed worker polling cycles.",
+                ("outcome",),
+                registry=self._registry,
+            )
+            self._worker_job_duration = Histogram(
+                "control_plane_worker_job_duration_seconds",
+                "Claimed worker job processing duration in seconds.",
+                ("kind", "outcome"),
+                buckets=_DURATION_BUCKETS,
+                registry=self._registry,
+            )
+            self._worker_job_results = Counter(
+                "control_plane_worker_job_results_total",
+                "Durable worker job results.",
+                ("result",),
+                registry=self._registry,
+            )
+            self._worker_reaper_runs = Counter(
+                "control_plane_worker_reaper_runs_total",
+                "Completed expired-job recovery sweeps.",
+                ("outcome",),
+                registry=self._registry,
+            )
+            self._worker_reaper_recovered_jobs = Counter(
+                "control_plane_worker_reaper_recovered_jobs_total",
+                "Jobs recovered from expired worker leases.",
+                registry=self._registry,
+            )
+            self._worker_ready = Gauge(
+                "control_plane_worker_ready",
+                "Whether the worker is ready to claim durable jobs.",
+                registry=self._registry,
+            )
 
     @property
     def tracer(self) -> Tracer:
@@ -233,6 +316,127 @@ class Observability:
         """Count a fixed authentication outcome without subject identifiers."""
         safe_outcome = outcome if outcome in _AUTH_OUTCOMES else "other"
         self._auth_decisions.labels(outcome=safe_outcome).inc()
+
+    def record_worker_poll(self, outcome: str) -> None:
+        """Count one poll with a fixed outcome and no work identifiers."""
+        if self._worker_polls is None:
+            return
+        safe_outcome = outcome if outcome in _WORKER_POLL_OUTCOMES else "unavailable"
+        try:
+            self._worker_polls.labels(outcome=safe_outcome).inc()
+        except Exception:
+            return
+
+    def record_worker_job_result(self, result: str) -> None:
+        """Count one durable result without retaining the claimed job identity."""
+        if self._worker_job_results is None or result not in _WORKER_JOB_RESULTS:
+            return
+        try:
+            self._worker_job_results.labels(result=result).inc()
+        except Exception:
+            return
+
+    def record_worker_recovery(self, recovered_jobs: int) -> None:
+        """Record one bounded recovery sweep and emit only material recovery."""
+        if self._worker_reaper_runs is None:
+            return
+        safe_count = (
+            min(recovered_jobs, _MAX_RECOVERED_JOBS)
+            if type(recovered_jobs) is int and recovered_jobs >= 0
+            else 0
+        )
+        with suppress(Exception):
+            outcome = "recovered" if safe_count else "none"
+            self._worker_reaper_runs.labels(outcome=outcome).inc()
+            if safe_count and self._worker_reaper_recovered_jobs is not None:
+                self._worker_reaper_recovered_jobs.inc(safe_count)
+        if safe_count:
+            self._emit_worker_event(
+                {
+                    "event": "worker.recovery.completed",
+                    "recovered_jobs": safe_count,
+                    "severity": "WARNING",
+                }
+            )
+
+    def set_worker_ready(self, ready: bool) -> None:
+        """Publish one readiness transition selected by the worker runtime."""
+        if self._worker_ready is None or type(ready) is not bool:
+            return
+        with suppress(Exception):
+            self._worker_ready.set(1 if ready else 0)
+        self.emit_worker_lifecycle("ready" if ready else "not_ready")
+
+    def emit_worker_lifecycle(self, state: str) -> None:
+        """Emit a lifecycle transition from a closed state vocabulary."""
+        if state not in _WORKER_LIFECYCLE_STATES:
+            return
+        severity = (
+            "WARNING" if state in {"not_ready", "persistence_unavailable"} else "INFO"
+        )
+        self._emit_worker_event(
+            {
+                "event": "worker.lifecycle",
+                "severity": severity,
+                "state": state,
+            }
+        )
+
+    @contextmanager
+    def trace_job(self, kind: object, traceparent: str | None) -> Iterator[None]:
+        """Trace claimed work with a content-free span and at most one W3C link."""
+        safe_kind = _safe_worker_job_kind(kind)
+        started_ns = self.now_ns()
+        span: Span = NonRecordingSpan(INVALID_SPAN.get_span_context())
+        span_manager: AbstractContextManager[Span] | None = None
+        link = _worker_link(traceparent)
+        try:
+            span_manager = self._tracer.start_as_current_span(
+                "worker.job",
+                context=Context(),
+                kind=SpanKind.CONSUMER,
+                links=(() if link is None else (link,)),
+                record_exception=False,
+                set_status_on_exception=False,
+            )
+            span = span_manager.__enter__()
+        except Exception:
+            span_manager = None
+
+        outcome = "completed"
+        try:
+            yield
+        except BaseException:
+            outcome = "interrupted"
+            raise
+        finally:
+            try:
+                context = span.get_span_context()
+            except Exception:
+                context = INVALID_SPAN.get_span_context()
+            trace_id = f"{context.trace_id:032x}"
+            span_id = f"{context.span_id:016x}"
+            if span_manager is not None:
+                with suppress(Exception):
+                    span_manager.__exit__(None, None, None)
+            duration_ns = bounded_duration_ns(self.now_ns() - started_ns)
+            if self._worker_job_duration is not None:
+                with suppress(Exception):
+                    self._worker_job_duration.labels(
+                        kind=safe_kind,
+                        outcome=outcome,
+                    ).observe(duration_ns / 1_000_000_000)
+            self._emit_worker_event(
+                {
+                    "duration_ms": duration_ns // 1_000_000,
+                    "event": "worker.job.completed",
+                    "job_kind": safe_kind,
+                    "outcome": outcome,
+                    "severity": "INFO" if outcome == "completed" else "WARNING",
+                    "span_id": safe_span_id(span_id),
+                    "trace_id": safe_trace_id(trace_id),
+                }
+            )
 
     def emit_http_event(
         self,
@@ -301,6 +505,27 @@ class Observability:
         if self._owns_provider and isinstance(self._provider, TracerProvider):
             self._provider.shutdown()
 
+    def _emit_worker_event(self, fields: dict[str, object]) -> None:
+        if self._service != "worker" or self._log_sink is None:
+            return
+        event = {
+            **fields,
+            "schema_version": "control-plane-log/v1",
+            "service": "worker",
+            "timestamp": self._timestamp(),
+        }
+        try:
+            document = json.dumps(
+                event,
+                allow_nan=False,
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            self._log_sink(f"{document}\n")
+        except Exception:
+            return
+
     def _timestamp(self) -> str:
         try:
             value = self._wall_clock()
@@ -360,6 +585,36 @@ def bounded_duration_ns(value: object) -> int:
     if type(value) is not int or value < 0:
         return 0
     return min(value, _MAX_DURATION_NS)
+
+
+def _safe_worker_job_kind(value: object) -> str:
+    try:
+        candidate = str(value)
+    except Exception:
+        return "unknown"
+    return candidate if candidate in _WORKER_JOB_KINDS else "unknown"
+
+
+def _worker_link(value: object) -> Link | None:
+    if not isinstance(value, str):
+        return None
+    match = _WORKER_TRACEPARENT.fullmatch(value)
+    if match is None:
+        return None
+    trace_id_text, span_id_text, flags_text = match.groups()
+    if trace_id_text == "0" * 32 or span_id_text == "0" * 16:
+        return None
+    try:
+        context = SpanContext(
+            trace_id=int(trace_id_text, 16),
+            span_id=int(span_id_text, 16),
+            is_remote=True,
+            trace_flags=TraceFlags(int(flags_text, 16)),
+            trace_state=TraceState(),
+        )
+        return Link(context)
+    except Exception:
+        return None
 
 
 __all__ = [
