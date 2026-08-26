@@ -118,14 +118,25 @@ def test_runtime_image_ends_as_a_fixed_non_root_user() -> None:
 
 
 def test_dependabot_covers_every_pinned_dependency_source() -> None:
+    config = _read(DEPENDABOT_CONFIG)
     ecosystems = set(
         re.findall(
             r"(?m)^\s+- package-ecosystem:\s+([^\s]+)\s*$",
-            _read(DEPENDABOT_CONFIG),
+            config,
         )
     )
 
-    assert ecosystems == {"docker", "docker-compose", "github-actions", "uv"}
+    assert ecosystems == {
+        "docker",
+        "docker-compose",
+        "github-actions",
+        "npm",
+        "uv",
+    }
+    assert re.search(
+        r"(?m)^\s+- package-ecosystem:\s+npm\s*$\n\s+directory:\s+/dashboard\s*$",
+        config,
+    )
 
 
 def test_build_context_excludes_secrets_evidence_and_vcs_metadata() -> None:

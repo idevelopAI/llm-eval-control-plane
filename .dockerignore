@@ -18,6 +18,11 @@ build
 dist
 coverage.xml
 htmlcov
+dashboard/node_modules
+dashboard/.vinext
+dashboard/.wrangler
+dashboard/coverage
+.pnpm-store
 docs
 examples
 tests
