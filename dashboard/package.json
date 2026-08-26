@@ -7,6 +7,8 @@
   },
   "packageManager": "pnpm@11.19.0",
   "scripts": {
+    "api:generate": "openapi-typescript ../docs/openapi-v1.json --output src/api/generated/schema.ts --alphabetize",
+    "api:check": "openapi-typescript ../docs/openapi-v1.json --output src/api/generated/schema.ts --alphabetize --check",
     "dev": "vinext dev",
     "build": "vinext build",
     "start": "vinext start",
@@ -16,6 +18,7 @@
   },
   "dependencies": {
     "next": "16.2.6",
+    "openapi-fetch": "0.17.0",
     "react": "19.2.6",
     "react-dom": "19.2.6"
   },
@@ -31,6 +34,7 @@
     "@vitejs/plugin-rsc": "0.5.26",
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.6",
+    "openapi-typescript": "7.13.0",
     "react-server-dom-webpack": "19.2.6",
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3",
