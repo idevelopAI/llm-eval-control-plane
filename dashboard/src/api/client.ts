@@ -116,7 +116,12 @@ function unwrap<T>({ data, error, response }: OpenApiResponse<T>): ApiResult<T> 
  * this module never persists, logs, caches, or includes them in a URL.
  */
 export function createControlPlaneClient(getCredential: CredentialSource) {
+  const sameOriginBaseUrl =
+    typeof globalThis.location === 'undefined'
+      ? ''
+      : globalThis.location.origin;
   const client = createClient<paths>({
+    baseUrl: sameOriginBaseUrl,
     cache: 'no-store',
     credentials: 'same-origin',
   });
