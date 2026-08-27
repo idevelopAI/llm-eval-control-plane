@@ -5,6 +5,7 @@ import {
   createControlPlaneClient,
 } from './client';
 
+const TEST_TOKEN = `cpk_${'A'.repeat(43)}`;
 const observedStatistics = {
   maximum: 1,
   mean: 1,
@@ -97,7 +98,7 @@ describe('createControlPlaneClient', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const client = createControlPlaneClient(() => ({
-      accessToken: 'memory-only-test-value',
+      accessToken: TEST_TOKEN,
       projectId: 'project-test',
     }));
     const result = await client.listReleaseDecisions({
@@ -107,7 +108,7 @@ describe('createControlPlaneClient', () => {
 
     const request = fetchMock.mock.calls[0]?.[0] as unknown as Request;
     expect(request.headers.get('authorization')).toBe(
-      'Bearer memory-only-test-value',
+      `Bearer ${TEST_TOKEN}`,
     );
     expect(request.headers.get('x-project-id')).toBe('project-test');
     expect(request.cache).toBe('no-store');
@@ -118,7 +119,7 @@ describe('createControlPlaneClient', () => {
     expect(request.url).toContain('/v1/release-decisions');
     expect(request.url).toContain('status=failed');
     expect(result.requestId).toBe('request_test_001');
-    expect(JSON.stringify(result)).not.toContain('memory-only-test-value');
+    expect(JSON.stringify(result)).not.toContain(TEST_TOKEN);
   });
 
   it('fails safely before a request when the runtime credential is absent', async () => {
@@ -141,7 +142,7 @@ describe('createControlPlaneClient', () => {
       }),
     );
     const client = createControlPlaneClient(() => ({
-      accessToken: 'memory-only-test-value',
+      accessToken: TEST_TOKEN,
       projectId: 'project-test',
     }));
 
@@ -177,7 +178,7 @@ describe('createControlPlaneClient', () => {
       );
     vi.stubGlobal('fetch', fetchMock);
     const client = createControlPlaneClient(() => ({
-      accessToken: 'memory-only-test-value',
+      accessToken: TEST_TOKEN,
       projectId: 'project-test',
     }));
 
@@ -201,7 +202,7 @@ describe('createControlPlaneClient', () => {
     expect(distributionRequest.url).toContain('/decision-001/distributions?');
     expect(distributionRequest.url).toContain('metric=quality.exact_match');
     expect(distributionRequest.headers.get('authorization')).toBe(
-      'Bearer memory-only-test-value',
+      `Bearer ${TEST_TOKEN}`,
     );
   });
 
@@ -240,7 +241,7 @@ describe('createControlPlaneClient', () => {
       );
     vi.stubGlobal('fetch', fetchMock);
     const client = createControlPlaneClient(() => ({
-      accessToken: 'memory-only-test-value',
+      accessToken: TEST_TOKEN,
       projectId: 'project-test',
     }));
 
@@ -262,7 +263,7 @@ describe('createControlPlaneClient', () => {
       }),
     );
     const client = createControlPlaneClient(() => ({
-      accessToken: 'memory-only-test-value',
+      accessToken: TEST_TOKEN,
       projectId: 'project-test',
     }));
 
@@ -288,7 +289,7 @@ describe('createControlPlaneClient', () => {
       ),
     );
     const client = createControlPlaneClient(() => ({
-      accessToken: 'memory-only-test-value',
+      accessToken: TEST_TOKEN,
       projectId: 'project-test',
     }));
 
@@ -319,7 +320,7 @@ describe('createControlPlaneClient', () => {
       ),
     );
     const client = createControlPlaneClient(() => ({
-      accessToken: 'memory-only-test-value',
+      accessToken: TEST_TOKEN,
       projectId: 'project-test',
     }));
 
@@ -360,7 +361,7 @@ describe('createControlPlaneClient', () => {
       }),
     );
     const client = createControlPlaneClient(() => ({
-      accessToken: 'memory-only-test-value',
+      accessToken: TEST_TOKEN,
       projectId: 'project-test',
     }));
 
