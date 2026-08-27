@@ -221,6 +221,19 @@ h1 {
   color: var(--muted);
 }
 
+.decision-hero.is-passed h1 {
+  color: var(--pass);
+}
+
+.decision-hero.is-passed .verdict-icon {
+  background: var(--pass);
+}
+
+.decision-hero.is-passed .decision-summary {
+  border-left-color: #173f37;
+  background: #162923;
+}
+
 .comparison-identity {
   display: flex;
   align-items: center;
@@ -787,6 +800,73 @@ h1 {
   font-size: 11px;
 }
 
+.distribution-panel {
+  margin-top: 18px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: rgba(255, 253, 247, 0.94);
+}
+
+.distribution-tables {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: 16px;
+  padding: 16px;
+}
+
+.distribution-tables table {
+  width: 100%;
+  border-collapse: collapse;
+  background: white;
+  font-variant-numeric: tabular-nums;
+}
+
+.distribution-tables caption {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  text-align: left;
+}
+
+.distribution-tables th,
+.distribution-tables td {
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.distribution-tables thead th {
+  background: #f0ece1;
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.distribution-tables tbody th {
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.distribution-tables td {
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.distribution-note {
+  margin: 0;
+  padding: 11px 16px;
+  border-top: 1px solid var(--line);
+  background: #edf2ef;
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .provenance-strip {
   display: flex;
   flex-wrap: wrap;
@@ -825,6 +905,10 @@ h1 {
 
   .case-card + .case-card {
     margin-top: 0;
+  }
+
+  .distribution-tables {
+    grid-template-columns: 1fr;
   }
 }
 
