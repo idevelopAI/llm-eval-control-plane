@@ -6,11 +6,14 @@ from typing import Never, cast
 from pytest import MonkeyPatch
 
 from llm_eval_control_plane.api.execution import DeterministicEvaluationExecutor
+from llm_eval_control_plane.application.comparison import compare_runs
 from llm_eval_control_plane.application.control_plane import ControlPlaneStoreError
+from llm_eval_control_plane.domain import EvaluationSpec, MetricDirection, MetricGate
 from llm_eval_control_plane.domain.control_plane import (
     JobAttemptRecord,
     JobAttemptStatus,
     JobStatus,
+    ReleaseDecisionRecord,
 )
 
 from .conftest import NOW, ApiHarness
@@ -100,6 +103,56 @@ def _submit_and_finish_run(
     document = replay.json()
     assert isinstance(document, dict)
     return document
+
+
+def _seed_release_decision(
+    harness: ApiHarness,
+    dataset_body: dict[str, object],
+    run_body: dict[str, object],
+) -> str:
+    _create_dataset(harness, dataset_body)
+    baseline_document = _submit_and_finish_run(
+        harness,
+        {**run_body, "target_name": "fake/baseline", "target_revision": 1},
+        key="dashboard-baseline",
+    )
+    candidate_document = _submit_and_finish_run(
+        harness,
+        {**run_body, "target_name": "fake/candidate", "target_revision": 2},
+        key="dashboard-candidate",
+    )
+    baseline_id = _object_part(baseline_document, "run")["run_id"]
+    candidate_id = _object_part(candidate_document, "run")["run_id"]
+    assert isinstance(baseline_id, str)
+    assert isinstance(candidate_id, str)
+    baseline = harness.repository.get_run(baseline_id).result
+    candidate = harness.repository.get_run(candidate_id).result
+    data = harness.repository.get_dataset("release-gate/offline", 1).dataset
+    decision = compare_runs(
+        spec=EvaluationSpec(
+            name="dashboard-policy",
+            dataset=data.artifact_ref,
+            baseline=baseline.target,
+            candidate=candidate.target,
+            gates=(
+                MetricGate(
+                    metric="quality.exact_match",
+                    direction=MetricDirection.HIGHER_IS_BETTER,
+                    threshold=1.0,
+                ),
+            ),
+        ),
+        dataset=data,
+        baseline=baseline,
+        candidate=candidate,
+    )
+    decision_id = "decision-dashboard"
+    harness.repository.decisions[decision_id] = ReleaseDecisionRecord(
+        decision_id=decision_id,
+        decision=decision,
+        created_at=NOW,
+    )
+    return decision_id
 
 
 def test_dataset_registration_and_slash_safe_retrieval_are_redacted(
@@ -442,6 +495,69 @@ def test_comparison_submission_enqueues_pinned_runs_and_replays(
         "lease_token",
     ):
         assert private_value not in serialized
+
+
+def test_release_decision_dashboard_reads_are_bounded_and_redacted(
+    api_harness: ApiHarness,
+    dataset_body: dict[str, object],
+    run_body: dict[str, object],
+) -> None:
+    decision_id = _seed_release_decision(api_harness, dataset_body, run_body)
+
+    listed = api_harness.client.get("/v1/release-decisions?limit=1&order=desc")
+    cases = api_harness.client.get(
+        f"/v1/release-decisions/{decision_id}/cases",
+        params={
+            "metric": "quality.exact_match",
+            "case_slice": "core",
+            "change": "unchanged_passing",
+            "limit": 1,
+        },
+    )
+
+    assert listed.status_code == 200
+    assert listed.json()["items"][0]["decision_id"] == decision_id
+    assert cases.status_code == 200
+    assert cases.json() == {
+        "schema_version": "release-decision-case-page/v1",
+        "decision_id": decision_id,
+        "items": [
+            {
+                "schema_version": "release-decision-case/v1",
+                "case_id": "echo-001",
+                "metric": "quality.exact_match",
+                "gate_slice": None,
+                "slices": ["core"],
+                "baseline": {"status": "scored", "value": 1.0},
+                "candidate": {"status": "scored", "value": 1.0},
+                "delta": 0.0,
+                "baseline_passed": True,
+                "candidate_passed": True,
+                "change": "unchanged_passing",
+            }
+        ],
+        "next_cursor": None,
+    }
+    serialized = cases.text
+    for forbidden in (
+        "private-sentinel",
+        "dashboard-baseline",
+        "dashboard-candidate",
+        "idempotency_key",
+        "output",
+        "expected",
+        "reason_code",
+        "target",
+        "usage",
+    ):
+        assert forbidden not in serialized
+
+    wrong_metric = api_harness.client.get(
+        f"/v1/release-decisions/{decision_id}/cases",
+        params={"metric": "private sentinel"},
+    )
+    assert wrong_metric.status_code == 422
+    assert "private sentinel" not in wrong_metric.text
 
 
 def test_idempotency_mismatch_and_missing_dataset_are_stable(

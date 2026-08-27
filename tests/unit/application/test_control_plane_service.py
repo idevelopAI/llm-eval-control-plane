@@ -38,7 +38,11 @@ from llm_eval_control_plane.domain import (
     MetricGate,
     sha256_digest,
 )
-from llm_eval_control_plane.domain.comparison import ReleaseStatus
+from llm_eval_control_plane.domain.comparison import (
+    CaseChange,
+    GateCaseComparison,
+    ReleaseStatus,
+)
 from llm_eval_control_plane.domain.control_plane import (
     ComparisonJobPayload,
     CursorPage,
@@ -49,6 +53,7 @@ from llm_eval_control_plane.domain.control_plane import (
     JobPayload,
     JobRecord,
     JobStatus,
+    ListOrder,
     ReleaseDecisionListRecord,
     ReleaseDecisionRecord,
     RunJobPayload,
@@ -306,8 +311,25 @@ class MemoryRepository:
         limit: int,
         cursor: str | None = None,
         status: ReleaseStatus | None = None,
+        order: ListOrder = ListOrder.ASCENDING,
     ) -> CursorPage[ReleaseDecisionListRecord]:
-        del limit, status
+        del limit, status, order
+        if cursor is not None:
+            raise StoreInvalidCursorError("private cursor details")
+        return CursorPage(items=())
+
+    def list_release_decision_cases(
+        self,
+        decision_id: str,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        metric: str | None = None,
+        gate_slice: str | None = None,
+        case_slice: str | None = None,
+        change: CaseChange | None = None,
+    ) -> CursorPage[GateCaseComparison]:
+        del decision_id, limit, metric, gate_slice, case_slice, change
         if cursor is not None:
             raise StoreInvalidCursorError("private cursor details")
         return CursorPage(items=())

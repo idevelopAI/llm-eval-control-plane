@@ -27,6 +27,8 @@ from llm_eval_control_plane.api.contracts import (
     JobCancellationRequest,
     JobPage,
     JobResponse,
+    ReleaseDecisionCasePage,
+    ReleaseDecisionCaseResponse,
     ReleaseDecisionListItemResponse,
     ReleaseDecisionPage,
     ReleaseDecisionResponse,
@@ -60,13 +62,15 @@ from llm_eval_control_plane.application.control_plane import (
     RunSubmission,
     SubmissionResult,
 )
-from llm_eval_control_plane.domain.comparison import ReleaseStatus
-from llm_eval_control_plane.domain.control_plane import JobKind, JobStatus
+from llm_eval_control_plane.domain.comparison import CaseChange, ReleaseStatus
+from llm_eval_control_plane.domain.control_plane import JobKind, JobStatus, ListOrder
 from llm_eval_control_plane.observability import Observability
 
 _DEFAULT_MAX_BODY_BYTES = 4 * 1024 * 1024
 _IDEMPOTENCY_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]*$"
 _NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+_METRIC_PATTERN = r"^[A-Za-z][A-Za-z0-9._:/-]*$"
+_SLICE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/=-]*$"
 _STABLE_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]*$"
 _RUN_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
 _SAFE_ERROR_TYPE = re.compile(r"^[A-Za-z0-9_.-]{1,96}$")
@@ -77,15 +81,21 @@ _SAFE_LOCATIONS = frozenset(
         "body",
         "candidate_run_id",
         "cases",
+        "case_slice",
+        "change",
+        "cursor",
         "dataset_name",
         "dataset_revision",
         "evaluators",
         "expected",
         "expected_refusal",
         "expected_schema",
+        "gate_slice",
         "header",
         "idempotency-key",
         "input",
+        "limit",
+        "metric",
         "name",
         "numeric_tolerance",
         "path",
@@ -94,6 +104,7 @@ _SAFE_LOCATIONS = frozenset(
         "scenario_overrides",
         "schema_version",
         "slices",
+        "status",
         "spec",
         "target_name",
         "target_revision",
@@ -118,6 +129,16 @@ NameQuery = Annotated[
 JobKindQuery = Annotated[JobKind | None, Query()]
 JobStatusQuery = Annotated[JobStatus | None, Query()]
 ReleaseStatusQuery = Annotated[ReleaseStatus | None, Query()]
+ListOrderQuery = Annotated[ListOrder, Query()]
+MetricQuery = Annotated[
+    str,
+    Query(min_length=1, max_length=128, pattern=_METRIC_PATTERN),
+]
+SliceQuery = Annotated[
+    str | None,
+    Query(min_length=1, max_length=128, pattern=_SLICE_PATTERN),
+]
+CaseChangeQuery = Annotated[CaseChange | None, Query()]
 
 _ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     401: {"model": ApiErrorDocument, "description": "Authentication required"},
@@ -153,7 +174,7 @@ def create_app(
     app = FastAPI(
         title="LLM Evaluation Control Plane",
         summary="Durable, content-addressed evaluation and release decisions",
-        version="1.2.0",
+        version="1.3.0",
         openapi_url="/openapi.json",
         docs_url=None,
         redoc_url=None,
@@ -565,15 +586,58 @@ def create_app(
         limit: LimitQuery = 50,
         cursor: CursorQuery = None,
         status: ReleaseStatusQuery = None,
+        order: ListOrderQuery = ListOrder.ASCENDING,
     ) -> ReleaseDecisionPage:
         page = service.list_release_decisions(
             limit=limit,
             cursor=cursor,
             status=status,
+            order=order,
         )
         return ReleaseDecisionPage(
             items=tuple(
                 ReleaseDecisionListItemResponse.from_record(item) for item in page.items
+            ),
+            next_cursor=page.next_cursor,
+        )
+
+    @app.get(
+        "/v1/release-decisions/{decision_id}/cases",
+        response_model=ReleaseDecisionCasePage,
+        operation_id="list_release_decision_cases",
+        responses=_ERROR_RESPONSES,
+        tags=["release decisions"],
+        description=(
+            "Returns only bounded score transitions and canonical slice labels. "
+            "Raw prompts, expectations, outputs, evaluator messages, SQL, and rows "
+            "are excluded by contract."
+        ),
+    )
+    async def list_release_decision_cases(
+        decision_id: Annotated[
+            str,
+            Path(min_length=1, max_length=128, pattern=_STABLE_ID_PATTERN),
+        ],
+        metric: MetricQuery,
+        limit: LimitQuery = 50,
+        cursor: CursorQuery = None,
+        gate_slice: SliceQuery = None,
+        case_slice: SliceQuery = None,
+        change: CaseChangeQuery = None,
+    ) -> ReleaseDecisionCasePage:
+        page = service.list_release_decision_cases(
+            decision_id,
+            limit=limit,
+            cursor=cursor,
+            metric=metric,
+            gate_slice=gate_slice,
+            case_slice=case_slice,
+            change=change,
+        )
+        return ReleaseDecisionCasePage(
+            decision_id=decision_id,
+            items=tuple(
+                ReleaseDecisionCaseResponse.from_comparison(item) for item in page.items
             ),
             next_cursor=page.next_cursor,
         )

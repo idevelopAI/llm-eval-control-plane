@@ -51,7 +51,12 @@ from llm_eval_control_plane.domain.canonical import (
     canonical_json_bytes,
     parse_json,
 )
-from llm_eval_control_plane.domain.comparison import ReleaseDecision, ReleaseStatus
+from llm_eval_control_plane.domain.comparison import (
+    CaseChange,
+    GateCaseComparison,
+    ReleaseDecision,
+    ReleaseStatus,
+)
 from llm_eval_control_plane.domain.control_plane import (
     CursorPage,
     DatasetListRecord,
@@ -63,6 +68,7 @@ from llm_eval_control_plane.domain.control_plane import (
     JobRecord,
     JobStatus,
     LeaseToken,
+    ListOrder,
     ReleaseDecisionListRecord,
     ReleaseDecisionRecord,
     RunListRecord,
@@ -2345,11 +2351,14 @@ class SqlAlchemyControlPlaneRepository:
         limit: int,
         cursor: str | None = None,
         status: ReleaseStatus | None = None,
+        order: ListOrder = ListOrder.ASCENDING,
     ) -> CursorPage[ReleaseDecisionListRecord]:
         page_limit = _limit(limit)
         filters: dict[str, JsonValue] = {
-            "status": None if status is None else status.value
+            "status": None if status is None else status.value,
         }
+        if order is ListOrder.DESCENDING:
+            filters["order"] = order.value
         statement = select(
             release_decisions_table.c.decision_id,
             release_decisions_table.c.status,
@@ -2367,17 +2376,33 @@ class SqlAlchemyControlPlaneRepository:
             if len(key) != 2 or not isinstance(key[1], str):
                 raise InvalidCursorError("Pagination cursor is invalid")
             created_at = _decoded_cursor_time(key[0])
-            statement = statement.where(
-                (release_decisions_table.c.created_at > created_at)
-                | and_(
-                    release_decisions_table.c.created_at == created_at,
-                    release_decisions_table.c.decision_id > key[1],
+            if order is ListOrder.DESCENDING:
+                statement = statement.where(
+                    (release_decisions_table.c.created_at < created_at)
+                    | and_(
+                        release_decisions_table.c.created_at == created_at,
+                        release_decisions_table.c.decision_id < key[1],
+                    )
                 )
+            else:
+                statement = statement.where(
+                    (release_decisions_table.c.created_at > created_at)
+                    | and_(
+                        release_decisions_table.c.created_at == created_at,
+                        release_decisions_table.c.decision_id > key[1],
+                    )
+                )
+        if order is ListOrder.DESCENDING:
+            statement = statement.order_by(
+                release_decisions_table.c.created_at.desc(),
+                release_decisions_table.c.decision_id.desc(),
             )
-        statement = statement.order_by(
-            release_decisions_table.c.created_at,
-            release_decisions_table.c.decision_id,
-        ).limit(page_limit + 1)
+        else:
+            statement = statement.order_by(
+                release_decisions_table.c.created_at,
+                release_decisions_table.c.decision_id,
+            )
+        statement = statement.limit(page_limit + 1)
         try:
             with self._engine.connect() as connection:
                 rows = connection.execute(statement).mappings().all()
@@ -2397,6 +2422,68 @@ class SqlAlchemyControlPlaneRepository:
                     _cursor_time(records[-1].created_at),
                     records[-1].decision_id,
                 ],
+            )
+        return CursorPage(items=records, next_cursor=next_cursor)
+
+    def list_release_decision_cases(
+        self,
+        decision_id: str,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        metric: str | None = None,
+        gate_slice: str | None = None,
+        case_slice: str | None = None,
+        change: CaseChange | None = None,
+    ) -> CursorPage[GateCaseComparison]:
+        """Project one immutable decision into a bounded score-only page."""
+        page_limit = _limit(limit)
+        filters: dict[str, JsonValue] = {
+            "case_slice": case_slice,
+            "change": None if change is None else change.value,
+            "decision_id": decision_id,
+            "gate_slice": gate_slice,
+            "metric": metric,
+        }
+        after: tuple[str, str, str] | None = None
+        if cursor is not None:
+            key = _decode_cursor(
+                cursor,
+                stream="release-decision-cases",
+                filters=filters,
+            )
+            if len(key) != 3:
+                raise InvalidCursorError("Pagination cursor is invalid")
+            metric_key, slice_key, case_key = key
+            if not (
+                isinstance(metric_key, str)
+                and isinstance(slice_key, str)
+                and isinstance(case_key, str)
+            ):
+                raise InvalidCursorError("Pagination cursor is invalid")
+            after = (metric_key, slice_key, case_key)
+
+        decision = self.get_release_decision(decision_id).decision
+
+        def item_key(item: GateCaseComparison) -> tuple[str, str, str]:
+            return item.metric, item.slice or "", item.case_id
+
+        matching = tuple(
+            item
+            for item in decision.cases
+            if (metric is None or item.metric == metric)
+            and (gate_slice is None or item.slice == gate_slice)
+            and (case_slice is None or case_slice in item.slices)
+            and (change is None or item.change is change)
+            and (after is None or item_key(item) > after)
+        )
+        records = matching[:page_limit]
+        next_cursor = None
+        if len(matching) > page_limit:
+            next_cursor = _encode_cursor(
+                stream="release-decision-cases",
+                filters=filters,
+                key=list(item_key(records[-1])),
             )
         return CursorPage(items=records, next_cursor=next_cursor)
 

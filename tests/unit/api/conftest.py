@@ -27,7 +27,11 @@ from llm_eval_control_plane.application.control_plane import (
     StoreNotFoundError,
     StoreTransitionError,
 )
-from llm_eval_control_plane.domain.comparison import ReleaseStatus
+from llm_eval_control_plane.domain.comparison import (
+    CaseChange,
+    GateCaseComparison,
+    ReleaseStatus,
+)
 from llm_eval_control_plane.domain.control_plane import (
     CursorPage,
     DatasetListRecord,
@@ -37,6 +41,7 @@ from llm_eval_control_plane.domain.control_plane import (
     JobPayload,
     JobRecord,
     JobStatus,
+    ListOrder,
     ReleaseDecisionListRecord,
     ReleaseDecisionRecord,
     RunListRecord,
@@ -254,19 +259,47 @@ class ReadyRepository:
         limit: int,
         cursor: str | None = None,
         status: ReleaseStatus | None = None,
+        order: ListOrder = ListOrder.ASCENDING,
     ) -> CursorPage[ReleaseDecisionListRecord]:
         self._validate_cursor(cursor)
+        items = sorted(
+            (
+                ReleaseDecisionListRecord(
+                    decision_id=record.decision_id,
+                    status=record.decision.status,
+                    baseline_run_id=record.decision.baseline_run_id,
+                    candidate_run_id=record.decision.candidate_run_id,
+                    decision_digest=record.decision.decision_digest,
+                    created_at=record.created_at,
+                )
+                for record in self.decisions.values()
+                if status is None or record.decision.status is status
+            ),
+            key=lambda item: (item.created_at, item.decision_id),
+            reverse=order is ListOrder.DESCENDING,
+        )
+        return CursorPage(items=tuple(items[:limit]))
+
+    def list_release_decision_cases(
+        self,
+        decision_id: str,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        metric: str | None = None,
+        gate_slice: str | None = None,
+        case_slice: str | None = None,
+        change: CaseChange | None = None,
+    ) -> CursorPage[GateCaseComparison]:
+        self._validate_cursor(cursor)
+        decision = self.get_release_decision(decision_id).decision
         items = tuple(
-            ReleaseDecisionListRecord(
-                decision_id=record.decision_id,
-                status=record.decision.status,
-                baseline_run_id=record.decision.baseline_run_id,
-                candidate_run_id=record.decision.candidate_run_id,
-                decision_digest=record.decision.decision_digest,
-                created_at=record.created_at,
-            )
-            for record in self.decisions.values()
-            if status is None or record.decision.status is status
+            item
+            for item in decision.cases
+            if (metric is None or item.metric == metric)
+            and (gate_slice is None or item.slice == gate_slice)
+            and (case_slice is None or case_slice in item.slices)
+            and (change is None or item.change is change)
         )
         return CursorPage(items=items[:limit])
 

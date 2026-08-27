@@ -61,6 +61,7 @@ _HTTP_ROUTES = frozenset(
         "/v1/jobs/{job_id}/cancellation",
         "/v1/release-decisions",
         "/v1/release-decisions/{decision_id}",
+        "/v1/release-decisions/{decision_id}/cases",
         "/v1/runs",
         "/v1/runs/{run_id}",
     }
