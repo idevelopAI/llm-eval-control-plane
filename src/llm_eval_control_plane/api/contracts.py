@@ -17,6 +17,15 @@ from pydantic import (
 )
 
 from llm_eval_control_plane.adapters.scorers import BuiltInEvaluatorKind
+from llm_eval_control_plane.domain.analytics import (
+    DeltaDistribution,
+    MeasurementDistribution,
+    QuantileSummary,
+    ReleaseDecisionDistributions,
+    RunOperationalDistribution,
+    ScoreDistribution,
+    ScoreValueDistribution,
+)
 from llm_eval_control_plane.domain.artifacts import (
     ArtifactKind,
     ArtifactRef,
@@ -549,6 +558,159 @@ class ReleaseDecisionCasePage(ApiModel):
     next_cursor: str | None = None
 
 
+class QuantileSummaryResponse(ApiModel):
+    sample_count: int
+    small_sample: bool
+    suppressed: bool
+    minimum: float | None = None
+    p50: float | None = None
+    p95: float | None = None
+    maximum: float | None = None
+    mean: float | None = None
+
+    @classmethod
+    def from_summary(cls, summary: QuantileSummary) -> Self:
+        return cls(
+            sample_count=summary.sample_count,
+            small_sample=summary.small_sample,
+            suppressed=summary.suppressed,
+            minimum=summary.minimum,
+            p50=summary.p50,
+            p95=summary.p95,
+            maximum=summary.maximum,
+            mean=summary.mean,
+        )
+
+
+class ScoreValueDistributionResponse(ApiModel):
+    attempted: int
+    scored: int
+    skipped: int
+    errors: int
+    statistics: QuantileSummaryResponse
+
+    @classmethod
+    def from_distribution(cls, distribution: ScoreValueDistribution) -> Self:
+        return cls(
+            attempted=distribution.attempted,
+            scored=distribution.scored,
+            skipped=distribution.skipped,
+            errors=distribution.errors,
+            statistics=QuantileSummaryResponse.from_summary(distribution.statistics),
+        )
+
+
+class DeltaDistributionResponse(ApiModel):
+    attempted: int
+    compared: int
+    incomparable: int
+    statistics: QuantileSummaryResponse
+
+    @classmethod
+    def from_distribution(cls, distribution: DeltaDistribution) -> Self:
+        return cls(
+            attempted=distribution.attempted,
+            compared=distribution.compared,
+            incomparable=distribution.incomparable,
+            statistics=QuantileSummaryResponse.from_summary(distribution.statistics),
+        )
+
+
+class ScoreDistributionResponse(ApiModel):
+    metric: MetricName
+    gate_slice: str | None = None
+    baseline: ScoreValueDistributionResponse
+    candidate: ScoreValueDistributionResponse
+    delta: DeltaDistributionResponse
+
+    @classmethod
+    def from_distribution(cls, distribution: ScoreDistribution) -> Self:
+        return cls(
+            metric=distribution.metric,
+            gate_slice=distribution.gate_slice,
+            baseline=ScoreValueDistributionResponse.from_distribution(
+                distribution.baseline
+            ),
+            candidate=ScoreValueDistributionResponse.from_distribution(
+                distribution.candidate
+            ),
+            delta=DeltaDistributionResponse.from_distribution(distribution.delta),
+        )
+
+
+class MeasurementDistributionResponse(ApiModel):
+    attempted: int
+    measured: int
+    unavailable: int
+    target_failures: int
+    statistics: QuantileSummaryResponse
+
+    @classmethod
+    def from_distribution(cls, distribution: MeasurementDistribution) -> Self:
+        return cls(
+            attempted=distribution.attempted,
+            measured=distribution.measured,
+            unavailable=distribution.unavailable,
+            target_failures=distribution.target_failures,
+            statistics=QuantileSummaryResponse.from_summary(distribution.statistics),
+        )
+
+
+class RunOperationalDistributionResponse(ApiModel):
+    role: Literal["baseline", "candidate"]
+    run_id: str
+    execution_mode: ExecutionMode
+    simulated: bool
+    latency_ms: MeasurementDistributionResponse
+    input_units: MeasurementDistributionResponse
+    output_units: MeasurementDistributionResponse
+    total_units: MeasurementDistributionResponse
+
+    @classmethod
+    def from_distribution(cls, distribution: RunOperationalDistribution) -> Self:
+        return cls(
+            role=distribution.role,
+            run_id=distribution.run_id,
+            execution_mode=distribution.execution_mode,
+            simulated=distribution.execution_mode is not ExecutionMode.LIVE,
+            latency_ms=MeasurementDistributionResponse.from_distribution(
+                distribution.latency_ms
+            ),
+            input_units=MeasurementDistributionResponse.from_distribution(
+                distribution.input_units
+            ),
+            output_units=MeasurementDistributionResponse.from_distribution(
+                distribution.output_units
+            ),
+            total_units=MeasurementDistributionResponse.from_distribution(
+                distribution.total_units
+            ),
+        )
+
+
+class ReleaseDecisionDistributionsResponse(ApiModel):
+    schema_version: Literal["release-decision-distributions/v1"] = (
+        "release-decision-distributions/v1"
+    )
+    decision_id: str
+    score: ScoreDistributionResponse
+    baseline: RunOperationalDistributionResponse
+    candidate: RunOperationalDistributionResponse
+
+    @classmethod
+    def from_distributions(cls, distributions: ReleaseDecisionDistributions) -> Self:
+        return cls(
+            decision_id=distributions.decision_id,
+            score=ScoreDistributionResponse.from_distribution(distributions.score),
+            baseline=RunOperationalDistributionResponse.from_distribution(
+                distributions.baseline
+            ),
+            candidate=RunOperationalDistributionResponse.from_distribution(
+                distributions.candidate
+            ),
+        )
+
+
 class ReleaseDecisionPage(ApiModel):
     schema_version: Literal["release-decision-page/v1"] = "release-decision-page/v1"
     items: tuple[ReleaseDecisionListItemResponse, ...]
@@ -601,6 +763,7 @@ __all__ = [
     "JobResponse",
     "ReleaseDecisionCasePage",
     "ReleaseDecisionCaseResponse",
+    "ReleaseDecisionDistributionsResponse",
     "ReleaseDecisionListItemResponse",
     "ReleaseDecisionPage",
     "ReleaseDecisionResponse",

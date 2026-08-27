@@ -215,6 +215,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/release-decisions/{decision_id}/distributions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Release Decision Distributions
+         * @description Returns fixed nearest-rank score, latency, and usage quantiles for one configured gate. Operational statistics for fewer than 20 measurements are suppressed. Raw samples and case-level operational values are never returned.
+         */
+        get: operations["get_release_decision_distributions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/runs": {
         parameters: {
             query?: never;
@@ -438,6 +458,16 @@ export interface components {
              * @constant
              */
             schema_version: "dataset-summary/v1";
+        };
+        /** DeltaDistributionResponse */
+        DeltaDistributionResponse: {
+            /** Attempted */
+            attempted: number;
+            /** Compared */
+            compared: number;
+            /** Incomparable */
+            incomparable: number;
+            statistics: components["schemas"]["QuantileSummaryResponse"];
         };
         /** ErrorDetail */
         ErrorDetail: {
@@ -678,6 +708,18 @@ export interface components {
          * @enum {string}
          */
         ListOrder: "asc" | "desc";
+        /** MeasurementDistributionResponse */
+        MeasurementDistributionResponse: {
+            /** Attempted */
+            attempted: number;
+            /** Measured */
+            measured: number;
+            statistics: components["schemas"]["QuantileSummaryResponse"];
+            /** Target Failures */
+            target_failures: number;
+            /** Unavailable */
+            unavailable: number;
+        };
         /**
          * MetricAggregate
          * @description Coverage-aware metric aggregate for one run and slice.
@@ -734,6 +776,25 @@ export interface components {
             /** Skipped */
             skipped: number;
         };
+        /** QuantileSummaryResponse */
+        QuantileSummaryResponse: {
+            /** Maximum */
+            maximum?: number | null;
+            /** Mean */
+            mean?: number | null;
+            /** Minimum */
+            minimum?: number | null;
+            /** P50 */
+            p50?: number | null;
+            /** P95 */
+            p95?: number | null;
+            /** Sample Count */
+            sample_count: number;
+            /** Small Sample */
+            small_sample: boolean;
+            /** Suppressed */
+            suppressed: boolean;
+        };
         /** ReleaseDecisionCasePage */
         ReleaseDecisionCasePage: {
             /** Decision Id */
@@ -777,6 +838,20 @@ export interface components {
             schema_version: "release-decision-case/v1";
             /** Slices */
             slices: string[];
+        };
+        /** ReleaseDecisionDistributionsResponse */
+        ReleaseDecisionDistributionsResponse: {
+            baseline: components["schemas"]["RunOperationalDistributionResponse"];
+            candidate: components["schemas"]["RunOperationalDistributionResponse"];
+            /** Decision Id */
+            decision_id: string;
+            /**
+             * Schema Version
+             * @default release-decision-distributions/v1
+             * @constant
+             */
+            schema_version: "release-decision-distributions/v1";
+            score: components["schemas"]["ScoreDistributionResponse"];
         };
         /** ReleaseDecisionListItemResponse */
         ReleaseDecisionListItemResponse: {
@@ -922,6 +997,23 @@ export interface components {
             schema_version: "run-list-item/v1";
             status: components["schemas"]["RunStatus"];
         };
+        /** RunOperationalDistributionResponse */
+        RunOperationalDistributionResponse: {
+            execution_mode: components["schemas"]["ExecutionMode"];
+            input_units: components["schemas"]["MeasurementDistributionResponse"];
+            latency_ms: components["schemas"]["MeasurementDistributionResponse"];
+            output_units: components["schemas"]["MeasurementDistributionResponse"];
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "baseline" | "candidate";
+            /** Run Id */
+            run_id: string;
+            /** Simulated */
+            simulated: boolean;
+            total_units: components["schemas"]["MeasurementDistributionResponse"];
+        };
         /** RunPage */
         RunPage: {
             /** Items */
@@ -977,6 +1069,28 @@ export interface components {
              * @constant
              */
             schema_version: "run-submission/v2";
+        };
+        /** ScoreDistributionResponse */
+        ScoreDistributionResponse: {
+            baseline: components["schemas"]["ScoreValueDistributionResponse"];
+            candidate: components["schemas"]["ScoreValueDistributionResponse"];
+            delta: components["schemas"]["DeltaDistributionResponse"];
+            /** Gate Slice */
+            gate_slice?: string | null;
+            /** Metric */
+            metric: string;
+        };
+        /** ScoreValueDistributionResponse */
+        ScoreValueDistributionResponse: {
+            /** Attempted */
+            attempted: number;
+            /** Errors */
+            errors: number;
+            /** Scored */
+            scored: number;
+            /** Skipped */
+            skipped: number;
+            statistics: components["schemas"]["QuantileSummaryResponse"];
         };
     };
     responses: never;
@@ -2220,9 +2334,11 @@ export interface operations {
     list_release_decision_cases: {
         parameters: {
             query: {
+                /** @description Only include cases carrying this canonical slice label. */
                 case_slice?: string | null;
                 change?: components["schemas"]["CaseChange"] | null;
                 cursor?: string | null;
+                /** @description Exact gate slice; omission selects the global gate. */
                 gate_slice?: string | null;
                 limit?: number;
                 metric: string;
@@ -2245,6 +2361,125 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReleaseDecisionCasePage"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Immutable conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Request body too large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Unsupported media type */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Contract validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Internal service error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+        };
+    };
+    get_release_decision_distributions: {
+        parameters: {
+            query: {
+                /** @description Exact gate slice; omission selects the global gate. */
+                gate_slice?: string | null;
+                metric: string;
+            };
+            header: {
+                /** @description Configured single-deployment project boundary */
+                "X-Project-ID": string;
+            };
+            path: {
+                decision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseDecisionDistributionsResponse"];
                 };
             };
             /** @description Invalid request */

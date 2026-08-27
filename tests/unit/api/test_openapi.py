@@ -24,6 +24,7 @@ def test_openapi_operation_ids_and_dynamic_responses_are_stable(
         "get_liveness",
         "get_readiness",
         "get_release_decision",
+        "get_release_decision_distributions",
         "list_dataset_revisions",
         "list_evaluation_runs",
         "list_job_attempts",
@@ -66,6 +67,7 @@ def test_openapi_pins_versioned_redacted_response_contracts(
         "ReleaseDecisionListItemResponse": "release-decision-list-item/v1",
         "ReleaseDecisionCasePage": "release-decision-case-page/v1",
         "ReleaseDecisionCaseResponse": "release-decision-case/v1",
+        "ReleaseDecisionDistributionsResponse": ("release-decision-distributions/v1"),
         "ReleaseDecisionPage": "release-decision-page/v1",
         "ReleaseDecisionResponse": "release-decision-summary/v1",
         "RunListItemResponse": "run-list-item/v1",
@@ -108,6 +110,51 @@ def test_openapi_pins_versioned_redacted_response_contracts(
         "usage",
     ):
         assert forbidden not in decision_case_properties
+
+    distribution_properties = schemas["ReleaseDecisionDistributionsResponse"][
+        "properties"
+    ]
+    assert {"baseline", "candidate", "decision_id", "score"} <= set(
+        distribution_properties
+    )
+    distribution_schemas = {
+        name: schema
+        for name, schema in schemas.items()
+        if "Distribution" in name or name == "QuantileSummaryResponse"
+    }
+
+    def property_names(value: object) -> set[str]:
+        if isinstance(value, list):
+            return set().union(*(property_names(item) for item in value))
+        if not isinstance(value, dict):
+            return set()
+        names: set[str] = set()
+        properties = value.get("properties")
+        if isinstance(properties, dict):
+            names.update(str(name) for name in properties)
+        for item in value.values():
+            names.update(property_names(item))
+        return names
+
+    exposed_distribution_names = property_names(distribution_schemas)
+    for forbidden in (
+        "case_id",
+        "expected",
+        "input",
+        "message",
+        "output",
+        "raw_samples",
+        "reason_code",
+        "sql",
+    ):
+        assert forbidden not in exposed_distribution_names
+
+    paths = api_harness.client.get("/openapi.json").json()["paths"]
+    case_parameters = paths["/v1/release-decisions/{decision_id}/cases"]["get"][
+        "parameters"
+    ]
+    gate_slice = next(item for item in case_parameters if item["name"] == "gate_slice")
+    assert "omission selects the global gate" in gate_slice["description"]
 
     job_properties = schemas["JobResponse"]["properties"]
     attempt_properties = schemas["JobAttemptResponse"]["properties"]

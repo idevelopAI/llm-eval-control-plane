@@ -1423,7 +1423,30 @@ def test_release_decision_cases_are_bounded_filtered_score_projections(
     )
     repository.put_run(RunRecord(result=baseline, created_at=NOW))
     repository.put_run(RunRecord(result=candidate, created_at=NOW))
-    release = decision(data, baseline, candidate)
+    release = compare_runs(
+        spec=EvaluationSpec(
+            name="dashboard-policy",
+            dataset=data.artifact_ref,
+            baseline=baseline.target.model_copy(update={"digest": None}),
+            candidate=candidate.target.model_copy(update={"digest": None}),
+            gates=(
+                MetricGate(
+                    metric="quality.exact_match",
+                    direction=MetricDirection.HIGHER_IS_BETTER,
+                    threshold=1.0,
+                ),
+                MetricGate(
+                    metric="quality.exact_match",
+                    slice="language/de",
+                    direction=MetricDirection.HIGHER_IS_BETTER,
+                    threshold=1.0,
+                ),
+            ),
+        ),
+        dataset=data,
+        baseline=baseline,
+        candidate=candidate,
+    )
     repository.put_release_decision(
         ReleaseDecisionRecord(
             decision_id="decision-dashboard",
@@ -1446,6 +1469,26 @@ def test_release_decision_cases_are_bounded_filtered_score_projections(
         metric="quality.exact_match",
     )
     assert [item.case_id for item in second.items] == ["case-002"]
+
+    global_gate = repository.list_release_decision_cases(
+        "decision-dashboard",
+        limit=100,
+        metric="quality.exact_match",
+    )
+    assert [item.case_id for item in global_gate.items] == [
+        "case-001",
+        "case-002",
+        "case-003",
+    ]
+    assert all(item.slice is None for item in global_gate.items)
+    german_gate = repository.list_release_decision_cases(
+        "decision-dashboard",
+        limit=100,
+        metric="quality.exact_match",
+        gate_slice="language/de",
+    )
+    assert [item.case_id for item in german_gate.items] == ["case-002", "case-003"]
+    assert all(item.slice == "language/de" for item in german_gate.items)
 
     german = repository.list_release_decision_cases(
         "decision-dashboard",
