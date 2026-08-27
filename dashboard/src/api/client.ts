@@ -1,6 +1,11 @@
 import createClient from 'openapi-fetch';
 
 import type { components, operations, paths } from './generated/schema';
+import { isRuntimeCredential } from '../security/runtime-credential-vault';
+import type {
+  CredentialSource,
+  RuntimeCredential,
+} from '../security/runtime-credential-vault';
 import {
   isReleaseDecision,
   isReleaseDecisionCasePage,
@@ -31,12 +36,7 @@ type ReleaseDecisionDistributionQuery = NonNullable<
 
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
-export type RuntimeCredential = Readonly<{
-  accessToken: string;
-  projectId: string;
-}>;
-
-export type CredentialSource = () => RuntimeCredential | null;
+export type { CredentialSource, RuntimeCredential };
 
 export type ApiResult<T> = Readonly<{
   data: T;
@@ -200,7 +200,7 @@ export function createControlPlaneClient(getCredential: CredentialSource) {
         status: 401,
       });
     }
-    if (!value?.accessToken || !value.projectId) {
+    if (!isRuntimeCredential(value)) {
       throw new ControlPlaneApiError({
         code: 'authentication_required',
         message: 'A read-only control-plane session is required.',
