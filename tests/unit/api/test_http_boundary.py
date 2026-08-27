@@ -78,10 +78,13 @@ def test_authentication_precedes_json_parsing_and_health_stays_public(
     assert missing.status_code == 401
     assert missing.json()["error"]["code"] == "authentication_required"
     assert missing.headers["www-authenticate"] == "Bearer"
+    assert missing.headers["cache-control"] == "no-store"
     assert sentinel.decode() not in missing.text
     assert wrong_project.status_code == 403
+    assert wrong_project.headers["cache-control"] == "no-store"
     assert wrong_project.json()["error"]["code"] == "permission_denied"
     assert health.status_code == 200
+    assert health.headers["cache-control"] == "no-store"
 
 
 def test_mount_prefix_cannot_bypass_api_or_metrics_authentication(
@@ -525,10 +528,11 @@ def test_boundary_handles_non_http_scopes_and_replays_one_bounded_body() -> None
     assert cast(dict[str, object], captured[2])["body"] == b"{}"
     assert cast(dict[str, object], captured[3])["type"] == "http.disconnect"
     response_headers = cast(list[tuple[bytes, bytes]], sent[0]["headers"])
-    assert len(response_headers) == 1
-    assert response_headers[0][0] == b"x-request-id"
-    assert response_headers[0][1].startswith(b"req_")
-    assert response_headers[0][1] != b"boundary-request"
+    assert len(response_headers) == 2
+    assert (b"cache-control", b"no-store") in response_headers
+    request_id = dict(response_headers)[b"x-request-id"]
+    assert request_id.startswith(b"req_")
+    assert request_id != b"boundary-request"
 
 
 def test_boundary_helpers_fail_closed_on_invalid_protocol_values() -> None:

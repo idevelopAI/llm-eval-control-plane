@@ -78,8 +78,9 @@ class ApiBoundaryMiddleware:
                 response_headers = [
                     (name, value)
                     for name, value in message.get("headers", [])
-                    if name.lower() != b"x-request-id"
+                    if name.lower() not in {b"cache-control", b"x-request-id"}
                 ]
+                response_headers.append((b"cache-control", b"no-store"))
                 response_headers.append((b"x-request-id", request_id.encode("ascii")))
                 message["headers"] = response_headers
             await send(message)
