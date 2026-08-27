@@ -353,6 +353,11 @@ def test_every_protected_resource_has_one_exact_scope() -> None:
             "GET",
             ControlPlaneScope.READ,
         ),
+        (
+            "/v1/release-decisions/decision-one/distributions",
+            "GET",
+            ControlPlaneScope.READ,
+        ),
         ("/metrics", "GET", ControlPlaneScope.OBSERVABILITY_READ),
     )
 

@@ -514,6 +514,10 @@ def test_release_decision_dashboard_reads_are_bounded_and_redacted(
             "limit": 1,
         },
     )
+    distributions = api_harness.client.get(
+        f"/v1/release-decisions/{decision_id}/distributions",
+        params={"metric": "quality.exact_match"},
+    )
 
     assert listed.status_code == 200
     assert listed.json()["items"][0]["decision_id"] == decision_id
@@ -538,19 +542,48 @@ def test_release_decision_dashboard_reads_are_bounded_and_redacted(
         ],
         "next_cursor": None,
     }
-    serialized = cases.text
+    assert distributions.status_code == 200
+    distribution_document = distributions.json()
+    assert distribution_document["schema_version"] == (
+        "release-decision-distributions/v1"
+    )
+    assert distribution_document["decision_id"] == decision_id
+    assert distribution_document["score"]["metric"] == "quality.exact_match"
+    assert distribution_document["score"]["baseline"]["attempted"] == 1
+    assert distribution_document["score"]["baseline"]["scored"] == 1
+    assert distribution_document["score"]["delta"]["compared"] == 1
+    assert distribution_document["score"]["delta"]["statistics"]["small_sample"] is True
+    for role in ("baseline", "candidate"):
+        run = distribution_document[role]
+        assert run["role"] == role
+        assert run["execution_mode"] == "offline_mock"
+        assert run["simulated"] is True
+        assert run["latency_ms"]["measured"] == 1
+        assert run["latency_ms"]["statistics"] == {
+            "sample_count": 1,
+            "small_sample": True,
+            "suppressed": True,
+            "minimum": None,
+            "p50": None,
+            "p95": None,
+            "maximum": None,
+            "mean": None,
+        }
+        assert run["input_units"]["measured"] == 1
+        assert run["output_units"]["measured"] == 1
+        assert run["total_units"]["measured"] == 1
+
+    serialized = cases.text + distributions.text
     for forbidden in (
         "private-sentinel",
         "dashboard-baseline",
         "dashboard-candidate",
         "idempotency_key",
-        "output",
-        "expected",
         "reason_code",
-        "target",
-        "usage",
     ):
         assert forbidden not in serialized
+    for forbidden in ("output", "expected", "target", "usage"):
+        assert forbidden not in cases.text
 
     wrong_metric = api_harness.client.get(
         f"/v1/release-decisions/{decision_id}/cases",
@@ -558,6 +591,13 @@ def test_release_decision_dashboard_reads_are_bounded_and_redacted(
     )
     assert wrong_metric.status_code == 422
     assert "private sentinel" not in wrong_metric.text
+
+    missing_gate = api_harness.client.get(
+        f"/v1/release-decisions/{decision_id}/distributions",
+        params={"metric": "quality.missing"},
+    )
+    assert missing_gate.status_code == 404
+    assert missing_gate.json()["error"]["code"] == "resource_not_found"
 
 
 def test_idempotency_mismatch_and_missing_dataset_are_stable(

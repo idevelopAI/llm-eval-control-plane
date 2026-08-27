@@ -465,6 +465,34 @@
         "title": "DatasetResponse",
         "type": "object"
       },
+      "DeltaDistributionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "attempted": {
+            "title": "Attempted",
+            "type": "integer"
+          },
+          "compared": {
+            "title": "Compared",
+            "type": "integer"
+          },
+          "incomparable": {
+            "title": "Incomparable",
+            "type": "integer"
+          },
+          "statistics": {
+            "$ref": "#/components/schemas/QuantileSummaryResponse"
+          }
+        },
+        "required": [
+          "attempted",
+          "compared",
+          "incomparable",
+          "statistics"
+        ],
+        "title": "DeltaDistributionResponse",
+        "type": "object"
+      },
       "ErrorDetail": {
         "additionalProperties": false,
         "properties": {
@@ -978,6 +1006,39 @@
         "title": "ListOrder",
         "type": "string"
       },
+      "MeasurementDistributionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "attempted": {
+            "title": "Attempted",
+            "type": "integer"
+          },
+          "measured": {
+            "title": "Measured",
+            "type": "integer"
+          },
+          "statistics": {
+            "$ref": "#/components/schemas/QuantileSummaryResponse"
+          },
+          "target_failures": {
+            "title": "Target Failures",
+            "type": "integer"
+          },
+          "unavailable": {
+            "title": "Unavailable",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "attempted",
+          "measured",
+          "unavailable",
+          "target_failures",
+          "statistics"
+        ],
+        "title": "MeasurementDistributionResponse",
+        "type": "object"
+      },
       "MetricAggregate": {
         "additionalProperties": false,
         "description": "Coverage-aware metric aggregate for one run and slice.",
@@ -1131,6 +1192,85 @@
         "title": "MetricSummaryResponse",
         "type": "object"
       },
+      "QuantileSummaryResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "maximum": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximum"
+          },
+          "mean": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean"
+          },
+          "minimum": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimum"
+          },
+          "p50": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P50"
+          },
+          "p95": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95"
+          },
+          "sample_count": {
+            "title": "Sample Count",
+            "type": "integer"
+          },
+          "small_sample": {
+            "title": "Small Sample",
+            "type": "boolean"
+          },
+          "suppressed": {
+            "title": "Suppressed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sample_count",
+          "small_sample",
+          "suppressed"
+        ],
+        "title": "QuantileSummaryResponse",
+        "type": "object"
+      },
       "ReleaseDecisionCasePage": {
         "additionalProperties": false,
         "properties": {
@@ -1261,6 +1401,38 @@
           "change"
         ],
         "title": "ReleaseDecisionCaseResponse",
+        "type": "object"
+      },
+      "ReleaseDecisionDistributionsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "baseline": {
+            "$ref": "#/components/schemas/RunOperationalDistributionResponse"
+          },
+          "candidate": {
+            "$ref": "#/components/schemas/RunOperationalDistributionResponse"
+          },
+          "decision_id": {
+            "title": "Decision Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "release-decision-distributions/v1",
+            "default": "release-decision-distributions/v1",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "score": {
+            "$ref": "#/components/schemas/ScoreDistributionResponse"
+          }
+        },
+        "required": [
+          "decision_id",
+          "score",
+          "baseline",
+          "candidate"
+        ],
+        "title": "ReleaseDecisionDistributionsResponse",
         "type": "object"
       },
       "ReleaseDecisionListItemResponse": {
@@ -1602,6 +1774,54 @@
         "title": "RunListItemResponse",
         "type": "object"
       },
+      "RunOperationalDistributionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "execution_mode": {
+            "$ref": "#/components/schemas/ExecutionMode"
+          },
+          "input_units": {
+            "$ref": "#/components/schemas/MeasurementDistributionResponse"
+          },
+          "latency_ms": {
+            "$ref": "#/components/schemas/MeasurementDistributionResponse"
+          },
+          "output_units": {
+            "$ref": "#/components/schemas/MeasurementDistributionResponse"
+          },
+          "role": {
+            "enum": [
+              "baseline",
+              "candidate"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "simulated": {
+            "title": "Simulated",
+            "type": "boolean"
+          },
+          "total_units": {
+            "$ref": "#/components/schemas/MeasurementDistributionResponse"
+          }
+        },
+        "required": [
+          "role",
+          "run_id",
+          "execution_mode",
+          "simulated",
+          "latency_ms",
+          "input_units",
+          "output_units",
+          "total_units"
+        ],
+        "title": "RunOperationalDistributionResponse",
+        "type": "object"
+      },
       "RunPage": {
         "additionalProperties": false,
         "properties": {
@@ -1739,6 +1959,79 @@
         ],
         "title": "RunSubmissionResponse",
         "type": "object"
+      },
+      "ScoreDistributionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "baseline": {
+            "$ref": "#/components/schemas/ScoreValueDistributionResponse"
+          },
+          "candidate": {
+            "$ref": "#/components/schemas/ScoreValueDistributionResponse"
+          },
+          "delta": {
+            "$ref": "#/components/schemas/DeltaDistributionResponse"
+          },
+          "gate_slice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gate Slice"
+          },
+          "metric": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z][A-Za-z0-9._:/-]*$",
+            "title": "Metric",
+            "type": "string"
+          }
+        },
+        "required": [
+          "metric",
+          "baseline",
+          "candidate",
+          "delta"
+        ],
+        "title": "ScoreDistributionResponse",
+        "type": "object"
+      },
+      "ScoreValueDistributionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "attempted": {
+            "title": "Attempted",
+            "type": "integer"
+          },
+          "errors": {
+            "title": "Errors",
+            "type": "integer"
+          },
+          "scored": {
+            "title": "Scored",
+            "type": "integer"
+          },
+          "skipped": {
+            "title": "Skipped",
+            "type": "integer"
+          },
+          "statistics": {
+            "$ref": "#/components/schemas/QuantileSummaryResponse"
+          }
+        },
+        "required": [
+          "attempted",
+          "scored",
+          "skipped",
+          "errors",
+          "statistics"
+        ],
+        "title": "ScoreValueDistributionResponse",
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -1753,7 +2046,7 @@
   "info": {
     "summary": "Durable, content-addressed evaluation and release decisions",
     "title": "LLM Evaluation Control Plane",
-    "version": "1.3.0"
+    "version": "1.4.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -3574,6 +3867,7 @@
             }
           },
           {
+            "description": "Exact gate slice; omission selects the global gate.",
             "in": "query",
             "name": "gate_slice",
             "required": false,
@@ -3589,10 +3883,12 @@
                   "type": "null"
                 }
               ],
+              "description": "Exact gate slice; omission selects the global gate.",
               "title": "Gate Slice"
             }
           },
           {
+            "description": "Only include cases carrying this canonical slice label.",
             "in": "query",
             "name": "case_slice",
             "required": false,
@@ -3608,6 +3904,7 @@
                   "type": "null"
                 }
               ],
+              "description": "Only include cases carrying this canonical slice label.",
               "title": "Case Slice"
             }
           },
@@ -3758,6 +4055,192 @@
           }
         ],
         "summary": "List Release Decision Cases",
+        "tags": [
+          "release decisions"
+        ]
+      }
+    },
+    "/v1/release-decisions/{decision_id}/distributions": {
+      "get": {
+        "description": "Returns fixed nearest-rank score, latency, and usage quantiles for one configured gate. Operational statistics for fewer than 20 measurements are suppressed. Raw samples and case-level operational values are never returned.",
+        "operationId": "get_release_decision_distributions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "decision_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "title": "Decision Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "metric",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9._:/-]*$",
+              "title": "Metric",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact gate slice; omission selects the global gate.",
+            "in": "query",
+            "name": "gate_slice",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/=-]*$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact gate slice; omission selects the global gate.",
+              "title": "Gate Slice"
+            }
+          },
+          {
+            "description": "Configured single-deployment project boundary",
+            "in": "header",
+            "name": "X-Project-ID",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseDecisionDistributionsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Permission denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Immutable conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Request body too large"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Unsupported media type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Contract validation failed"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Internal service error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Service unavailable"
+          }
+        },
+        "security": [
+          {
+            "ProjectBearer": []
+          }
+        ],
+        "summary": "Get Release Decision Distributions",
         "tags": [
           "release decisions"
         ]

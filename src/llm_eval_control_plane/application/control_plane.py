@@ -8,6 +8,10 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Protocol
 
+from llm_eval_control_plane.application.dashboard import (
+    build_release_decision_distributions,
+)
+from llm_eval_control_plane.domain.analytics import ReleaseDecisionDistributions
 from llm_eval_control_plane.domain.canonical import JsonValue, sha256_digest
 from llm_eval_control_plane.domain.comparison import (
     CaseChange,
@@ -437,6 +441,43 @@ class ControlPlaneService:
             )
         except StoreInvalidCursorError as error:
             raise InvalidCursorError("Pagination cursor is invalid") from error
+
+    def get_release_decision_distributions(
+        self,
+        decision_id: str,
+        *,
+        metric: str,
+        gate_slice: str | None = None,
+    ) -> ReleaseDecisionDistributions:
+        """Return fixed score, latency, and usage quantiles for one gate."""
+        decision_record = self.get_release_decision(decision_id)
+        try:
+            baseline_record = self._repository.get_run(
+                decision_record.decision.baseline_run_id
+            )
+            candidate_record = self._repository.get_run(
+                decision_record.decision.candidate_run_id
+            )
+        except StoreNotFoundError as error:
+            raise ControlPlaneStoreError(
+                "Pinned release evidence is unavailable"
+            ) from error
+        try:
+            return build_release_decision_distributions(
+                decision_record=decision_record,
+                baseline_record=baseline_record,
+                candidate_record=candidate_record,
+                metric=metric,
+                gate_slice=gate_slice,
+            )
+        except LookupError as error:
+            raise ResourceNotFoundError(
+                "Release decision gate was not found"
+            ) from error
+        except ValueError as error:
+            raise ControlPlaneStoreError(
+                "Pinned release evidence is inconsistent"
+            ) from error
 
     async def submit_run(self, submission: RunSubmission) -> SubmissionResult:
         """Validate and atomically enqueue one idempotent evaluation job."""

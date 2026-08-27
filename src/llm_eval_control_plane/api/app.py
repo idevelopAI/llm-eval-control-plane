@@ -29,6 +29,7 @@ from llm_eval_control_plane.api.contracts import (
     JobResponse,
     ReleaseDecisionCasePage,
     ReleaseDecisionCaseResponse,
+    ReleaseDecisionDistributionsResponse,
     ReleaseDecisionListItemResponse,
     ReleaseDecisionPage,
     ReleaseDecisionResponse,
@@ -134,9 +135,23 @@ MetricQuery = Annotated[
     str,
     Query(min_length=1, max_length=128, pattern=_METRIC_PATTERN),
 ]
-SliceQuery = Annotated[
+GateSliceQuery = Annotated[
     str | None,
-    Query(min_length=1, max_length=128, pattern=_SLICE_PATTERN),
+    Query(
+        min_length=1,
+        max_length=128,
+        pattern=_SLICE_PATTERN,
+        description="Exact gate slice; omission selects the global gate.",
+    ),
+]
+CaseSliceQuery = Annotated[
+    str | None,
+    Query(
+        min_length=1,
+        max_length=128,
+        pattern=_SLICE_PATTERN,
+        description="Only include cases carrying this canonical slice label.",
+    ),
 ]
 CaseChangeQuery = Annotated[CaseChange | None, Query()]
 
@@ -174,7 +189,7 @@ def create_app(
     app = FastAPI(
         title="LLM Evaluation Control Plane",
         summary="Durable, content-addressed evaluation and release decisions",
-        version="1.3.0",
+        version="1.4.0",
         openapi_url="/openapi.json",
         docs_url=None,
         redoc_url=None,
@@ -621,8 +636,8 @@ def create_app(
         metric: MetricQuery,
         limit: LimitQuery = 50,
         cursor: CursorQuery = None,
-        gate_slice: SliceQuery = None,
-        case_slice: SliceQuery = None,
+        gate_slice: GateSliceQuery = None,
+        case_slice: CaseSliceQuery = None,
         change: CaseChangeQuery = None,
     ) -> ReleaseDecisionCasePage:
         page = service.list_release_decision_cases(
@@ -641,6 +656,34 @@ def create_app(
             ),
             next_cursor=page.next_cursor,
         )
+
+    @app.get(
+        "/v1/release-decisions/{decision_id}/distributions",
+        response_model=ReleaseDecisionDistributionsResponse,
+        operation_id="get_release_decision_distributions",
+        responses=_ERROR_RESPONSES,
+        tags=["release decisions"],
+        description=(
+            "Returns fixed nearest-rank score, latency, and usage quantiles for "
+            "one configured gate. Operational statistics for fewer than 20 "
+            "measurements are suppressed. Raw samples and case-level operational "
+            "values are never returned."
+        ),
+    )
+    async def get_release_decision_distributions(
+        decision_id: Annotated[
+            str,
+            Path(min_length=1, max_length=128, pattern=_STABLE_ID_PATTERN),
+        ],
+        metric: MetricQuery,
+        gate_slice: GateSliceQuery = None,
+    ) -> ReleaseDecisionDistributionsResponse:
+        distributions = service.get_release_decision_distributions(
+            decision_id,
+            metric=metric,
+            gate_slice=gate_slice,
+        )
+        return ReleaseDecisionDistributionsResponse.from_distributions(distributions)
 
     @app.get(
         "/v1/release-decisions/{decision_id}",

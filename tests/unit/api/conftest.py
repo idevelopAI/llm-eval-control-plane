@@ -297,7 +297,7 @@ class ReadyRepository:
             item
             for item in decision.cases
             if (metric is None or item.metric == metric)
-            and (gate_slice is None or item.slice == gate_slice)
+            and item.slice == gate_slice
             and (case_slice is None or case_slice in item.slices)
             and (change is None or item.change is change)
         )
