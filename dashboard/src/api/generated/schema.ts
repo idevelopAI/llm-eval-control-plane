@@ -195,6 +195,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/release-decisions/{decision_id}/cases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Release Decision Cases
+         * @description Returns only bounded score transitions and canonical slice labels. Raw prompts, expectations, outputs, evaluator messages, SQL, and rows are excluded by contract.
+         */
+        get: operations["list_release_decision_cases"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/runs": {
         parameters: {
             query?: never;
@@ -300,6 +320,12 @@ export interface components {
          * @enum {string}
          */
         BuiltInEvaluatorKind: "exact_match" | "normalized_match" | "json_schema" | "numeric_tolerance" | "refusal" | "latency" | "usage";
+        /**
+         * CaseChange
+         * @description Threshold-relative change for one case and gate.
+         * @enum {string}
+         */
+        CaseChange: "newly_passing" | "newly_failing" | "unchanged_passing" | "unchanged_failing" | "incomparable";
         /** CaseStatusCounts */
         CaseStatusCounts: {
             /** Completed */
@@ -332,6 +358,21 @@ export interface components {
              */
             schema_version: "comparison-submission/v2";
         };
+        /**
+         * ComparisonValueResponse
+         * @description One redacted score state with no evaluator reason or raw evidence.
+         */
+        ComparisonValueResponse: {
+            status: components["schemas"]["ComparisonValueStatus"];
+            /** Value */
+            value?: number | null;
+        };
+        /**
+         * ComparisonValueStatus
+         * @description Whether one side produced comparable metric evidence.
+         * @enum {string}
+         */
+        ComparisonValueStatus: "scored" | "skipped" | "error";
         /** DatasetCreateRequest */
         DatasetCreateRequest: {
             /** Cases */
@@ -632,6 +673,12 @@ export interface components {
         JobStatus: "queued" | "running" | "cancel_requested" | "succeeded" | "failed" | "canceled";
         JsonValue: unknown;
         /**
+         * ListOrder
+         * @description Stable ordering for cursor-paginated collection reads.
+         * @enum {string}
+         */
+        ListOrder: "asc" | "desc";
+        /**
          * MetricAggregate
          * @description Coverage-aware metric aggregate for one run and slice.
          */
@@ -686,6 +733,50 @@ export interface components {
             scored: number;
             /** Skipped */
             skipped: number;
+        };
+        /** ReleaseDecisionCasePage */
+        ReleaseDecisionCasePage: {
+            /** Decision Id */
+            decision_id: string;
+            /** Items */
+            items: components["schemas"]["ReleaseDecisionCaseResponse"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /**
+             * Schema Version
+             * @default release-decision-case-page/v1
+             * @constant
+             */
+            schema_version: "release-decision-case-page/v1";
+        };
+        /**
+         * ReleaseDecisionCaseResponse
+         * @description Allowlisted case-level scoring evidence for authorized dashboard reads.
+         */
+        ReleaseDecisionCaseResponse: {
+            baseline: components["schemas"]["ComparisonValueResponse"];
+            /** Baseline Passed */
+            baseline_passed?: boolean | null;
+            candidate: components["schemas"]["ComparisonValueResponse"];
+            /** Candidate Passed */
+            candidate_passed?: boolean | null;
+            /** Case Id */
+            case_id: string;
+            change: components["schemas"]["CaseChange"];
+            /** Delta */
+            delta?: number | null;
+            /** Gate Slice */
+            gate_slice?: string | null;
+            /** Metric */
+            metric: string;
+            /**
+             * Schema Version
+             * @default release-decision-case/v1
+             * @constant
+             */
+            schema_version: "release-decision-case/v1";
+            /** Slices */
+            slices: string[];
         };
         /** ReleaseDecisionListItemResponse */
         ReleaseDecisionListItemResponse: {
@@ -1898,6 +1989,7 @@ export interface operations {
             query?: {
                 cursor?: string | null;
                 limit?: number;
+                order?: components["schemas"]["ListOrder"];
                 status?: components["schemas"]["ReleaseStatus"] | null;
             };
             header: {
@@ -2031,6 +2123,128 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReleaseDecisionResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Immutable conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Request body too large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Unsupported media type */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Contract validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Internal service error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+        };
+    };
+    list_release_decision_cases: {
+        parameters: {
+            query: {
+                case_slice?: string | null;
+                change?: components["schemas"]["CaseChange"] | null;
+                cursor?: string | null;
+                gate_slice?: string | null;
+                limit?: number;
+                metric: string;
+            };
+            header: {
+                /** @description Configured single-deployment project boundary */
+                "X-Project-ID": string;
+            };
+            path: {
+                decision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseDecisionCasePage"];
                 };
             };
             /** @description Invalid request */

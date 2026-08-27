@@ -83,6 +83,13 @@ ScenarioName = Annotated[
 MaxAttempts = Annotated[int, Field(ge=1, le=10)]
 
 
+class ListOrder(StrEnum):
+    """Stable ordering for cursor-paginated collection reads."""
+
+    ASCENDING = "asc"
+    DESCENDING = "desc"
+
+
 def validate_traceparent(value: object) -> str:
     """Return one strict lowercase W3C Trace Context version 00 header."""
     if not isinstance(value, str) or len(value) != 55:

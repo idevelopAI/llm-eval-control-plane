@@ -25,6 +25,9 @@ from llm_eval_control_plane.domain.artifacts import (
 from llm_eval_control_plane.domain.canonical import CanonicalJson
 from llm_eval_control_plane.domain.comparison import (
     AggregateComparison,
+    CaseChange,
+    ComparisonValueStatus,
+    GateCaseComparison,
     GateResult,
     ReleaseStatus,
 )
@@ -493,6 +496,59 @@ class ReleaseDecisionListItemResponse(ApiModel):
         return cls(**record.model_dump())
 
 
+class ComparisonValueResponse(ApiModel):
+    """One redacted score state with no evaluator reason or raw evidence."""
+
+    status: ComparisonValueStatus
+    value: FiniteFloat | None = None
+
+
+class ReleaseDecisionCaseResponse(ApiModel):
+    """Allowlisted case-level scoring evidence for authorized dashboard reads."""
+
+    schema_version: Literal["release-decision-case/v1"] = "release-decision-case/v1"
+    case_id: str
+    metric: MetricName
+    gate_slice: str | None = None
+    slices: tuple[str, ...]
+    baseline: ComparisonValueResponse
+    candidate: ComparisonValueResponse
+    delta: FiniteFloat | None = None
+    baseline_passed: bool | None = None
+    candidate_passed: bool | None = None
+    change: CaseChange
+
+    @classmethod
+    def from_comparison(cls, comparison: GateCaseComparison) -> Self:
+        return cls(
+            case_id=comparison.case_id,
+            metric=comparison.metric,
+            gate_slice=comparison.slice,
+            slices=comparison.slices,
+            baseline=ComparisonValueResponse(
+                status=comparison.baseline.status,
+                value=comparison.baseline.value,
+            ),
+            candidate=ComparisonValueResponse(
+                status=comparison.candidate.status,
+                value=comparison.candidate.value,
+            ),
+            delta=comparison.delta,
+            baseline_passed=comparison.baseline_passed,
+            candidate_passed=comparison.candidate_passed,
+            change=comparison.change,
+        )
+
+
+class ReleaseDecisionCasePage(ApiModel):
+    schema_version: Literal["release-decision-case-page/v1"] = (
+        "release-decision-case-page/v1"
+    )
+    decision_id: str
+    items: tuple[ReleaseDecisionCaseResponse, ...]
+    next_cursor: str | None = None
+
+
 class ReleaseDecisionPage(ApiModel):
     schema_version: Literal["release-decision-page/v1"] = "release-decision-page/v1"
     items: tuple[ReleaseDecisionListItemResponse, ...]
@@ -543,6 +599,8 @@ __all__ = [
     "JobCancellationRequest",
     "JobPage",
     "JobResponse",
+    "ReleaseDecisionCasePage",
+    "ReleaseDecisionCaseResponse",
     "ReleaseDecisionListItemResponse",
     "ReleaseDecisionPage",
     "ReleaseDecisionResponse",

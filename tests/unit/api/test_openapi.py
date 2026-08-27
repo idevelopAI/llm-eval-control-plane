@@ -29,6 +29,7 @@ def test_openapi_operation_ids_and_dynamic_responses_are_stable(
         "list_job_attempts",
         "list_jobs",
         "list_release_decisions",
+        "list_release_decision_cases",
         "request_job_cancellation",
         "submit_evaluation_run",
         "submit_release_comparison",
@@ -63,6 +64,8 @@ def test_openapi_pins_versioned_redacted_response_contracts(
         "JobPage": "job-page/v2",
         "JobResponse": "job/v2",
         "ReleaseDecisionListItemResponse": "release-decision-list-item/v1",
+        "ReleaseDecisionCasePage": "release-decision-case-page/v1",
+        "ReleaseDecisionCaseResponse": "release-decision-case/v1",
         "ReleaseDecisionPage": "release-decision-page/v1",
         "ReleaseDecisionResponse": "release-decision-summary/v1",
         "RunListItemResponse": "run-list-item/v1",
@@ -80,6 +83,31 @@ def test_openapi_pins_versioned_redacted_response_contracts(
     assert "cases" not in decision_properties
     assert "baseline_result_digest" in decision_properties
     assert "candidate_result_digest" in decision_properties
+
+    decision_case_properties = schemas["ReleaseDecisionCaseResponse"]["properties"]
+    assert {
+        "baseline",
+        "baseline_passed",
+        "candidate",
+        "candidate_passed",
+        "case_id",
+        "change",
+        "delta",
+        "gate_slice",
+        "metric",
+        "slices",
+    } <= set(decision_case_properties)
+    for forbidden in (
+        "expected",
+        "input",
+        "message",
+        "output",
+        "reason_code",
+        "sql",
+        "target",
+        "usage",
+    ):
+        assert forbidden not in decision_case_properties
 
     job_properties = schemas["JobResponse"]["properties"]
     attempt_properties = schemas["JobAttemptResponse"]["properties"]

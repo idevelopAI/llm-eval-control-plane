@@ -66,7 +66,11 @@ from llm_eval_control_plane.domain import (
     MetricGate,
 )
 from llm_eval_control_plane.domain.canonical import canonical_json_bytes, sha256_digest
-from llm_eval_control_plane.domain.comparison import ReleaseDecision, ReleaseStatus
+from llm_eval_control_plane.domain.comparison import (
+    CaseChange,
+    ReleaseDecision,
+    ReleaseStatus,
+)
 from llm_eval_control_plane.domain.control_plane import (
     ComparisonJobPayload,
     DatasetRecord,
@@ -75,6 +79,7 @@ from llm_eval_control_plane.domain.control_plane import (
     JobPayload,
     JobRecord,
     JobStatus,
+    ListOrder,
     ReleaseDecisionRecord,
     RunJobPayload,
     RunRecord,
@@ -1326,6 +1331,30 @@ def test_job_run_and_decision_lists_use_filter_bound_keyset_cursors(
         status=ReleaseStatus.PASSED,
     )
     assert [item.decision_id for item in remaining_decisions.items] == ["decision-2"]
+    newest_decisions = repository.list_release_decisions(
+        limit=2,
+        status=ReleaseStatus.PASSED,
+        order=ListOrder.DESCENDING,
+    )
+    assert [item.decision_id for item in newest_decisions.items] == [
+        "decision-2",
+        "decision-1",
+    ]
+    assert newest_decisions.next_cursor is not None
+    oldest_decision = repository.list_release_decisions(
+        limit=2,
+        cursor=newest_decisions.next_cursor,
+        status=ReleaseStatus.PASSED,
+        order=ListOrder.DESCENDING,
+    )
+    assert [item.decision_id for item in oldest_decision.items] == ["decision-0"]
+    with raises(InvalidCursorError, match="invalid"):
+        repository.list_release_decisions(
+            limit=2,
+            cursor=newest_decisions.next_cursor,
+            status=ReleaseStatus.PASSED,
+            order=ListOrder.ASCENDING,
+        )
     assert (
         repository.list_release_decisions(
             limit=10,
@@ -1347,6 +1376,100 @@ def test_job_run_and_decision_lists_use_filter_bound_keyset_cursors(
     )
     with raises(ImmutableRecordConflictError, match="different evidence"):
         repository.put_release_decision(different)
+
+
+def test_release_decision_cases_are_bounded_filtered_score_projections(
+    repository: SqlAlchemyControlPlaneRepository,
+) -> None:
+    data = DatasetVersion.create(
+        name="dashboard-cases",
+        revision=1,
+        cases=tuple(
+            EvaluationCase(
+                case_id=f"case-{index:03d}",
+                input=CanonicalJson.from_value({"scenario": "echo", "value": "answer"}),
+                expected=CanonicalJson.from_value("answer"),
+                slices=(
+                    "task/qa",
+                    "language/de" if index > 1 else "language/en",
+                ),
+            )
+            for index in range(1, 4)
+        ),
+    )
+    repository.put_dataset(DatasetRecord(dataset=data, created_at=NOW))
+    executor = DeterministicEvaluationExecutor()
+    baseline = asyncio.run(
+        executor.execute(
+            run_id="run-dashboard-baseline",
+            dataset=data,
+            target_name="fake/baseline",
+            target_revision=1,
+            adapter="deterministic_fake",
+            evaluator_names=("exact_match",),
+            scenario_overrides={},
+        )
+    )
+    candidate = asyncio.run(
+        executor.execute(
+            run_id="run-dashboard-candidate",
+            dataset=data,
+            target_name="fake/candidate",
+            target_revision=2,
+            adapter="deterministic_fake",
+            evaluator_names=("exact_match",),
+            scenario_overrides={"case-002": "uppercase"},
+        )
+    )
+    repository.put_run(RunRecord(result=baseline, created_at=NOW))
+    repository.put_run(RunRecord(result=candidate, created_at=NOW))
+    release = decision(data, baseline, candidate)
+    repository.put_release_decision(
+        ReleaseDecisionRecord(
+            decision_id="decision-dashboard",
+            decision=release,
+            created_at=NOW,
+        )
+    )
+
+    first = repository.list_release_decision_cases(
+        "decision-dashboard",
+        limit=1,
+        metric="quality.exact_match",
+    )
+    assert [item.case_id for item in first.items] == ["case-001"]
+    assert first.next_cursor is not None
+    second = repository.list_release_decision_cases(
+        "decision-dashboard",
+        limit=1,
+        cursor=first.next_cursor,
+        metric="quality.exact_match",
+    )
+    assert [item.case_id for item in second.items] == ["case-002"]
+
+    german = repository.list_release_decision_cases(
+        "decision-dashboard",
+        limit=100,
+        metric="quality.exact_match",
+        case_slice="language/de",
+    )
+    assert [item.case_id for item in german.items] == ["case-002", "case-003"]
+    regressed = repository.list_release_decision_cases(
+        "decision-dashboard",
+        limit=100,
+        metric="quality.exact_match",
+        change=CaseChange.NEWLY_FAILING,
+    )
+    assert [item.case_id for item in regressed.items] == ["case-002"]
+
+    with raises(InvalidCursorError, match="invalid"):
+        repository.list_release_decision_cases(
+            "decision-dashboard",
+            limit=1,
+            cursor=first.next_cursor,
+            metric="quality.exact_match",
+            case_slice="language/de",
+        )
 
 
 def test_collection_projections_do_not_load_canonical_evidence_documents(

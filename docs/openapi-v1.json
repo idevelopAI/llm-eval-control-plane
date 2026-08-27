@@ -173,6 +173,18 @@
         "title": "BuiltInEvaluatorKind",
         "type": "string"
       },
+      "CaseChange": {
+        "description": "Threshold-relative change for one case and gate.",
+        "enum": [
+          "newly_passing",
+          "newly_failing",
+          "unchanged_passing",
+          "unchanged_failing",
+          "incomparable"
+        ],
+        "title": "CaseChange",
+        "type": "string"
+      },
       "CaseStatusCounts": {
         "additionalProperties": false,
         "properties": {
@@ -268,6 +280,41 @@
         ],
         "title": "ComparisonSubmissionResponse",
         "type": "object"
+      },
+      "ComparisonValueResponse": {
+        "additionalProperties": false,
+        "description": "One redacted score state with no evaluator reason or raw evidence.",
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/ComparisonValueStatus"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "ComparisonValueResponse",
+        "type": "object"
+      },
+      "ComparisonValueStatus": {
+        "description": "Whether one side produced comparable metric evidence.",
+        "enum": [
+          "scored",
+          "skipped",
+          "error"
+        ],
+        "title": "ComparisonValueStatus",
+        "type": "string"
       },
       "DatasetCreateRequest": {
         "additionalProperties": false,
@@ -922,6 +969,15 @@
         "type": "string"
       },
       "JsonValue": {},
+      "ListOrder": {
+        "description": "Stable ordering for cursor-paginated collection reads.",
+        "enum": [
+          "asc",
+          "desc"
+        ],
+        "title": "ListOrder",
+        "type": "string"
+      },
       "MetricAggregate": {
         "additionalProperties": false,
         "description": "Coverage-aware metric aggregate for one run and slice.",
@@ -1073,6 +1129,138 @@
           "errors"
         ],
         "title": "MetricSummaryResponse",
+        "type": "object"
+      },
+      "ReleaseDecisionCasePage": {
+        "additionalProperties": false,
+        "properties": {
+          "decision_id": {
+            "title": "Decision Id",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ReleaseDecisionCaseResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "schema_version": {
+            "const": "release-decision-case-page/v1",
+            "default": "release-decision-case-page/v1",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision_id",
+          "items"
+        ],
+        "title": "ReleaseDecisionCasePage",
+        "type": "object"
+      },
+      "ReleaseDecisionCaseResponse": {
+        "additionalProperties": false,
+        "description": "Allowlisted case-level scoring evidence for authorized dashboard reads.",
+        "properties": {
+          "baseline": {
+            "$ref": "#/components/schemas/ComparisonValueResponse"
+          },
+          "baseline_passed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Passed"
+          },
+          "candidate": {
+            "$ref": "#/components/schemas/ComparisonValueResponse"
+          },
+          "candidate_passed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Passed"
+          },
+          "case_id": {
+            "title": "Case Id",
+            "type": "string"
+          },
+          "change": {
+            "$ref": "#/components/schemas/CaseChange"
+          },
+          "delta": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delta"
+          },
+          "gate_slice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gate Slice"
+          },
+          "metric": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z][A-Za-z0-9._:/-]*$",
+            "title": "Metric",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "release-decision-case/v1",
+            "default": "release-decision-case/v1",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "slices": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Slices",
+            "type": "array"
+          }
+        },
+        "required": [
+          "case_id",
+          "metric",
+          "slices",
+          "baseline",
+          "candidate",
+          "change"
+        ],
+        "title": "ReleaseDecisionCaseResponse",
         "type": "object"
       },
       "ReleaseDecisionListItemResponse": {
@@ -1565,7 +1753,7 @@
   "info": {
     "summary": "Durable, content-addressed evaluation and release decisions",
     "title": "LLM Evaluation Control Plane",
-    "version": "1.2.0"
+    "version": "1.3.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -3030,6 +3218,15 @@
             }
           },
           {
+            "in": "query",
+            "name": "order",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ListOrder",
+              "default": "asc"
+            }
+          },
+          {
             "description": "Configured single-deployment project boundary",
             "in": "header",
             "name": "X-Project-ID",
@@ -3312,6 +3509,255 @@
           }
         ],
         "summary": "Get Release Decision",
+        "tags": [
+          "release decisions"
+        ]
+      }
+    },
+    "/v1/release-decisions/{decision_id}/cases": {
+      "get": {
+        "description": "Returns only bounded score transitions and canonical slice labels. Raw prompts, expectations, outputs, evaluator messages, SQL, and rows are excluded by contract.",
+        "operationId": "list_release_decision_cases",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "decision_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "title": "Decision Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "metric",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9._:/-]*$",
+              "title": "Metric",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "gate_slice",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/=-]*$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Gate Slice"
+            }
+          },
+          {
+            "in": "query",
+            "name": "case_slice",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/=-]*$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Case Slice"
+            }
+          },
+          {
+            "in": "query",
+            "name": "change",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CaseChange"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Change"
+            }
+          },
+          {
+            "description": "Configured single-deployment project boundary",
+            "in": "header",
+            "name": "X-Project-ID",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseDecisionCasePage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Permission denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Immutable conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Request body too large"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Unsupported media type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Contract validation failed"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Internal service error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Service unavailable"
+          }
+        },
+        "security": [
+          {
+            "ProjectBearer": []
+          }
+        ],
+        "summary": "List Release Decision Cases",
         "tags": [
           "release decisions"
         ]

@@ -9,7 +9,11 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 from llm_eval_control_plane.domain.canonical import JsonValue, sha256_digest
-from llm_eval_control_plane.domain.comparison import ReleaseStatus
+from llm_eval_control_plane.domain.comparison import (
+    CaseChange,
+    GateCaseComparison,
+    ReleaseStatus,
+)
 from llm_eval_control_plane.domain.control_plane import (
     ComparisonJobPayload,
     CursorPage,
@@ -22,6 +26,7 @@ from llm_eval_control_plane.domain.control_plane import (
     JobRecord,
     JobStatus,
     LeaseToken,
+    ListOrder,
     ReleaseDecisionListRecord,
     ReleaseDecisionRecord,
     RunJobPayload,
@@ -208,7 +213,20 @@ class ControlPlaneRepository(Protocol):
         limit: int,
         cursor: str | None = None,
         status: ReleaseStatus | None = None,
+        order: ListOrder = ListOrder.ASCENDING,
     ) -> CursorPage[ReleaseDecisionListRecord]: ...
+
+    def list_release_decision_cases(
+        self,
+        decision_id: str,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        metric: str | None = None,
+        gate_slice: str | None = None,
+        case_slice: str | None = None,
+        change: CaseChange | None = None,
+    ) -> CursorPage[GateCaseComparison]: ...
 
     def check_health(self) -> None: ...
 
@@ -655,13 +673,42 @@ class ControlPlaneService:
         limit: int,
         cursor: str | None = None,
         status: ReleaseStatus | None = None,
+        order: ListOrder = ListOrder.ASCENDING,
     ) -> CursorPage[ReleaseDecisionListRecord]:
         try:
             return self._repository.list_release_decisions(
                 limit=limit,
                 cursor=cursor,
                 status=status,
+                order=order,
             )
+        except StoreInvalidCursorError as error:
+            raise InvalidCursorError("Pagination cursor is invalid") from error
+
+    def list_release_decision_cases(
+        self,
+        decision_id: str,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        metric: str | None = None,
+        gate_slice: str | None = None,
+        case_slice: str | None = None,
+        change: CaseChange | None = None,
+    ) -> CursorPage[GateCaseComparison]:
+        """Return a bounded score-only projection of immutable case evidence."""
+        try:
+            return self._repository.list_release_decision_cases(
+                decision_id,
+                limit=limit,
+                cursor=cursor,
+                metric=metric,
+                gate_slice=gate_slice,
+                case_slice=case_slice,
+                change=change,
+            )
+        except StoreNotFoundError as error:
+            raise ResourceNotFoundError("Release decision was not found") from error
         except StoreInvalidCursorError as error:
             raise InvalidCursorError("Pagination cursor is invalid") from error
 
