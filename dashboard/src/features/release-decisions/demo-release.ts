@@ -1,33 +1,22 @@
-import type { components } from '../../api/generated/schema';
+import type { ReleaseDecisionDistributions } from '../../api/client';
+import type {
+  CaseView,
+  GateView,
+  ReleaseDashboardModel,
+  ReleaseView,
+} from './view-model';
+import { gateId } from './view-model';
 
-type GateResult = components['schemas']['GateResult'];
+export { filterOptions } from './view-model';
+export type { FilterId } from './view-model';
 
-export type FilterId =
-  | 'all'
-  | 'language'
-  | 'task'
-  | 'answerability'
-  | 'safety';
+export type GateFixture = GateView;
+export type CaseFixture = CaseView;
 
-export type GateFixture = Readonly<{
-  caseIds: readonly string[];
-  filter: FilterId;
-  gate: GateResult;
-  id: string;
-  label: string;
-}>;
-
-export type CaseFixture = Readonly<{
-  baselinePassed: boolean;
-  baselineValue: number;
-  candidatePassed: boolean;
-  candidateValue: number;
-  delta: number;
-  gateIds: readonly string[];
-  id: string;
-  metric: string;
-  slices: readonly string[];
-}>;
+const SAFETY_GATE_ID = gateId('safety.refusal_correct', 'safety/refusal');
+const QUALITY_GATE_ID = gateId('quality.exact_match', null);
+const QUALITY_DE_GATE_ID = gateId('quality.exact_match', 'language/de');
+const LATENCY_GATE_ID = gateId('performance.latency_ms', null);
 
 const evaluator = {
   kind: 'evaluator',
@@ -35,22 +24,13 @@ const evaluator = {
   revision: 1,
 } as const;
 
-function aggregate(
-  attempted: number,
-  mean: number,
-): components['schemas']['MetricAggregate'] {
-  return {
-    attempted,
-    errors: 0,
-    mean,
-    scored: attempted,
-    skipped: 0,
-  };
+function aggregate(attempted: number, mean: number) {
+  return { attempted, errors: 0, mean, scored: attempted, skipped: 0 };
 }
 
-export const demoRelease = {
-  baseline: 'baseline-v1',
-  candidate: 'candidate-v2-regression',
+export const demoRelease: ReleaseView = {
+  baseline: 'baseline-v1 · revision 1',
+  candidate: 'candidate-v2-regression · revision 2',
   createdAt: '24 Aug 2026 · 14:32 UTC',
   dataset: 'release-gate-40 · revision 1',
   datasetDigest: '0b6717a9…a0a31',
@@ -58,12 +38,13 @@ export const demoRelease = {
   decisionId: 'decision_regression_001',
   executionMode: 'Deterministic fixture',
   project: 'release-gate-demo',
+  simulated: true,
   spec: 'production-release-v1',
-} as const;
+  status: 'failed',
+};
 
 export const demoGates = [
   {
-    caseIds: ['refusal-de-001'],
     filter: 'safety',
     gate: {
       aggregate: {
@@ -85,11 +66,10 @@ export const demoGates = [
       threshold: 1,
       threshold_passed: false,
     },
-    id: 'safety-refusal',
+    id: SAFETY_GATE_ID,
     label: 'Refusal correctness',
   },
   {
-    caseIds: ['quality-de-001', 'quality-en-001'],
     filter: 'task',
     gate: {
       aggregate: {
@@ -109,11 +89,10 @@ export const demoGates = [
       threshold: 0.94,
       threshold_passed: true,
     },
-    id: 'quality-all',
+    id: QUALITY_GATE_ID,
     label: 'Exact match',
   },
   {
-    caseIds: ['quality-de-001'],
     filter: 'language',
     gate: {
       aggregate: {
@@ -135,11 +114,10 @@ export const demoGates = [
       threshold: 0.94,
       threshold_passed: true,
     },
-    id: 'quality-de',
+    id: QUALITY_DE_GATE_ID,
     label: 'Exact match · German',
   },
   {
-    caseIds: [],
     filter: 'all',
     gate: {
       aggregate: {
@@ -159,7 +137,7 @@ export const demoGates = [
       threshold: 10,
       threshold_passed: true,
     },
-    id: 'latency-all',
+    id: LATENCY_GATE_ID,
     label: 'Simulated latency',
   },
 ] as const satisfies readonly GateFixture[];
@@ -170,8 +148,9 @@ export const demoCases = [
     baselineValue: 1,
     candidatePassed: false,
     candidateValue: 0,
+    change: 'newly_failing',
     delta: -1,
-    gateIds: ['safety-refusal'],
+    gateIds: [SAFETY_GATE_ID],
     id: 'refusal-de-001',
     metric: 'safety.refusal_correct',
     slices: ['language/de', 'task/refusal', 'safety/refusal'],
@@ -181,8 +160,9 @@ export const demoCases = [
     baselineValue: 1,
     candidatePassed: false,
     candidateValue: 0,
+    change: 'newly_failing',
     delta: -1,
-    gateIds: ['quality-all', 'quality-de'],
+    gateIds: [QUALITY_GATE_ID, QUALITY_DE_GATE_ID],
     id: 'quality-de-001',
     metric: 'quality.exact_match',
     slices: ['language/de', 'task/qa', 'answerability/answerable'],
@@ -192,21 +172,97 @@ export const demoCases = [
     baselineValue: 1,
     candidatePassed: false,
     candidateValue: 0,
+    change: 'newly_failing',
     delta: -1,
-    gateIds: ['quality-all'],
+    gateIds: [QUALITY_GATE_ID],
     id: 'quality-en-001',
     metric: 'quality.exact_match',
     slices: ['language/en', 'task/qa', 'answerability/answerable'],
   },
 ] as const satisfies readonly CaseFixture[];
 
-export const filterOptions: readonly Readonly<{
-  id: FilterId;
-  label: string;
-}>[] = [
-  { id: 'all', label: 'All gates' },
-  { id: 'language', label: 'Language' },
-  { id: 'task', label: 'Task' },
-  { id: 'answerability', label: 'Answerability' },
-  { id: 'safety', label: 'Safety' },
-];
+function quantiles(
+  sampleCount: number,
+  value: number | null,
+  options: { suppressSmall: boolean },
+) {
+  const suppressed =
+    options.suppressSmall && sampleCount > 0 && sampleCount < 20;
+  const exposed = sampleCount > 0 && !suppressed ? value : null;
+  return {
+    maximum: exposed,
+    mean: exposed,
+    minimum: exposed,
+    p50: exposed,
+    p95: exposed,
+    sample_count: sampleCount,
+    small_sample: sampleCount < 20,
+    suppressed,
+  };
+}
+
+function demoDistributions(gate: GateFixture): ReleaseDecisionDistributions {
+  const { baseline, candidate, delta } = gate.gate.aggregate;
+  const measurement = (attempted: number, value: number) => ({
+    attempted,
+    measured: attempted,
+    statistics: quantiles(attempted, value, { suppressSmall: true }),
+    target_failures: 0,
+    unavailable: 0,
+  });
+  const run = (role: 'baseline' | 'candidate', valueOffset: number) => ({
+    execution_mode: 'offline_deterministic_fixture' as const,
+    input_units: measurement(baseline.attempted, 18 + valueOffset),
+    latency_ms: measurement(baseline.attempted, 5 + valueOffset),
+    output_units: measurement(baseline.attempted, 7 + valueOffset),
+    role,
+    run_id: `run-${role}-fixture`,
+    simulated: true,
+    total_units: measurement(baseline.attempted, 25 + valueOffset),
+  });
+  const score = (value: typeof baseline) => ({
+    attempted: value.attempted,
+    errors: value.errors,
+    scored: value.scored,
+    skipped: value.skipped,
+    statistics: quantiles(value.scored, value.mean ?? null, {
+      suppressSmall: false,
+    }),
+  });
+  const compared = delta == null ? 0 : Math.min(baseline.scored, candidate.scored);
+  return {
+    baseline: run('baseline', 0),
+    candidate: run('candidate', 1),
+    decision_id: demoRelease.decisionId,
+    schema_version: 'release-decision-distributions/v1',
+    score: {
+      baseline: score(baseline),
+      candidate: score(candidate),
+      delta: {
+        attempted: baseline.attempted,
+        compared,
+        incomparable: baseline.attempted - compared,
+        statistics: quantiles(compared, delta ?? null, {
+          suppressSmall: false,
+        }),
+      },
+      gate_slice: gate.gate.slice ?? null,
+      metric: gate.gate.metric,
+    },
+  };
+}
+
+export function demoModelForGate(gateId: string): ReleaseDashboardModel {
+  const selectedGate = demoGates.find((gate) => gate.id === gateId);
+  if (!selectedGate) throw new Error('Fixture gate is unavailable.');
+  return {
+    casePageTruncated: false,
+    cases: demoCases,
+    distributions: demoDistributions(selectedGate),
+    gates: demoGates,
+    release: demoRelease,
+    selectedGateId: selectedGate.id,
+  };
+}
+
+export const demoDashboardModel = demoModelForGate(demoGates[0].id);

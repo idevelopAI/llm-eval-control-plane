@@ -337,7 +337,15 @@ function isQuantileSummary(value: unknown): value is QuantileSummary {
       statistics.every((item) => item === undefined || item === null)
     );
   }
-  return statistics.every(isFiniteNumber);
+  if (!statistics.every(isFiniteNumber)) return false;
+  const [minimum, p50, p95, maximum, mean] = statistics;
+  return (
+    minimum <= p50 &&
+    p50 <= p95 &&
+    p95 <= maximum &&
+    minimum <= mean &&
+    mean <= maximum
+  );
 }
 
 function isMeasurement(value: unknown): boolean {

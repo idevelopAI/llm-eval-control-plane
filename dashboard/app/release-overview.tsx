@@ -2,14 +2,17 @@
 
 import { useMemo, useRef, useState } from 'react';
 
+import DistributionComparison from './distribution-comparison';
 import {
-  demoCases,
-  demoGates,
-  demoRelease,
+  demoDashboardModel,
+  demoModelForGate,
+} from '@/src/features/release-decisions/demo-release';
+import {
   filterOptions,
   type FilterId,
-  type GateFixture,
-} from '@/src/features/release-decisions/demo-release';
+  type GateView,
+  type ReleaseDashboardModel,
+} from '@/src/features/release-decisions/view-model';
 
 function formatScore(value: number | null | undefined) {
   return value == null ? '—' : value.toFixed(3);
@@ -21,42 +24,59 @@ function formatDelta(value: number | null | undefined) {
   return `${value > 0 ? '+' : '−'}${Math.abs(value).toFixed(3)}`;
 }
 
-function gateScope(gate: GateFixture) {
+function gateScope(gate: GateView) {
   return gate.gate.slice ?? 'all cases';
 }
 
-export default function ReleaseOverview() {
+function changeLabel(value: ReleaseDashboardModel['cases'][number]['change']) {
+  return value.replaceAll('_', ' ');
+}
+
+function passLabel(value: boolean | null) {
+  if (value == null) return 'unavailable';
+  return value ? 'passed' : 'failed';
+}
+
+export type ReleaseOverviewViewProps = Readonly<{
+  busy?: boolean;
+  model: ReleaseDashboardModel;
+  onSelectGate: (gateId: string) => void;
+  sourceLabel: string;
+}>;
+
+export function ReleaseOverviewView({
+  busy = false,
+  model,
+  onSelectGate,
+  sourceLabel,
+}: ReleaseOverviewViewProps) {
   const [activeFilter, setActiveFilter] = useState<FilterId>('all');
   const [expandedCaseId, setExpandedCaseId] = useState<string | null>(null);
-  const [selectedGateId, setSelectedGateId] = useState<string | null>(
-    'safety-refusal',
-  );
   const caseHeadingRef = useRef<HTMLHeadingElement>(null);
 
   const visibleGates = useMemo(
     () =>
       activeFilter === 'all'
-        ? demoGates
-        : demoGates.filter((gate) => gate.filter === activeFilter),
-    [activeFilter],
+        ? model.gates
+        : model.gates.filter((gate) => gate.filter === activeFilter),
+    [activeFilter, model.gates],
   );
-
-  const visibleCases = useMemo(() => {
-    if (selectedGateId) {
-      return demoCases.filter((item) =>
-        item.gateIds.some((gateId) => gateId === selectedGateId),
-      );
-    }
-    if (activeFilter === 'all') return demoCases;
-    const gateIds = demoGates
-      .filter((gate) => gate.filter === activeFilter)
-      .map((gate) => gate.id);
-    return demoCases.filter((item) =>
-      item.gateIds.some((gateId) =>
-        gateIds.some((visibleGateId) => visibleGateId === gateId),
+  const visibleCases = useMemo(
+    () =>
+      model.cases.filter((item) =>
+        item.gateIds.some((gateId) => gateId === model.selectedGateId),
       ),
-    );
-  }, [activeFilter, selectedGateId]);
+    [model.cases, model.selectedGateId],
+  );
+  const selectedGate = model.gates.find(
+    (gate) => gate.id === model.selectedGateId,
+  );
+  const failedGates = model.gates.filter((gate) => gate.gate.status === 'failed');
+  const reviewGate = failedGates[0] ?? model.gates[0];
+  const newlyFailingCases = model.cases.filter(
+    (item) => item.change === 'newly_failing',
+  ).length;
+  const releaseFailed = model.release.status === 'failed';
 
   function focusCaseInbox() {
     window.requestAnimationFrame(() => caseHeadingRef.current?.focus());
@@ -65,20 +85,23 @@ export default function ReleaseOverview() {
   function selectFilter(filter: FilterId) {
     setActiveFilter(filter);
     setExpandedCaseId(null);
-    setSelectedGateId(null);
+    const candidates =
+      filter === 'all'
+        ? model.gates
+        : model.gates.filter((gate) => gate.filter === filter);
+    const next = candidates.find((gate) => gate.gate.status === 'failed') ?? candidates[0];
+    if (next && next.id !== model.selectedGateId) onSelectGate(next.id);
   }
 
-  function selectGate(gate: GateFixture) {
+  function selectGate(gate: GateView) {
     setActiveFilter(gate.filter);
     setExpandedCaseId(null);
-    setSelectedGateId(gate.id);
+    onSelectGate(gate.id);
     focusCaseInbox();
   }
 
-  const selectedGate = demoGates.find((gate) => gate.id === selectedGateId);
-
   return (
-    <div className="dashboard-shell">
+    <div className="dashboard-shell" aria-busy={busy}>
       <header className="masthead">
         <a className="brand" href="#decision" aria-label="Eval Control home">
           <span className="brand-mark" aria-hidden="true">
@@ -92,72 +115,84 @@ export default function ReleaseOverview() {
 
         <div className="project-context" aria-label="Current project">
           <span>Project</span>
-          <strong>{demoRelease.project}</strong>
+          <strong>{model.release.project}</strong>
         </div>
 
         <div className="mode-pill">
           <span className="mode-dot" aria-hidden="true" />
           <span>
-            <strong>{demoRelease.executionMode}</strong>
-            <small>Simulated latency and usage</small>
+            <strong>{model.release.executionMode}</strong>
+            <small>
+              {model.release.simulated
+                ? 'Simulated latency and usage'
+                : 'Observed latency and usage'}
+            </small>
           </span>
         </div>
       </header>
 
       <main>
-        <section className="decision-hero" id="decision">
+        <section
+          className={`decision-hero ${releaseFailed ? 'is-failed' : 'is-passed'}`}
+          id="decision"
+        >
           <div className="hero-copy">
             <p className="eyebrow">
-              Decision · {demoRelease.createdAt} · {demoRelease.spec}
+              Decision · {model.release.createdAt} · {model.release.spec}
             </p>
             <div className="verdict-line">
               <span className="verdict-icon" aria-hidden="true">
-                ×
+                {releaseFailed ? '×' : '✓'}
               </span>
               <div>
-                <h1>Release blocked</h1>
+                <h1>{releaseFailed ? 'Release blocked' : 'Release passed'}</h1>
                 <p>
-                  The candidate crossed a safety threshold and exhausted the
-                  allowed regression budget.
+                  {releaseFailed
+                    ? `Blocked by ${failedGates.length} of ${model.gates.length} configured gates.`
+                    : `All ${model.gates.length} configured gates passed the release policy.`}
                 </p>
               </div>
             </div>
             <div className="comparison-identity" aria-label="Run comparison">
               <span>
                 <small>Baseline</small>
-                <strong>{demoRelease.baseline}</strong>
+                <strong>{model.release.baseline}</strong>
               </span>
               <span className="comparison-arrow" aria-hidden="true">
                 →
               </span>
               <span>
                 <small>Candidate</small>
-                <strong>{demoRelease.candidate}</strong>
+                <strong>{model.release.candidate}</strong>
               </span>
               <span className="dataset-label">
                 <small>Dataset</small>
-                <strong>{demoRelease.dataset}</strong>
+                <strong>{model.release.dataset}</strong>
               </span>
             </div>
           </div>
 
           <div className="decision-summary">
             <div className="summary-number">
-              <strong>1</strong>
-              <span>of 4 gates failed</span>
+              <strong>{failedGates.length}</strong>
+              <span>of {model.gates.length} gates failed</span>
             </div>
             <div className="summary-number secondary">
-              <strong>3</strong>
-              <span>newly failing cases</span>
+              <strong>{newlyFailingCases}</strong>
+              <span>
+                newly failing {model.casePageTruncated ? 'cases shown' : 'cases'}
+              </span>
             </div>
-            <button
-              className="primary-action"
-              type="button"
-              onClick={() => selectGate(demoGates[0])}
-            >
-              Review safety regression
-              <span aria-hidden="true">→</span>
-            </button>
+            {reviewGate ? (
+              <button
+                className="primary-action"
+                type="button"
+                onClick={() => selectGate(reviewGate)}
+              >
+                {releaseFailed ? 'Review failed gate' : 'Review gate evidence'}
+                <span aria-hidden="true">→</span>
+              </button>
+            ) : null}
           </div>
         </section>
 
@@ -169,6 +204,7 @@ export default function ReleaseOverview() {
             <div className="filter-list">
               {filterOptions.map((filter) => (
                 <button
+                  aria-pressed={activeFilter === filter.id}
                   className={activeFilter === filter.id ? 'is-active' : ''}
                   key={filter.id}
                   onClick={() => selectFilter(filter.id)}
@@ -201,7 +237,7 @@ export default function ReleaseOverview() {
                 visibleGates.map((item) => {
                   const { aggregate } = item.gate;
                   const isFailed = item.gate.status === 'failed';
-                  const isSelected = item.id === selectedGateId;
+                  const isSelected = item.id === model.selectedGateId;
                   return (
                     <button
                       aria-pressed={isSelected}
@@ -278,8 +314,7 @@ export default function ReleaseOverview() {
                 </h2>
               </div>
               <span className="case-count">
-                {visibleCases.length}{' '}
-                {visibleCases.length === 1 ? 'case' : 'cases'}
+                {visibleCases.length}{model.casePageTruncated ? '+' : ''} shown
               </span>
             </div>
 
@@ -289,42 +324,49 @@ export default function ReleaseOverview() {
                 {gateScope(selectedGate)}
               </p>
             ) : (
-              <p className="scope-note">Showing the selected slice family.</p>
+              <p className="scope-note">Select a gate to inspect scoring evidence.</p>
             )}
 
             <div className="case-list">
               {visibleCases.length ? (
                 visibleCases.map((item) => {
                   const expanded = expandedCaseId === item.id;
+                  const evidenceId = `case-evidence-${encodeURIComponent(item.id)}`;
                   return (
                     <article className="case-card" key={item.id}>
                       <div className="case-title">
                         <div>
                           <span className="transition-badge">
-                            Newly failing
+                            {changeLabel(item.change)}
                           </span>
                           <h3>{item.id}</h3>
                         </div>
                         <span className="case-transition">
-                          <span className="pass-text">passed</span>
+                          <span className={item.baselinePassed ? 'pass-text' : 'fail-text'}>
+                            {passLabel(item.baselinePassed)}
+                          </span>
                           <span aria-hidden="true">→</span>
-                          <span className="fail-text">failed</span>
+                          <span className={item.candidatePassed ? 'pass-text' : 'fail-text'}>
+                            {passLabel(item.candidatePassed)}
+                          </span>
                         </span>
                       </div>
 
                       <code className="case-metric">{item.metric}</code>
                       <div className="slice-tags" aria-label="Case slices">
-                        {item.slices.map((slice) => (
-                          <span key={slice}>{slice}</span>
-                        ))}
+                        {item.slices.length ? (
+                          item.slices.map((slice) => <span key={slice}>{slice}</span>)
+                        ) : (
+                          <span>no slice labels</span>
+                        )}
                       </div>
 
                       <button
+                        aria-controls={evidenceId}
                         aria-expanded={expanded}
+                        aria-label={`${expanded ? 'Hide' : 'Inspect'} scoring evidence for ${item.id}`}
                         className="evidence-toggle"
-                        onClick={() =>
-                          setExpandedCaseId(expanded ? null : item.id)
-                        }
+                        onClick={() => setExpandedCaseId(expanded ? null : item.id)}
                         type="button"
                       >
                         {expanded ? 'Hide scoring evidence' : 'Inspect scoring evidence'}
@@ -332,20 +374,20 @@ export default function ReleaseOverview() {
                       </button>
 
                       {expanded ? (
-                        <div className="case-evidence">
+                        <div className="case-evidence" id={evidenceId}>
                           <dl>
                             <div>
                               <dt>Baseline value</dt>
                               <dd>
                                 {formatScore(item.baselineValue)} ·{' '}
-                                {item.baselinePassed ? 'passed' : 'failed'}
+                                {passLabel(item.baselinePassed)}
                               </dd>
                             </div>
                             <div>
                               <dt>Candidate value</dt>
                               <dd>
                                 {formatScore(item.candidateValue)} ·{' '}
-                                {item.candidatePassed ? 'passed' : 'failed'}
+                                {passLabel(item.candidatePassed)}
                               </dd>
                             </div>
                             <div>
@@ -354,8 +396,8 @@ export default function ReleaseOverview() {
                             </div>
                           </dl>
                           <p>
-                            Score-only projection. Prompt, expected value,
-                            target output, SQL, and stored rows are not present.
+                            Score-only projection. Prompt, expected value, target
+                            output, SQL, and stored rows are not present.
                           </p>
                         </div>
                       ) : null}
@@ -364,7 +406,7 @@ export default function ReleaseOverview() {
                 })
               ) : (
                 <div className="empty-state">
-                  No newly failing cases are attached to this gate projection.
+                  No cases are attached to this bounded gate projection.
                 </div>
               )}
             </div>
@@ -379,19 +421,32 @@ export default function ReleaseOverview() {
           </aside>
         </div>
 
+        <DistributionComparison distributions={model.distributions} />
+
         <footer className="provenance-strip">
           <p>
-            Decision <code>{demoRelease.decisionId}</code>
+            Decision <code>{model.release.decisionId}</code>
           </p>
           <p>
-            Dataset digest <code>{demoRelease.datasetDigest}</code>
+            Dataset digest <code>{model.release.datasetDigest}</code>
           </p>
           <p>
-            Decision digest <code>{demoRelease.decisionDigest}</code>
+            Decision digest <code>{model.release.decisionDigest}</code>
           </p>
-          <p>Immutable fixture · no live request made</p>
+          <p>{sourceLabel}</p>
         </footer>
       </main>
     </div>
+  );
+}
+
+export default function ReleaseOverview() {
+  const [model, setModel] = useState(demoDashboardModel);
+  return (
+    <ReleaseOverviewView
+      model={model}
+      onSelectGate={(gateId) => setModel(demoModelForGate(gateId))}
+      sourceLabel="Immutable fixture · no live request made"
+    />
   );
 }

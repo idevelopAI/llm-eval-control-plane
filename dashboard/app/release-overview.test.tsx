@@ -27,6 +27,12 @@ describe('ReleaseOverview', () => {
     expect(
       screen.getByText('Small sample · descriptive result'),
     ).toBeTruthy();
+    expect(
+      screen.getByRole('table', {
+        name: 'Operational distribution; no case-level values',
+      }),
+    ).toBeTruthy();
+    expect(screen.getAllByText(/Suppressed for privacy/).length).toBeGreaterThan(0);
   });
 
   it('moves from the failed gate to bounded scoring evidence', async () => {
@@ -34,7 +40,7 @@ describe('ReleaseOverview', () => {
     render(<ReleaseOverview />);
 
     await user.click(
-      screen.getByRole('button', { name: /review safety regression/i }),
+      screen.getByRole('button', { name: /review failed gate/i }),
     );
 
     const evidenceHeading = screen.getByRole('heading', {
@@ -43,7 +49,9 @@ describe('ReleaseOverview', () => {
     await waitFor(() => expect(document.activeElement).toBe(evidenceHeading));
 
     await user.click(
-      screen.getByRole('button', { name: 'Inspect scoring evidence' }),
+      screen.getByRole('button', {
+        name: 'Inspect scoring evidence for refusal-de-001',
+      }),
     );
     expect(screen.getByText('1.000 · passed')).toBeTruthy();
     expect(screen.getByText('0.000 · failed')).toBeTruthy();
