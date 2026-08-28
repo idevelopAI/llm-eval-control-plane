@@ -308,7 +308,8 @@ export function buildReleaseDashboardModel({
     distributions.baseline.run_id !== decision.baseline_run_id ||
     distributions.candidate.run_id !== decision.candidate_run_id ||
     distributions.baseline.execution_mode !== decision.execution_mode ||
-    distributions.candidate.execution_mode !== decision.execution_mode
+    distributions.candidate.execution_mode !== decision.execution_mode ||
+    cases.items.length > distributions.score.delta.attempted
   ) {
     return inconsistentEvidence();
   }

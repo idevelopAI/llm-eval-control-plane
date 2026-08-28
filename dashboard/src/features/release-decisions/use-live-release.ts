@@ -18,6 +18,7 @@ import {
 } from './view-model';
 
 export type ReleaseCaseChangeFilter = 'all' | ReleaseCaseChange;
+export const LIVE_CASE_DISPLAY_LIMIT = 500;
 
 type ReadyRelease = Readonly<{
   caseChange: ReleaseCaseChangeFilter;
@@ -34,7 +35,7 @@ export type LiveReleaseState =
   | Readonly<{
       kind: 'loading';
       previous?: ReadyRelease;
-      stage: 'decision' | 'evidence' | 'list';
+      stage: 'cases' | 'decision' | 'evidence' | 'list';
     }>
   | Readonly<{ decisions: ReleaseDecisionPage; kind: 'empty'; projectId: string }>
   | Readonly<{ kind: 'ready'; value: ReadyRelease }>
@@ -401,6 +402,78 @@ export function useLiveRelease({
     [beginRequest, client, currentRequest, onAuthenticationFailure],
   );
 
+  const loadMoreCases = useCallback(async () => {
+    const previous = readyRef.current;
+    const cursor = previous?.casePage.next_cursor;
+    if (
+      !previous ||
+      !cursor ||
+      previous.casePage.items.length >= LIVE_CASE_DISPLAY_LIMIT
+    ) {
+      return;
+    }
+    const metric = previous.distributions.score.metric;
+    const gateSlice = previous.distributions.score.gate_slice ?? null;
+    const scopedQuery = gateSlice == null ? {} : { gate_slice: gateSlice };
+    const changeQuery =
+      previous.caseChange === 'all' ? {} : { change: previous.caseChange };
+    const limit = Math.min(
+      100,
+      LIVE_CASE_DISPLAY_LIMIT - previous.casePage.items.length,
+    );
+    const { controller, generation } = beginRequest();
+    setState({ kind: 'loading', previous, stage: 'cases' });
+    try {
+      const cases = await client.listReleaseDecisionCases(
+        previous.decision.decision_id,
+        { cursor, limit, metric, ...scopedQuery, ...changeQuery },
+        controller.signal,
+      );
+      if (!currentRequest(generation, controller)) return;
+      const existingIds = new Set(
+        previous.casePage.items.map((item) => item.case_id),
+      );
+      if (
+        !casePageMatchesFilter(cases.data, previous.caseChange) ||
+        cases.data.items.some((item) => existingIds.has(item.case_id)) ||
+        (cases.data.next_cursor != null && cases.data.next_cursor === cursor)
+      ) {
+        throw new Error('Release case pagination is inconsistent');
+      }
+      const casePage = {
+        ...cases.data,
+        items: [...previous.casePage.items, ...cases.data.items],
+      } satisfies ReleaseDecisionCasePage;
+      const value = {
+        ...previous,
+        casePage,
+        model: buildReleaseDashboardModel({
+          cases: casePage,
+          decision: previous.decision,
+          distributions: previous.distributions,
+          projectId: previous.projectId,
+        }),
+      } satisfies ReadyRelease;
+      readyRef.current = value;
+      setState({ kind: 'ready', value });
+    } catch (error) {
+      if (!currentRequest(generation, controller) || abortError(error)) return;
+      controller.abort();
+      const authenticationFailure =
+        error instanceof ControlPlaneApiError &&
+        (error.status === 401 || error.status === 403);
+      if (authenticationFailure) {
+        readyRef.current = null;
+        onAuthenticationFailure();
+      }
+      setState({
+        kind: 'error',
+        previous: authenticationFailure ? undefined : previous,
+        ...safeError(error),
+      });
+    }
+  }, [beginRequest, client, currentRequest, onAuthenticationFailure]);
+
   const disconnect = useCallback(() => {
     generationRef.current += 1;
     controllerRef.current?.abort();
@@ -420,6 +493,7 @@ export function useLiveRelease({
   return {
     connect,
     disconnect,
+    loadMoreCases,
     selectCaseChange,
     selectDecision,
     selectGate,

@@ -58,7 +58,10 @@ const caseChangeOptions: readonly Readonly<{
 export type ReleaseOverviewViewProps = Readonly<{
   busy?: boolean;
   caseChangeFilter?: ReleaseCaseChangeFilter;
+  caseDisplayLimitReached?: boolean;
+  caseLoadMoreAvailable?: boolean;
   model: ReleaseDashboardModel;
+  onLoadMoreCases?: () => void;
   onSelectCaseChange?: (change: ReleaseCaseChangeFilter) => void;
   onSelectGate: (gateId: string) => void;
   sourceLabel: string;
@@ -67,7 +70,10 @@ export type ReleaseOverviewViewProps = Readonly<{
 export function ReleaseOverviewView({
   busy = false,
   caseChangeFilter,
+  caseDisplayLimitReached = false,
+  caseLoadMoreAvailable = false,
   model,
+  onLoadMoreCases,
   onSelectCaseChange,
   onSelectGate,
   sourceLabel,
@@ -453,6 +459,22 @@ export function ReleaseOverviewView({
                 </div>
               )}
             </div>
+
+            {caseLoadMoreAvailable && onLoadMoreCases ? (
+              <button
+                className="load-more-cases"
+                disabled={busy}
+                onClick={onLoadMoreCases}
+                type="button"
+              >
+                {busy ? 'Loading more cases…' : 'Load more cases'}
+              </button>
+            ) : null}
+            {caseDisplayLimitReached ? (
+              <p className="case-display-limit" role="status">
+                This view reached its 500-case in-memory display limit.
+              </p>
+            ) : null}
 
             <div className="evidence-boundary">
               <span aria-hidden="true">i</span>
