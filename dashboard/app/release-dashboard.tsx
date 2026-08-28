@@ -11,7 +11,10 @@ import {
   demoDashboardModel,
   demoModelForGate,
 } from '@/src/features/release-decisions/demo-release';
-import { useLiveRelease } from '@/src/features/release-decisions/use-live-release';
+import {
+  LIVE_CASE_DISPLAY_LIMIT,
+  useLiveRelease,
+} from '@/src/features/release-decisions/use-live-release';
 import { isLoopbackDashboardLocation } from '@/src/security/dashboard-origin';
 import { createRuntimeCredentialVault } from '@/src/security/runtime-credential-vault';
 
@@ -328,7 +331,16 @@ export default function ReleaseDashboard() {
       <ReleaseOverviewView
         busy={live.state.kind === 'loading'}
         caseChangeFilter={ready.caseChange}
+        caseDisplayLimitReached={
+          ready.casePage.next_cursor != null &&
+          ready.casePage.items.length >= LIVE_CASE_DISPLAY_LIMIT
+        }
+        caseLoadMoreAvailable={
+          ready.casePage.next_cursor != null &&
+          ready.casePage.items.length < LIVE_CASE_DISPLAY_LIMIT
+        }
         model={ready.model}
+        onLoadMoreCases={() => void live.loadMoreCases()}
         onSelectCaseChange={(caseChange) =>
           void live.selectCaseChange(caseChange)
         }

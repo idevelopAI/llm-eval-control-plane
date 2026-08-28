@@ -834,6 +834,36 @@ h1 {
   outline-offset: 2px;
 }
 
+.load-more-cases {
+  width: calc(100% - 32px);
+  min-height: 42px;
+  margin: 2px 16px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.load-more-cases:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.load-more-cases:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.case-display-limit {
+  margin: 2px 16px 14px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .scope-note strong {
   color: var(--ink);
   font-family: var(--mono);
