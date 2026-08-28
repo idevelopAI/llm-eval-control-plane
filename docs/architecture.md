@@ -3,8 +3,8 @@
 ## System objective
 
 LLM Eval Control Plane turns AI application behavior into reproducible evidence.
-The implemented Phase 7 slice adds privacy-bounded analytical reads and a local
-release-review dashboard to the project-bound durable control plane. It
+The implemented Phase 8 slice adds an owner-only production-hosted fixture to
+the privacy-bounded analytical reads and local release-review dashboard. It
 registers immutable dataset revisions, accepts idempotent run and comparison
 submissions, executes them through leased workers, and preserves append-only
 evidence in PostgreSQL. A versioned HTTP API exposes safe resource, job,
@@ -26,6 +26,7 @@ flowchart LR
     CLI --> ADAPTERS["Concrete adapters"]
     API["FastAPI composition root"] --> CONTROL["Control-plane service"]
     DASHBOARD["React release dashboard"] -->|loopback same-origin proxy| API
+    HOSTED["Owner-only hosted fixture"] -->|zero-request deterministic evidence| DASHBOARD
     API --> ANALYTICS["Bounded dashboard analytics"]
     API --> DB["PostgreSQL repository"]
     API --> AUTH["Project-bound authorizer"]
@@ -108,10 +109,14 @@ migrations/                # Alembic environment and versioned PostgreSQL DDL
 
 ```text
 dashboard/
+├── .openai/hosting.json    # non-secret Site identity; no runtime secrets
 ├── app/                    # source control, live controller, accessible views
+├── public/og.png           # 1200 by 630 social preview
+├── next.config.ts          # production response-header policy
 ├── src/api/                # generated client, strict validators, safe errors
 ├── src/features/           # requests and cross-response view-model checks
-├── src/security/           # loopback policy and volatile credential vault
+├── src/security/           # loopback policy, volatile vault, hosted headers
+├── src/site-metadata.ts    # canonical and social URLs on a trusted origin
 └── vite.config.ts          # explicit loopback-only development proxy
 ```
 
