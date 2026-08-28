@@ -114,6 +114,48 @@ effect that occurred before the worker observed the request. Real providers must
 use their own idempotency or deduplication controls when duplicate effects are
 unsafe.
 
+## Dashboard trust boundary
+
+The release dashboard is a content-free review client, not an evidence export.
+Its default fixture mode is deterministic and performs no request. Browser
+bearer entry is rendered only when the dashboard is served over plain HTTP on a
+loopback hostname. The Vite development proxy independently requires an
+explicit loopback HTTP origin with a port. Hosted builds must keep live mode
+disabled until a server-side session or backend-for-frontend boundary is
+implemented.
+
+Use only a `control-plane:read` credential. The raw bearer value is retained in
+one component-scoped closure and is never written to React state, local storage,
+session storage, cookies, URLs, logs, tracked environment files, or error text.
+The form resets after capture. Disconnect, unmount, and `401`/`403` responses
+abort active reads and drop the retained reference. A browser compromise while a
+live session is connected can still access that credential; the local-only
+origin restriction reduces exposure but is not a sandbox or substitute for
+short-lived, least-privilege credentials.
+
+The API returns `Cache-Control: no-store` on every response. The client also
+requests `no-store`, rejects redirects, suppresses referrers, and sends the
+credential only to its same origin. Runtime allowlists reject unknown response
+fields, malformed version identifiers, invalid counts, unordered quantiles, and
+unsafe request IDs. The view model additionally reconciles list/detail identity,
+decision and gate outcomes, aggregate membership, case arithmetic and change
+classes, distribution/run identity, and count relationships. Superseded reads
+are aborted and guarded by a generation counter so late completions cannot
+replace current evidence.
+
+Case projections contain only bounded IDs, slice labels, score status, numeric
+score, pass state, candidate-minus-baseline delta, and transition class. They do
+not contain prompts, expected values, target outputs, SQL, rows, provider
+responses, failure text, or exception details. Operational responses contain
+only fixed aggregate statistics and counts; quantiles below 20 measurements are
+suppressed. The browser retains at most 500 paged cases for one selected gate.
+
+Decision IDs, case IDs, slice labels, metric names, timestamps, digests, and
+aggregate values remain observable to an authorized reader and may themselves
+be sensitive. Do not use the dashboard on shared or untrusted machines, include
+it in public screenshots with private identifiers, or treat redaction as
+anonymization.
+
 ## Telemetry boundary
 
 The API and worker use isolated Prometheus registries and isolated OpenTelemetry

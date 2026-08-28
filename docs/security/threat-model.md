@@ -2,9 +2,10 @@
 
 ## Scope and security objective
 
-This document covers the FastAPI control plane, leased workers, PostgreSQL
-repository, deterministic evaluation paths, DataBridge adapter, local artifact
-store, Compose deployment, and continuous-integration supply chain.
+This document covers the FastAPI control plane, local release dashboard, leased
+workers, PostgreSQL repository, deterministic evaluation paths, DataBridge
+adapter, local artifact store, Compose deployment, and continuous-integration
+supply chain.
 
 The security objective is to preserve the confidentiality and integrity of
 evaluation inputs and evidence while ensuring that only authenticated,
@@ -28,6 +29,8 @@ control-plane instances.
 - PostgreSQL contents, named volumes, logical backups, and transaction logs.
 - API authentication material, provider credentials, database credentials, and
   private worker lease tokens.
+- The local dashboard's volatile read-only credential and redacted in-memory
+  decision evidence.
 - Idempotency keys and request digests used for durable submission coordination.
 - Source, dependency locks, container definitions, migrations, and release-gate
   policy.
@@ -58,6 +61,22 @@ Neither a token nor its digest may enter public output or telemetry.
 The application does not terminate TLS. Compose publishes the API only on
 `127.0.0.1`; any non-loopback deployment requires a trusted TLS-terminating
 gateway. Authentication over plaintext or an untrusted network is unsupported.
+
+### Local dashboard to API
+
+Fixture mode makes no request. Live browser access is a loopback-only
+development boundary: both the rendered credential form and the proxy target
+require HTTP loopback. The credential is scoped to reads, held in a
+component-local closure, sent only to the dashboard origin, and cleared on
+disconnect or authorization failure. Redirects are rejected and responses are
+not cached. Hosted live browser access is unsupported.
+
+Every successful response is checked against a strict runtime allowlist and then
+reconciled across list, detail, case, and distribution documents. Aborted and
+superseded requests cannot update the selected evidence. Redacted case IDs,
+slices, metrics, timestamps, digests, and aggregate values are still sensitive
+metadata. A script executing in the connected local page could read the
+credential; loopback restrictions do not protect a compromised browser or host.
 
 ### API and workers to PostgreSQL
 
@@ -117,6 +136,7 @@ needed to upload code-scanning results.
 | Cross-project access | One deployment is one project; deployment, database, and secrets are isolated as a unit. The exact `X-Project-ID` and required scope are evaluated before resource access. | The header is not a row-level tenant boundary. Sharing a database across projects violates the model. |
 | Request smuggling or parser ambiguity | Strict `application/json`, bounded body buffering, duplicate-key rejection, invalid UTF-8 rejection, nesting limits, and versioned safe errors. | An upstream proxy with conflicting HTTP parsing can still introduce ambiguity; use a maintained gateway with request normalization. |
 | Sensitive API disclosure | Versioned response contracts expose bounded summaries. OpenAPI and sentinel tests reject payloads, keys, request digests, worker identities, lease tokens, SQL, rows, outputs, and exception text. | Identifiers, timestamps, metric names, aggregate values, and gate outcomes remain observable to authorized readers. |
+| Dashboard credential or evidence disclosure | Fixture mode is request-free; live bearer entry and proxying are HTTP-loopback-only; the credential is volatile, read-scoped, same-origin, never rendered or persisted, and cleared on failure. Strict response allowlists, no-store, and bounded paging reduce retained evidence. | A compromised local browser, extension, or host can access the connected session. Redacted identifiers and metrics remain sensitive. |
 | Job duplication or stale publication | Semantic idempotency, database-time leases, heartbeats, fenced attempts, bounded retry, and transactional immutable publication. | External target effects can repeat after lease loss. Cancellation cannot undo an effect already performed. |
 | Evidence tampering | Canonical documents, content digests, create-once evidence rows, schema validation, transaction fencing, and read-time integrity checks. | A database administrator can alter both data and digest. Independent signed exports are not yet implemented. |
 | SQL injection or database mutation | SQLAlchemy parameterization for control-plane data; DataBridge parsing, object/function allowlists, restricted role, explicit read-only transactions, limits, and rollback. | Database engine vulnerabilities and errors in reviewed dynamic identifier construction remain possible; least-privilege roles are mandatory. |
@@ -164,6 +184,8 @@ Diagnostic verbosity must not weaken the allowlist.
 ## Explicit residual risks
 
 - TLS termination and certificate lifecycle are external to the application.
+- Hosted live dashboard authentication and server-side sessions are not
+  implemented; public builds must remain fixture-only.
 - Distributed rate limiting, per-principal quotas, and abuse detection are not
   implemented by this service.
 - The supported isolation unit is one deployment and one project, not rows in a
@@ -178,9 +200,9 @@ Diagnostic verbosity must not weaken the allowlist.
 
 ## Review triggers
 
-Review this model when adding a public deployment, tenant sharing, a provider
-integration, a new credential type, telemetry attributes, arbitrary plugins,
-file upload, remote artifact storage, a queue other than PostgreSQL, a new
-scanner or Action, or a different backup architecture. Every new boundary must
-identify assets, failure behavior, privacy tests, and recovery steps before it
-is enabled.
+Review this model when adding hosted live dashboard access, a public API
+deployment, tenant sharing, a provider integration, a new credential type,
+telemetry attributes, arbitrary plugins, file upload, remote artifact storage,
+a queue other than PostgreSQL, a new scanner or Action, or a different backup
+architecture. Every new boundary must identify assets, failure behavior,
+privacy tests, and recovery steps before it is enabled.
