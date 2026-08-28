@@ -187,6 +187,53 @@ a:focus-visible,
   font-size: 12px;
 }
 
+.decision-picker {
+  width: min(1440px, calc(100% - 32px));
+  margin: 14px auto 0;
+  padding: 14px 18px;
+  display: grid;
+  grid-template-columns: auto minmax(260px, 1fr) auto;
+  align-items: center;
+  gap: 10px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: var(--shadow-sm);
+}
+
+.decision-picker label {
+  color: var(--ink-strong);
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.decision-picker select {
+  min-width: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: white;
+  color: var(--ink-strong);
+  font: inherit;
+  padding: 9px 34px 9px 11px;
+}
+
+.decision-picker select:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.22);
+  outline-offset: 2px;
+}
+
+.decision-picker select:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.decision-picker small {
+  color: var(--ink-muted);
+  font-size: 11px;
+}
+
 .inline-live-error {
   width: min(1540px, calc(100% - 32px));
   margin: 14px auto 0;
@@ -1099,6 +1146,10 @@ h1 {
   .source-control {
     flex-wrap: wrap;
     justify-content: flex-start;
+  }
+
+  .decision-picker {
+    grid-template-columns: 1fr;
   }
 
   .masthead {
