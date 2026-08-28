@@ -12,11 +12,11 @@ A deterministic-first control plane for evaluating AI application behavior,
 preserving case-level evidence, and making quality, safety, latency, and usage
 changes measurable before release.
 
-> **Status:** Phase 7 privacy-bounded release analytics and a local live review
-> dashboard. The FastAPI service exposes redacted case transitions and fixed
-> aggregate distributions for immutable decisions. The React dashboard validates
-> every response at runtime, keeps read-only credentials in volatile memory, and
-> permits bearer entry only on an HTTP loopback origin. Project authorization,
+> **Status:** Phase 8 owner-only hosted fixture and privacy-bounded release
+> analytics. The production-built Site demonstrates deterministic release
+> evidence without an API request, emits hardened response headers, and keeps
+> its canonical and social metadata on one trusted origin. Local live review
+> remains loopback-only with volatile credentials. Project authorization,
 > privacy-safe observability, fenced PostgreSQL recovery, and the DataBridge
 > evaluation remain available.
 
@@ -40,8 +40,11 @@ never enter tracked configuration or browser persistence, and a hosted origin
 cannot render the local bearer-entry form.
 
 See the [dashboard operator guide](dashboard/README.md) for its trust boundary,
-local workflow, and validation commands. Hosted live access is deliberately
-deferred until a server-side session boundary is implemented.
+local workflow, and validation commands. The hosted fixture is deployed with
+owner-only access, restrictive production headers, private non-cacheable HTML,
+and search indexing disabled. Hosted live access remains disabled until a
+stateless, same-origin server boundary can inject a fixed read-only credential
+and project assertion without exposing either value to browser code.
 
 ## Durable HTTP control plane
 
@@ -585,6 +588,7 @@ uv run llm-eval validate examples/evaluation-spec.json
 - [Architecture](docs/architecture.md)
 - [Domain model](docs/domain-model.md)
 - [Architecture decisions](docs/adr/)
+- [Hosted fixture decision](docs/adr/0010-owner-only-hosted-fixture.md)
 - [Threat model](docs/security/threat-model.md)
 - [Incident and recovery runbook](docs/operations/recovery.md)
 
