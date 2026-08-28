@@ -4,6 +4,7 @@
 [![Release Gate](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/release-gate.yml/badge.svg)](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/release-gate.yml)
 [![DataBridge Gate](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/databridge-gate.yml/badge.svg)](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/databridge-gate.yml)
 [![Control Plane API Gate](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/control-plane-api-gate.yml/badge.svg)](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/control-plane-api-gate.yml)
+[![Dashboard Gate](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/dashboard-gate.yml/badge.svg)](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/dashboard-gate.yml)
 [![Worker Recovery Gate](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/worker-recovery-gate.yml/badge.svg)](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/worker-recovery-gate.yml)
 [![Security Gate](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/security-gate.yml/badge.svg)](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/security-gate.yml)
 
@@ -33,8 +34,10 @@ _Deterministic fixture mode: no credential or API request is used._
 Raw evaluation content is outside the dashboard contract. Case reads expose
 only IDs, slice labels, score status, pass state, numeric score, delta, and change
 class. Operational quantiles are withheld below the minimum aggregate size.
-Credentials never enter tracked configuration or browser persistence, and a
-hosted origin cannot render the local bearer-entry form.
+Case and distribution reads recover independently after non-authorization
+failures; authorization failure clears the whole volatile session. Credentials
+never enter tracked configuration or browser persistence, and a hosted origin
+cannot render the local bearer-entry form.
 
 See the [dashboard operator guide](dashboard/README.md) for its trust boundary,
 local workflow, and validation commands. Hosted live access is deliberately
