@@ -22,10 +22,17 @@ export const LIVE_CASE_DISPLAY_LIMIT = 500;
 
 type ReadyRelease = Readonly<{
   caseChange: ReleaseCaseChangeFilter;
-  casePage: ReleaseDecisionCasePage;
+  caseIssue: Readonly<{ message: string; requestId: string | null }> | null;
+  casePage: ReleaseDecisionCasePage | null;
   decision: ReleaseDecision;
   decisions: ReleaseDecisionPage;
-  distributions: ReleaseDecisionDistributions;
+  distributionIssue: Readonly<{
+    message: string;
+    requestId: string | null;
+  }> | null;
+  distributions: ReleaseDecisionDistributions | null;
+  gateMetric: string;
+  gateSlice: string | null;
   model: ReleaseDashboardModel;
   projectId: string;
 }>;
@@ -60,6 +67,13 @@ function safeError(error: unknown): { message: string; requestId: string | null 
     message: 'Live release evidence could not be loaded.',
     requestId: null,
   };
+}
+
+function authenticationFailure(error: unknown): boolean {
+  return (
+    error instanceof ControlPlaneApiError &&
+    (error.status === 401 || error.status === 403)
+  );
 }
 
 function listItemMatchesDecision(
@@ -146,7 +160,24 @@ export function useLiveRelease({
       const scopedQuery = gateSlice == null ? {} : { gate_slice: gateSlice };
       const changeQuery = caseChange === 'all' ? {} : { change: caseChange };
       try {
-        const [caseResult, distributionResult] = await Promise.all([
+        let notifyAuthenticationFailure: (error: unknown) => void = () => undefined;
+        const authenticationSignal = new Promise<unknown>((resolve) => {
+          notifyAuthenticationFailure = resolve;
+        });
+        const settle = async <T,>(
+          operation: Promise<T>,
+        ): Promise<PromiseSettledResult<T>> => {
+          try {
+            return { status: 'fulfilled', value: await operation };
+          } catch (error) {
+            if (authenticationFailure(error)) {
+              controller.abort();
+              notifyAuthenticationFailure(error);
+            }
+            return { reason: error, status: 'rejected' };
+          }
+        };
+        const caseRequest = settle(
           client.listReleaseDecisionCases(
             decision.decision_id,
             {
@@ -157,27 +188,73 @@ export function useLiveRelease({
             },
             controller.signal,
           ),
+        );
+        const distributionRequest = settle(
           client.getReleaseDecisionDistributions(
             decision.decision_id,
             { metric: gateMetric, ...scopedQuery },
             controller.signal,
           ),
+        );
+        const outcome = await Promise.race([
+          Promise.all([caseRequest, distributionRequest]).then((results) => ({
+            kind: 'complete' as const,
+            results,
+          })),
+          authenticationSignal.then((error) => ({
+            error,
+            kind: 'authentication' as const,
+          })),
         ]);
+        if (generationRef.current !== generation) return;
+        if (outcome.kind === 'authentication') {
+          readyRef.current = null;
+          onAuthenticationFailure();
+          setState({ kind: 'error', ...safeError(outcome.error) });
+          return;
+        }
         if (!currentRequest(generation, controller)) return;
-        if (!casePageMatchesFilter(caseResult.data, caseChange)) {
+        const [caseResult, distributionResult] = outcome.results;
+        const casePage =
+          caseResult.status === 'fulfilled' ? caseResult.value.data : null;
+        const distributions =
+          distributionResult.status === 'fulfilled'
+            ? distributionResult.value.data
+            : null;
+        if (casePage && !casePageMatchesFilter(casePage, caseChange)) {
           throw new Error('Release case projection is inconsistent');
+        }
+        if (!casePage && !distributions) {
+          const failure =
+            caseResult.status === 'rejected'
+              ? caseResult.reason
+              : distributionResult.status === 'rejected'
+                ? distributionResult.reason
+                : null;
+          throw failure;
         }
         const value = {
           caseChange,
-          casePage: caseResult.data,
+          caseIssue:
+            caseResult.status === 'rejected'
+              ? safeError(caseResult.reason)
+              : null,
+          casePage,
           decision,
           decisions,
-          distributions: distributionResult.data,
+          distributionIssue:
+            distributionResult.status === 'rejected'
+              ? safeError(distributionResult.reason)
+              : null,
+          distributions,
+          gateMetric,
+          gateSlice,
           model: buildReleaseDashboardModel({
-            cases: caseResult.data,
+            cases: casePage,
             decision,
-            distributions: distributionResult.data,
+            distributions,
             projectId,
+            selectedGate: { metric: gateMetric, slice: gateSlice },
           }),
           projectId,
         } satisfies ReadyRelease;
@@ -186,16 +263,14 @@ export function useLiveRelease({
       } catch (error) {
         if (!currentRequest(generation, controller) || abortError(error)) return;
         controller.abort();
-        const authenticationFailure =
-          error instanceof ControlPlaneApiError &&
-          (error.status === 401 || error.status === 403);
-        if (authenticationFailure) {
+        const isAuthenticationFailure = authenticationFailure(error);
+        if (isAuthenticationFailure) {
           readyRef.current = null;
           onAuthenticationFailure();
         }
         setState({
           kind: 'error',
-          previous: authenticationFailure ? undefined : previous,
+          previous: isAuthenticationFailure ? undefined : previous,
           ...safeError(error),
         });
       }
@@ -297,16 +372,14 @@ export function useLiveRelease({
       } catch (error) {
         if (!currentRequest(generation, controller) || abortError(error)) return;
         controller.abort();
-        const authenticationFailure =
-          error instanceof ControlPlaneApiError &&
-          (error.status === 401 || error.status === 403);
-        if (authenticationFailure) {
+        const isAuthenticationFailure = authenticationFailure(error);
+        if (isAuthenticationFailure) {
           readyRef.current = null;
           onAuthenticationFailure();
         }
         setState({
           kind: 'error',
-          previous: authenticationFailure ? undefined : previous,
+          previous: isAuthenticationFailure ? undefined : previous,
           ...safeError(error),
         });
       }
@@ -349,12 +422,12 @@ export function useLiveRelease({
     [loadEvidence],
   );
 
-  const selectCaseChange = useCallback(
+  const loadCaseEvidence = useCallback(
     async (caseChange: ReleaseCaseChangeFilter) => {
       const previous = readyRef.current;
-      if (!previous || previous.caseChange === caseChange) return;
-      const metric = previous.model.distributions.score.metric;
-      const gateSlice = previous.model.distributions.score.gate_slice ?? null;
+      if (!previous) return;
+      const metric = previous.gateMetric;
+      const gateSlice = previous.gateSlice;
       const scopedQuery = gateSlice == null ? {} : { gate_slice: gateSlice };
       const changeQuery = caseChange === 'all' ? {} : { change: caseChange };
       const { controller, generation } = beginRequest();
@@ -372,12 +445,14 @@ export function useLiveRelease({
         const value = {
           ...previous,
           caseChange,
+          caseIssue: null,
           casePage: cases.data,
           model: buildReleaseDashboardModel({
             cases: cases.data,
             decision: previous.decision,
             distributions: previous.distributions,
             projectId: previous.projectId,
+            selectedGate: { metric, slice: gateSlice },
           }),
         } satisfies ReadyRelease;
         readyRef.current = value;
@@ -385,41 +460,141 @@ export function useLiveRelease({
       } catch (error) {
         if (!currentRequest(generation, controller) || abortError(error)) return;
         controller.abort();
-        const authenticationFailure =
-          error instanceof ControlPlaneApiError &&
-          (error.status === 401 || error.status === 403);
-        if (authenticationFailure) {
+        const isAuthenticationFailure = authenticationFailure(error);
+        if (isAuthenticationFailure) {
           readyRef.current = null;
           onAuthenticationFailure();
+          setState({ kind: 'error', ...safeError(error) });
+          return;
         }
-        setState({
-          kind: 'error',
-          previous: authenticationFailure ? undefined : previous,
-          ...safeError(error),
-        });
+        if (!previous.distributions) {
+          setState({ kind: 'error', previous, ...safeError(error) });
+          return;
+        }
+        const value = {
+          ...previous,
+          caseChange,
+          caseIssue: safeError(error),
+          casePage: null,
+          model: buildReleaseDashboardModel({
+            cases: null,
+            decision: previous.decision,
+            distributions: previous.distributions,
+            projectId: previous.projectId,
+            selectedGate: { metric, slice: gateSlice },
+          }),
+        } satisfies ReadyRelease;
+        readyRef.current = value;
+        setState({ kind: 'ready', value });
       }
     },
     [beginRequest, client, currentRequest, onAuthenticationFailure],
   );
 
+  const selectCaseChange = useCallback(
+    (caseChange: ReleaseCaseChangeFilter) => {
+      const previous = readyRef.current;
+      if (!previous || previous.caseChange === caseChange) return;
+      void loadCaseEvidence(caseChange);
+    },
+    [loadCaseEvidence],
+  );
+
+  const retryCaseEvidence = useCallback(() => {
+    const previous = readyRef.current;
+    if (!previous) return;
+    void loadCaseEvidence(previous.caseChange);
+  }, [loadCaseEvidence]);
+
+  const retryDistributionEvidence = useCallback(async () => {
+    const previous = readyRef.current;
+    if (!previous) return;
+    const scopedQuery =
+      previous.gateSlice == null ? {} : { gate_slice: previous.gateSlice };
+    const { controller, generation } = beginRequest();
+    setState({ kind: 'loading', previous, stage: 'evidence' });
+    try {
+      const distributions = await client.getReleaseDecisionDistributions(
+        previous.decision.decision_id,
+        { metric: previous.gateMetric, ...scopedQuery },
+        controller.signal,
+      );
+      if (!currentRequest(generation, controller)) return;
+      const value = {
+        ...previous,
+        distributionIssue: null,
+        distributions: distributions.data,
+        model: buildReleaseDashboardModel({
+          cases: previous.casePage,
+          decision: previous.decision,
+          distributions: distributions.data,
+          projectId: previous.projectId,
+          selectedGate: {
+            metric: previous.gateMetric,
+            slice: previous.gateSlice,
+          },
+        }),
+      } satisfies ReadyRelease;
+      readyRef.current = value;
+      setState({ kind: 'ready', value });
+    } catch (error) {
+      if (!currentRequest(generation, controller) || abortError(error)) return;
+      controller.abort();
+      if (authenticationFailure(error)) {
+        readyRef.current = null;
+        onAuthenticationFailure();
+        setState({ kind: 'error', ...safeError(error) });
+        return;
+      }
+      if (!previous.casePage) {
+        const value = {
+          ...previous,
+          distributionIssue: safeError(error),
+        } satisfies ReadyRelease;
+        readyRef.current = value;
+        setState({ kind: 'ready', value });
+        return;
+      }
+      const value = {
+        ...previous,
+        distributionIssue: safeError(error),
+        distributions: null,
+        model: buildReleaseDashboardModel({
+          cases: previous.casePage,
+          decision: previous.decision,
+          distributions: null,
+          projectId: previous.projectId,
+          selectedGate: {
+            metric: previous.gateMetric,
+            slice: previous.gateSlice,
+          },
+        }),
+      } satisfies ReadyRelease;
+      readyRef.current = value;
+      setState({ kind: 'ready', value });
+    }
+  }, [beginRequest, client, currentRequest, onAuthenticationFailure]);
+
   const loadMoreCases = useCallback(async () => {
     const previous = readyRef.current;
-    const cursor = previous?.casePage.next_cursor;
+    const previousCasePage = previous?.casePage;
+    const cursor = previousCasePage?.next_cursor;
     if (
       !previous ||
+      !previousCasePage ||
       !cursor ||
-      previous.casePage.items.length >= LIVE_CASE_DISPLAY_LIMIT
+      previousCasePage.items.length >= LIVE_CASE_DISPLAY_LIMIT
     ) {
       return;
     }
-    const metric = previous.distributions.score.metric;
-    const gateSlice = previous.distributions.score.gate_slice ?? null;
+    const metric = previous.gateMetric;
+    const gateSlice = previous.gateSlice;
     const scopedQuery = gateSlice == null ? {} : { gate_slice: gateSlice };
     const changeQuery =
       previous.caseChange === 'all' ? {} : { change: previous.caseChange };
     const limit = Math.min(
       100,
-      LIVE_CASE_DISPLAY_LIMIT - previous.casePage.items.length,
+      LIVE_CASE_DISPLAY_LIMIT - previousCasePage.items.length,
     );
     const { controller, generation } = beginRequest();
     setState({ kind: 'loading', previous, stage: 'cases' });
@@ -431,7 +606,7 @@ export function useLiveRelease({
       );
       if (!currentRequest(generation, controller)) return;
       const existingIds = new Set(
-        previous.casePage.items.map((item) => item.case_id),
+        previousCasePage.items.map((item) => item.case_id),
       );
       if (
         !casePageMatchesFilter(cases.data, previous.caseChange) ||
@@ -442,16 +617,18 @@ export function useLiveRelease({
       }
       const casePage = {
         ...cases.data,
-        items: [...previous.casePage.items, ...cases.data.items],
+        items: [...previousCasePage.items, ...cases.data.items],
       } satisfies ReleaseDecisionCasePage;
       const value = {
         ...previous,
+        caseIssue: null,
         casePage,
         model: buildReleaseDashboardModel({
           cases: casePage,
           decision: previous.decision,
           distributions: previous.distributions,
           projectId: previous.projectId,
+          selectedGate: { metric, slice: gateSlice },
         }),
       } satisfies ReadyRelease;
       readyRef.current = value;
@@ -459,16 +636,14 @@ export function useLiveRelease({
     } catch (error) {
       if (!currentRequest(generation, controller) || abortError(error)) return;
       controller.abort();
-      const authenticationFailure =
-        error instanceof ControlPlaneApiError &&
-        (error.status === 401 || error.status === 403);
-      if (authenticationFailure) {
+      const isAuthenticationFailure = authenticationFailure(error);
+      if (isAuthenticationFailure) {
         readyRef.current = null;
         onAuthenticationFailure();
       }
       setState({
         kind: 'error',
-        previous: authenticationFailure ? undefined : previous,
+        previous: isAuthenticationFailure ? undefined : previous,
         ...safeError(error),
       });
     }
@@ -494,6 +669,8 @@ export function useLiveRelease({
     connect,
     disconnect,
     loadMoreCases,
+    retryCaseEvidence,
+    retryDistributionEvidence,
     selectCaseChange,
     selectDecision,
     selectGate,

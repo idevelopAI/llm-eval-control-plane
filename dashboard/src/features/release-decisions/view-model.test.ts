@@ -29,12 +29,49 @@ describe('buildReleaseDashboardModel', () => {
       id: '["quality.exact_match","language/de"]',
       label: 'Exact match · de',
     });
-    expect(model.cases[0]).toMatchObject({
+    expect(model.cases?.[0]).toMatchObject({
       change: 'newly_failing',
       gateIds: ['["quality.exact_match","language/de"]'],
       id: 'case-001',
     });
     expect(model.casePageTruncated).toBe(true);
+  });
+
+  it('builds honest partial models from one validated evidence projection', () => {
+    const distributionOnly = buildReleaseDashboardModel({
+      cases: null,
+      decision: releaseDecision,
+      distributions: releaseDistributions,
+      projectId: 'project-alpha',
+    });
+    expect(distributionOnly.cases).toBeNull();
+    expect(distributionOnly.distributions).toBe(releaseDistributions);
+
+    const casesOnly = buildReleaseDashboardModel({
+      cases: releaseCases,
+      decision: releaseDecision,
+      distributions: null,
+      projectId: 'project-alpha',
+      selectedGate: {
+        metric: 'quality.exact_match',
+        slice: 'language/de',
+      },
+    });
+    expect(casesOnly.cases?.[0]?.id).toBe('case-001');
+    expect(casesOnly.distributions).toBeNull();
+
+    expect(() =>
+      buildReleaseDashboardModel({
+        cases: null,
+        decision: releaseDecision,
+        distributions: null,
+        projectId: 'project-alpha',
+        selectedGate: {
+          metric: 'quality.exact_match',
+          slice: 'language/de',
+        },
+      }),
+    ).toThrow('Release dashboard evidence is inconsistent.');
   });
 
   it('rejects cross-decision, cross-gate, and cross-run evidence safely', () => {

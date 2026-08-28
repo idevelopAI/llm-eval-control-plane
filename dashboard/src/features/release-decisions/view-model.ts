@@ -48,8 +48,8 @@ export type ReleaseView = Readonly<{
 
 export type ReleaseDashboardModel = Readonly<{
   casePageTruncated: boolean;
-  cases: readonly CaseView[];
-  distributions: ReleaseDecisionDistributions;
+  cases: readonly CaseView[] | null;
+  distributions: ReleaseDecisionDistributions | null;
   gates: readonly GateView[];
   release: ReleaseView;
   selectedGateId: string;
@@ -257,6 +257,8 @@ function distributionMatchesGate(
     distributions.candidate.total_units.attempted,
   ];
   return (
+    distributions.score.metric === gate.metric &&
+    (distributions.score.gate_slice ?? null) === (gate.slice ?? null) &&
     baseline.attempted === aggregate.baseline.attempted &&
     baseline.scored === aggregate.baseline.scored &&
     baseline.skipped === aggregate.baseline.skipped &&
@@ -277,11 +279,13 @@ export function buildReleaseDashboardModel({
   decision,
   distributions,
   projectId,
+  selectedGate: requestedGate,
 }: {
-  cases: ReleaseDecisionCasePage;
+  cases: ReleaseDecisionCasePage | null;
   decision: ReleaseDecision;
-  distributions: ReleaseDecisionDistributions;
+  distributions: ReleaseDecisionDistributions | null;
   projectId: string;
+  selectedGate?: Readonly<{ metric: string; slice: string | null }>;
 }): ReleaseDashboardModel {
   const uniqueGateIds = new Set(
     decision.gates.map((gate) => gateId(gate.metric, gate.slice)),
@@ -293,6 +297,7 @@ export function buildReleaseDashboardModel({
     : 'passed';
   if (
     decision.gates.length === 0 ||
+    (cases == null && distributions == null) ||
     uniqueGateIds.size !== decision.gates.length ||
     decision.status !== expectedDecisionStatus ||
     decision.aggregates.some((aggregate) => !aggregateIsInternallyConsistent(aggregate)) ||
@@ -303,29 +308,34 @@ export function buildReleaseDashboardModel({
           aggregatesMatch(gate.aggregate, aggregate),
         ),
     ) ||
-    cases.decision_id !== decision.decision_id ||
-    distributions.decision_id !== decision.decision_id ||
-    distributions.baseline.run_id !== decision.baseline_run_id ||
-    distributions.candidate.run_id !== decision.candidate_run_id ||
-    distributions.baseline.execution_mode !== decision.execution_mode ||
-    distributions.candidate.execution_mode !== decision.execution_mode ||
-    cases.items.length > distributions.score.delta.attempted
+    (cases != null && cases.decision_id !== decision.decision_id) ||
+    (distributions != null &&
+      (distributions.decision_id !== decision.decision_id ||
+        distributions.baseline.run_id !== decision.baseline_run_id ||
+        distributions.candidate.run_id !== decision.candidate_run_id ||
+        distributions.baseline.execution_mode !== decision.execution_mode ||
+        distributions.candidate.execution_mode !== decision.execution_mode ||
+        (cases != null &&
+          cases.items.length > distributions.score.delta.attempted)))
   ) {
     return inconsistentEvidence();
   }
 
-  const selectedMetric = distributions.score.metric;
-  const selectedSlice = distributions.score.gate_slice ?? null;
+  const selectedMetric = requestedGate?.metric ?? distributions?.score.metric;
+  const selectedSlice = requestedGate
+    ? requestedGate.slice
+    : (distributions?.score.gate_slice ?? null);
+  if (!selectedMetric) return inconsistentEvidence();
   const selectedGate = decision.gates.find(
     (gate) =>
       gate.metric === selectedMetric && (gate.slice ?? null) === selectedSlice,
   );
   if (!selectedGate) return inconsistentEvidence();
-  if (!distributionMatchesGate(distributions, selectedGate)) {
+  if (distributions && !distributionMatchesGate(distributions, selectedGate)) {
     return inconsistentEvidence();
   }
   if (
-    cases.items.some(
+    cases?.items.some(
       (item) =>
         item.metric !== selectedMetric ||
         (item.gate_slice ?? null) !== selectedSlice ||
@@ -336,19 +346,20 @@ export function buildReleaseDashboardModel({
   }
 
   return {
-    casePageTruncated: cases.next_cursor != null,
-    cases: cases.items.map((item) => ({
-      baselinePassed: item.baseline_passed ?? null,
-      baselineValue: item.baseline.value ?? null,
-      candidatePassed: item.candidate_passed ?? null,
-      candidateValue: item.candidate.value ?? null,
-      change: item.change,
-      delta: item.delta ?? null,
-      gateIds: [gateId(selectedMetric, selectedSlice)],
-      id: item.case_id,
-      metric: item.metric,
-      slices: item.slices,
-    })),
+    casePageTruncated: cases?.next_cursor != null,
+    cases:
+      cases?.items.map((item) => ({
+        baselinePassed: item.baseline_passed ?? null,
+        baselineValue: item.baseline.value ?? null,
+        candidatePassed: item.candidate_passed ?? null,
+        candidateValue: item.candidate.value ?? null,
+        change: item.change,
+        delta: item.delta ?? null,
+        gateIds: [gateId(selectedMetric, selectedSlice)],
+        id: item.case_id,
+        metric: item.metric,
+        slices: item.slices,
+      })) ?? null,
     distributions,
     gates: decision.gates
       .map((gate, index) => ({
