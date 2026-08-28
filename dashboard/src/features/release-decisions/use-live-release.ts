@@ -5,7 +5,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ControlPlaneApiError,
   type ControlPlaneClient,
+  type ReleaseCaseChange,
   type ReleaseDecision,
+  type ReleaseDecisionCasePage,
+  type ReleaseDecisionDistributions,
   type ReleaseDecisionPage,
 } from '../../api/client';
 import {
@@ -14,9 +17,14 @@ import {
   type ReleaseDashboardModel,
 } from './view-model';
 
+export type ReleaseCaseChangeFilter = 'all' | ReleaseCaseChange;
+
 type ReadyRelease = Readonly<{
+  caseChange: ReleaseCaseChangeFilter;
+  casePage: ReleaseDecisionCasePage;
   decision: ReleaseDecision;
   decisions: ReleaseDecisionPage;
+  distributions: ReleaseDecisionDistributions;
   model: ReleaseDashboardModel;
   projectId: string;
 }>;
@@ -78,6 +86,16 @@ function decisionPageIsConsistent(page: ReleaseDecisionPage): boolean {
   });
 }
 
+function casePageMatchesFilter(
+  page: ReleaseDecisionCasePage,
+  change: ReleaseCaseChangeFilter,
+): boolean {
+  return (
+    new Set(page.items.map((item) => item.case_id)).size === page.items.length &&
+    (change === 'all' || page.items.every((item) => item.change === change))
+  );
+}
+
 export function useLiveRelease({
   client,
   onAuthenticationFailure,
@@ -110,6 +128,7 @@ export function useLiveRelease({
       decisions,
       gateMetric,
       gateSlice,
+      caseChange,
       previous,
       projectId,
     }: {
@@ -117,17 +136,24 @@ export function useLiveRelease({
       decisions: ReleaseDecisionPage;
       gateMetric: string;
       gateSlice: string | null;
+      caseChange: ReleaseCaseChangeFilter;
       previous?: ReadyRelease;
       projectId: string;
     }) => {
       const { controller, generation } = beginRequest();
       setState({ kind: 'loading', previous, stage: 'evidence' });
       const scopedQuery = gateSlice == null ? {} : { gate_slice: gateSlice };
+      const changeQuery = caseChange === 'all' ? {} : { change: caseChange };
       try {
         const [caseResult, distributionResult] = await Promise.all([
           client.listReleaseDecisionCases(
             decision.decision_id,
-            { limit: 100, metric: gateMetric, ...scopedQuery },
+            {
+              limit: 100,
+              metric: gateMetric,
+              ...scopedQuery,
+              ...changeQuery,
+            },
             controller.signal,
           ),
           client.getReleaseDecisionDistributions(
@@ -137,9 +163,15 @@ export function useLiveRelease({
           ),
         ]);
         if (!currentRequest(generation, controller)) return;
+        if (!casePageMatchesFilter(caseResult.data, caseChange)) {
+          throw new Error('Release case projection is inconsistent');
+        }
         const value = {
+          caseChange,
+          casePage: caseResult.data,
           decision,
           decisions,
+          distributions: distributionResult.data,
           model: buildReleaseDashboardModel({
             cases: caseResult.data,
             decision,
@@ -206,6 +238,7 @@ export function useLiveRelease({
           decisions: decisions.data,
           gateMetric: gate.metric,
           gateSlice: gate.slice ?? null,
+          caseChange: 'all',
           projectId,
         });
       } catch (error) {
@@ -256,6 +289,7 @@ export function useLiveRelease({
           decisions: previous.decisions,
           gateMetric: gate.metric,
           gateSlice: gate.slice ?? null,
+          caseChange: 'all',
           previous,
           projectId: previous.projectId,
         });
@@ -306,11 +340,65 @@ export function useLiveRelease({
         decisions: previous.decisions,
         gateMetric: gate.metric,
         gateSlice: gate.slice ?? null,
+        caseChange: previous.caseChange,
         previous,
         projectId: previous.projectId,
       });
     },
     [loadEvidence],
+  );
+
+  const selectCaseChange = useCallback(
+    async (caseChange: ReleaseCaseChangeFilter) => {
+      const previous = readyRef.current;
+      if (!previous || previous.caseChange === caseChange) return;
+      const metric = previous.model.distributions.score.metric;
+      const gateSlice = previous.model.distributions.score.gate_slice ?? null;
+      const scopedQuery = gateSlice == null ? {} : { gate_slice: gateSlice };
+      const changeQuery = caseChange === 'all' ? {} : { change: caseChange };
+      const { controller, generation } = beginRequest();
+      setState({ kind: 'loading', previous, stage: 'evidence' });
+      try {
+        const cases = await client.listReleaseDecisionCases(
+          previous.decision.decision_id,
+          { limit: 100, metric, ...scopedQuery, ...changeQuery },
+          controller.signal,
+        );
+        if (!currentRequest(generation, controller)) return;
+        if (!casePageMatchesFilter(cases.data, caseChange)) {
+          throw new Error('Release case projection is inconsistent');
+        }
+        const value = {
+          ...previous,
+          caseChange,
+          casePage: cases.data,
+          model: buildReleaseDashboardModel({
+            cases: cases.data,
+            decision: previous.decision,
+            distributions: previous.distributions,
+            projectId: previous.projectId,
+          }),
+        } satisfies ReadyRelease;
+        readyRef.current = value;
+        setState({ kind: 'ready', value });
+      } catch (error) {
+        if (!currentRequest(generation, controller) || abortError(error)) return;
+        controller.abort();
+        const authenticationFailure =
+          error instanceof ControlPlaneApiError &&
+          (error.status === 401 || error.status === 403);
+        if (authenticationFailure) {
+          readyRef.current = null;
+          onAuthenticationFailure();
+        }
+        setState({
+          kind: 'error',
+          previous: authenticationFailure ? undefined : previous,
+          ...safeError(error),
+        });
+      }
+    },
+    [beginRequest, client, currentRequest, onAuthenticationFailure],
   );
 
   const disconnect = useCallback(() => {
@@ -329,5 +417,12 @@ export function useLiveRelease({
     [],
   );
 
-  return { connect, disconnect, selectDecision, selectGate, state };
+  return {
+    connect,
+    disconnect,
+    selectCaseChange,
+    selectDecision,
+    selectGate,
+    state,
+  };
 }

@@ -327,7 +327,11 @@ export default function ReleaseDashboard() {
       />
       <ReleaseOverviewView
         busy={live.state.kind === 'loading'}
+        caseChangeFilter={ready.caseChange}
         model={ready.model}
+        onSelectCaseChange={(caseChange) =>
+          void live.selectCaseChange(caseChange)
+        }
         onSelectGate={live.selectGate}
         sourceLabel="Live API · redacted response contracts · credential held in memory"
       />
