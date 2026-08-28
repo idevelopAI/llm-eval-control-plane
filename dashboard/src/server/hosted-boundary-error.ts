@@ -3,6 +3,7 @@ export type HostedBoundaryErrorCode =
   | 'invalid_request'
   | 'method_not_allowed'
   | 'permission_denied'
+  | 'request_not_allowed'
   | 'service_configuration_invalid'
   | 'unexpected_upstream_response'
   | 'upstream_unavailable';
@@ -33,6 +34,11 @@ const ERROR_SPECS: Readonly<Record<HostedBoundaryErrorCode, ErrorSpec>> =
     permission_denied: {
       headers: {},
       message: 'Permission is not granted.',
+      status: 403,
+    },
+    request_not_allowed: {
+      headers: {},
+      message: 'The hosted request is not allowed.',
       status: 403,
     },
     service_configuration_invalid: {
