@@ -23,7 +23,11 @@ type ReadyRelease = Readonly<{
 
 export type LiveReleaseState =
   | Readonly<{ kind: 'disconnected' }>
-  | Readonly<{ kind: 'loading'; previous?: ReadyRelease; stage: 'list' | 'evidence' }>
+  | Readonly<{
+      kind: 'loading';
+      previous?: ReadyRelease;
+      stage: 'decision' | 'evidence' | 'list';
+    }>
   | Readonly<{ decisions: ReleaseDecisionPage; kind: 'empty'; projectId: string }>
   | Readonly<{ kind: 'ready'; value: ReadyRelease }>
   | Readonly<{
@@ -61,6 +65,17 @@ function listItemMatchesDecision(
     item.created_at === decision.created_at &&
     item.decision_digest === decision.decision_digest
   );
+}
+
+function decisionPageIsConsistent(page: ReleaseDecisionPage): boolean {
+  const ids = new Set(page.items.map((item) => item.decision_id));
+  if (ids.size !== page.items.length) return false;
+  return page.items.every((item, index) => {
+    const timestamp = Date.parse(item.created_at);
+    if (!Number.isFinite(timestamp)) return false;
+    if (index === 0) return true;
+    return timestamp <= Date.parse(page.items[index - 1].created_at);
+  });
 }
 
 export function useLiveRelease({
@@ -166,6 +181,9 @@ export function useLiveRelease({
           controller.signal,
         );
         if (!currentRequest(generation, controller)) return;
+        if (!decisionPageIsConsistent(decisions.data)) {
+          throw new Error('Release decision list is inconsistent');
+        }
         if (decisions.data.items.length === 0) {
           setState({ decisions: decisions.data, kind: 'empty', projectId });
           return;
@@ -202,6 +220,69 @@ export function useLiveRelease({
       }
     },
     [beginRequest, client, currentRequest, loadEvidence, onAuthenticationFailure],
+  );
+
+  const selectDecision = useCallback(
+    async (decisionId: string) => {
+      const previous = readyRef.current;
+      if (!previous || previous.decision.decision_id === decisionId) return;
+      const item = previous.decisions.items.find(
+        (candidate) => candidate.decision_id === decisionId,
+      );
+      if (!item) {
+        setState({
+          kind: 'error',
+          message: 'The selected release decision is unavailable.',
+          previous,
+          requestId: null,
+        });
+        return;
+      }
+
+      const { controller, generation } = beginRequest();
+      setState({ kind: 'loading', previous, stage: 'decision' });
+      try {
+        const detail = await client.getReleaseDecision(decisionId, controller.signal);
+        if (!currentRequest(generation, controller)) return;
+        if (!listItemMatchesDecision(item, detail.data)) {
+          throw new Error('Release summary identity mismatch');
+        }
+        const gate =
+          detail.data.gates.find((candidate) => candidate.status === 'failed') ??
+          detail.data.gates[0];
+        if (!gate) throw new Error('Release decision has no gates');
+        await loadEvidence({
+          decision: detail.data,
+          decisions: previous.decisions,
+          gateMetric: gate.metric,
+          gateSlice: gate.slice ?? null,
+          previous,
+          projectId: previous.projectId,
+        });
+      } catch (error) {
+        if (!currentRequest(generation, controller) || abortError(error)) return;
+        controller.abort();
+        const authenticationFailure =
+          error instanceof ControlPlaneApiError &&
+          (error.status === 401 || error.status === 403);
+        if (authenticationFailure) {
+          readyRef.current = null;
+          onAuthenticationFailure();
+        }
+        setState({
+          kind: 'error',
+          previous: authenticationFailure ? undefined : previous,
+          ...safeError(error),
+        });
+      }
+    },
+    [
+      beginRequest,
+      client,
+      currentRequest,
+      loadEvidence,
+      onAuthenticationFailure,
+    ],
   );
 
   const selectGate = useCallback(
@@ -248,5 +329,5 @@ export function useLiveRelease({
     [],
   );
 
-  return { connect, disconnect, selectGate, state };
+  return { connect, disconnect, selectDecision, selectGate, state };
 }

@@ -3,7 +3,10 @@
 import { useCallback, useState, useSyncExternalStore, type FormEvent } from 'react';
 
 import { ReleaseOverviewView } from './release-overview';
-import { createControlPlaneClient } from '@/src/api/client';
+import {
+  createControlPlaneClient,
+  type ReleaseDecisionPage,
+} from '@/src/api/client';
 import {
   demoDashboardModel,
   demoModelForGate,
@@ -85,6 +88,56 @@ function StatePanel({
       aria-live={role === 'alert' ? 'assertive' : 'polite'}
     >
       {children}
+    </section>
+  );
+}
+
+function decisionTimestamp(value: string) {
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.valueOf())) return 'time unavailable';
+  return new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit',
+    hour: '2-digit',
+    hour12: false,
+    minute: '2-digit',
+    month: 'short',
+    timeZone: 'UTC',
+  }).format(timestamp);
+}
+
+function DecisionPicker({
+  busy,
+  decisions,
+  onSelect,
+  selectedDecisionId,
+}: {
+  busy: boolean;
+  decisions: ReleaseDecisionPage;
+  onSelect: (decisionId: string) => void;
+  selectedDecisionId: string;
+}) {
+  return (
+    <section className="decision-picker" aria-label="Live decision history">
+      <label htmlFor="live-decision">Decision history</label>
+      <select
+        aria-busy={busy}
+        disabled={busy}
+        id="live-decision"
+        onChange={(event) => onSelect(event.currentTarget.value)}
+        value={selectedDecisionId}
+      >
+        {decisions.items.map((item) => (
+          <option key={item.decision_id} value={item.decision_id}>
+            {item.status === 'failed' ? 'Blocked' : 'Passed'} ·{' '}
+            {decisionTimestamp(item.created_at)} UTC · {item.decision_id}
+          </option>
+        ))}
+      </select>
+      <small>
+        {decisions.items.length} newest immutable decision
+        {decisions.items.length === 1 ? '' : 's'} loaded
+        {decisions.next_cursor ? ' · older decisions available through the API' : ''}
+      </small>
     </section>
   );
 }
@@ -266,6 +319,12 @@ export default function ReleaseDashboard() {
           {live.state.requestId ? ` Request ID: ${live.state.requestId}` : ''}
         </div>
       ) : null}
+      <DecisionPicker
+        busy={live.state.kind === 'loading'}
+        decisions={ready.decisions}
+        onSelect={(decisionId) => void live.selectDecision(decisionId)}
+        selectedDecisionId={ready.decision.decision_id}
+      />
       <ReleaseOverviewView
         busy={live.state.kind === 'loading'}
         model={ready.model}
