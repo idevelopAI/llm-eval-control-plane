@@ -48,7 +48,11 @@ backend-for-frontend design is implemented.
 Successful JSON is validated against strict runtime allowlists and then checked
 for cross-response consistency before rendering. Request generations and abort
 signals prevent stale decision, gate, filter, or pagination reads from winning a
-race. Browser pagination retains at most 500 redacted cases.
+race. The case and distribution projections recover independently after a
+non-authorization failure, so validated sibling evidence remains available and
+only the failed read is retried. An authorization failure remains session-wide:
+it aborts the sibling read, removes prior evidence, and clears the volatile
+credential. Browser pagination retains at most 500 redacted cases.
 
 ## Consequences
 
@@ -78,4 +82,3 @@ race. Browser pagination retains at most 500 redacted cases.
   can make stale demonstration data look operationally current.
 - **Cache analytical responses in the browser or at an intermediary:** rejected
   because identifiers and metrics remain sensitive even after content redaction.
-

@@ -25,7 +25,9 @@ Live mode supports:
 - fixed score and operational distributions, with small operational samples
   suppressed by the API; and
 - explicit loading, empty, authorization, network, and inconsistent-evidence
-  states without silently substituting fixture data.
+  states without silently substituting fixture data. A non-authorization failure
+  in the case or distribution projection leaves the successful sibling visible
+  and gives the failed panel its own retry action.
 
 ## Credential boundary
 
@@ -78,5 +80,5 @@ pnpm run build
 
 The test suite includes runtime-contract rejection, credential non-persistence,
 origin restrictions, stale-response cancellation, authorization clearing,
-decision identity checks, pagination boundaries, and automated accessibility
-checks for the major UI states.
+decision identity checks, isolated projection recovery, pagination boundaries,
+and automated accessibility checks for the major UI states.
