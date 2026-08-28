@@ -1,5 +1,5 @@
-import ReleaseOverview from './release-overview';
+import ReleaseDashboard from './release-dashboard';
 
 export default function Home() {
-  return <ReleaseOverview />;
+  return <ReleaseDashboard />;
 }
