@@ -1,157 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
-import type {
-  ReleaseDecision,
-  ReleaseDecisionCasePage,
-  ReleaseDecisionDistributions,
-} from '../../api/client';
+import {
+  releaseCases,
+  releaseDecision,
+  releaseDistributions,
+} from '../../test/release-evidence';
 import { buildReleaseDashboardModel } from './view-model';
-
-const evaluator = {
-  digest: `sha256:${'1'.repeat(64)}`,
-  kind: 'evaluator',
-  name: 'builtin/exact-match',
-  revision: 1,
-} as const;
-const aggregate = {
-  baseline: { attempted: 1, errors: 0, mean: 1, scored: 1, skipped: 0 },
-  candidate: { attempted: 1, errors: 0, mean: 0, scored: 1, skipped: 0 },
-  delta: -1,
-  evaluator,
-  metric: 'quality.exact_match',
-  slice: 'language/de',
-} as const;
-const decision: ReleaseDecision = {
-  aggregates: [aggregate],
-  baseline: {
-    digest: `sha256:${'2'.repeat(64)}`,
-    kind: 'target',
-    name: 'models/baseline',
-    revision: 1,
-  },
-  baseline_result_digest: `sha256:${'3'.repeat(64)}`,
-  baseline_run_id: 'run-baseline',
-  candidate: {
-    digest: `sha256:${'4'.repeat(64)}`,
-    kind: 'target',
-    name: 'models/candidate',
-    revision: 2,
-  },
-  candidate_result_digest: `sha256:${'5'.repeat(64)}`,
-  candidate_run_id: 'run-candidate',
-  created_at: '2026-08-27T14:32:00Z',
-  dataset: {
-    digest: `sha256:${'6'.repeat(64)}`,
-    kind: 'dataset',
-    name: 'release-gate',
-    revision: 3,
-  },
-  decision_digest: `sha256:${'7'.repeat(64)}`,
-  decision_id: 'decision-001',
-  execution_mode: 'offline_mock',
-  gates: [
-    {
-      aggregate,
-      allowed_regression: 0,
-      coverage_passed: true,
-      direction: 'higher_is_better',
-      failure_codes: ['threshold', 'regression'],
-      metric: 'quality.exact_match',
-      regression_passed: false,
-      slice: 'language/de',
-      status: 'failed',
-      threshold: 1,
-      threshold_passed: false,
-    },
-  ],
-  schema_version: 'release-decision-summary/v1',
-  spec_name: 'production-release',
-  status: 'failed',
-};
-const cases: ReleaseDecisionCasePage = {
-  decision_id: 'decision-001',
-  items: [
-    {
-      baseline: { status: 'scored', value: 1 },
-      baseline_passed: true,
-      candidate: { status: 'scored', value: 0 },
-      candidate_passed: false,
-      case_id: 'case-001',
-      change: 'newly_failing',
-      delta: -1,
-      gate_slice: 'language/de',
-      metric: 'quality.exact_match',
-      schema_version: 'release-decision-case/v1',
-      slices: ['language/de'],
-    },
-  ],
-  next_cursor: 'bounded-next-page',
-  schema_version: 'release-decision-case-page/v1',
-};
-const observed = {
-  maximum: 1,
-  mean: 1,
-  minimum: 1,
-  p50: 1,
-  p95: 1,
-  sample_count: 1,
-  small_sample: true,
-  suppressed: false,
-};
-const measurement = {
-  attempted: 1,
-  measured: 1,
-  statistics: {
-    maximum: null,
-    mean: null,
-    minimum: null,
-    p50: null,
-    p95: null,
-    sample_count: 1,
-    small_sample: true,
-    suppressed: true,
-  },
-  target_failures: 0,
-  unavailable: 0,
-};
-const distributions: ReleaseDecisionDistributions = {
-  baseline: {
-    execution_mode: 'offline_mock',
-    input_units: measurement,
-    latency_ms: measurement,
-    output_units: measurement,
-    role: 'baseline',
-    run_id: 'run-baseline',
-    simulated: true,
-    total_units: measurement,
-  },
-  candidate: {
-    execution_mode: 'offline_mock',
-    input_units: measurement,
-    latency_ms: measurement,
-    output_units: measurement,
-    role: 'candidate',
-    run_id: 'run-candidate',
-    simulated: true,
-    total_units: measurement,
-  },
-  decision_id: 'decision-001',
-  schema_version: 'release-decision-distributions/v1',
-  score: {
-    baseline: { attempted: 1, errors: 0, scored: 1, skipped: 0, statistics: observed },
-    candidate: { attempted: 1, errors: 0, scored: 1, skipped: 0, statistics: observed },
-    delta: { attempted: 1, compared: 1, incomparable: 0, statistics: observed },
-    gate_slice: 'language/de',
-    metric: 'quality.exact_match',
-  },
-};
 
 describe('buildReleaseDashboardModel', () => {
   it('maps validated live evidence into a presentation-safe model', () => {
     const model = buildReleaseDashboardModel({
-      cases,
-      decision,
-      distributions,
+      cases: releaseCases,
+      decision: releaseDecision,
+      distributions: releaseDistributions,
       projectId: 'project-alpha',
     });
 
@@ -176,35 +37,118 @@ describe('buildReleaseDashboardModel', () => {
     expect(model.casePageTruncated).toBe(true);
   });
 
-  it('rejects cross-decision or cross-gate evidence with a safe error', () => {
+  it('rejects cross-decision, cross-gate, and cross-run evidence safely', () => {
     expect(() =>
       buildReleaseDashboardModel({
-        cases: { ...cases, decision_id: 'private-cross-decision-sentinel' },
-        decision,
-        distributions,
+        cases: {
+          ...releaseCases,
+          decision_id: 'private-cross-decision-sentinel',
+        },
+        decision: releaseDecision,
+        distributions: releaseDistributions,
         projectId: 'project-alpha',
       }),
     ).toThrow('Release dashboard evidence is inconsistent.');
     expect(() =>
       buildReleaseDashboardModel({
         cases: {
-          ...cases,
-          items: [{ ...cases.items[0], gate_slice: 'safety/refusal' }],
+          ...releaseCases,
+          items: [
+            { ...releaseCases.items[0], gate_slice: 'safety/refusal' },
+          ],
         },
-        decision,
-        distributions,
+        decision: releaseDecision,
+        distributions: releaseDistributions,
         projectId: 'project-alpha',
       }),
     ).toThrow('Release dashboard evidence is inconsistent.');
     expect(() =>
       buildReleaseDashboardModel({
-        cases,
-        decision,
+        cases: releaseCases,
+        decision: releaseDecision,
         distributions: {
-          ...distributions,
+          ...releaseDistributions,
           candidate: {
-            ...distributions.candidate,
+            ...releaseDistributions.candidate,
             run_id: 'private-cross-run-sentinel',
+          },
+        },
+        projectId: 'project-alpha',
+      }),
+    ).toThrow('Release dashboard evidence is inconsistent.');
+  });
+
+  it('rejects contradictory decision and gate evidence', () => {
+    expect(() =>
+      buildReleaseDashboardModel({
+        cases: releaseCases,
+        decision: { ...releaseDecision, status: 'passed' },
+        distributions: releaseDistributions,
+        projectId: 'project-alpha',
+      }),
+    ).toThrow('Release dashboard evidence is inconsistent.');
+    expect(() =>
+      buildReleaseDashboardModel({
+        cases: releaseCases,
+        decision: {
+          ...releaseDecision,
+          gates: [...releaseDecision.gates, releaseDecision.gates[0]],
+        },
+        distributions: releaseDistributions,
+        projectId: 'project-alpha',
+      }),
+    ).toThrow('Release dashboard evidence is inconsistent.');
+    expect(() =>
+      buildReleaseDashboardModel({
+        cases: releaseCases,
+        decision: {
+          ...releaseDecision,
+          gates: [
+            {
+              ...releaseDecision.gates[0],
+              aggregate: {
+                ...releaseDecision.gates[0].aggregate,
+                evaluator: {
+                  ...releaseDecision.gates[0].aggregate.evaluator,
+                  name: 'builtin/unpinned-sentinel',
+                },
+              },
+            },
+          ],
+        },
+        distributions: releaseDistributions,
+        projectId: 'project-alpha',
+      }),
+    ).toThrow('Release dashboard evidence is inconsistent.');
+  });
+
+  it('rejects mathematically inconsistent case and distribution evidence', () => {
+    expect(() =>
+      buildReleaseDashboardModel({
+        cases: {
+          ...releaseCases,
+          items: [{ ...releaseCases.items[0], delta: 0.25 }],
+        },
+        decision: releaseDecision,
+        distributions: releaseDistributions,
+        projectId: 'project-alpha',
+      }),
+    ).toThrow('Release dashboard evidence is inconsistent.');
+    expect(() =>
+      buildReleaseDashboardModel({
+        cases: releaseCases,
+        decision: releaseDecision,
+        distributions: {
+          ...releaseDistributions,
+          score: {
+            ...releaseDistributions.score,
+            candidate: {
+              ...releaseDistributions.score.candidate,
+              statistics: {
+                ...releaseDistributions.score.candidate.statistics,
+                mean: 0.5,
+              },
+            },
           },
         },
         projectId: 'project-alpha',

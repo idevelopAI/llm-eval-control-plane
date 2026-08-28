@@ -127,6 +127,66 @@ function inconsistentEvidence(): never {
   throw new Error('Release dashboard evidence is inconsistent.');
 }
 
+function numbersEqual(
+  left: number | null | undefined,
+  right: number | null | undefined,
+): boolean {
+  if (left == null || right == null) return left == null && right == null;
+  const scale = Math.max(1, Math.abs(left), Math.abs(right));
+  return Math.abs(left - right) <= Number.EPSILON * scale * 8;
+}
+
+function aggregateIsInternallyConsistent(
+  aggregate: ReleaseDecision['aggregates'][number],
+): boolean {
+  const baselineCount =
+    aggregate.baseline.scored +
+    aggregate.baseline.skipped +
+    aggregate.baseline.errors;
+  const candidateCount =
+    aggregate.candidate.scored +
+    aggregate.candidate.skipped +
+    aggregate.candidate.errors;
+  return (
+    aggregate.baseline.attempted === baselineCount &&
+    aggregate.candidate.attempted === candidateCount &&
+    aggregate.baseline.attempted === aggregate.candidate.attempted &&
+    (aggregate.baseline.scored > 0) === (aggregate.baseline.mean != null) &&
+    (aggregate.candidate.scored > 0) === (aggregate.candidate.mean != null) &&
+    numbersEqual(
+      aggregate.delta,
+      aggregate.baseline.mean == null || aggregate.candidate.mean == null
+        ? null
+        : aggregate.candidate.mean - aggregate.baseline.mean,
+    )
+  );
+}
+
+function aggregatesMatch(
+  left: ReleaseDecision['aggregates'][number],
+  right: ReleaseDecision['aggregates'][number],
+): boolean {
+  return (
+    left.metric === right.metric &&
+    (left.slice ?? null) === (right.slice ?? null) &&
+    left.evaluator.kind === right.evaluator.kind &&
+    left.evaluator.name === right.evaluator.name &&
+    left.evaluator.revision === right.evaluator.revision &&
+    left.evaluator.digest === right.evaluator.digest &&
+    left.baseline.attempted === right.baseline.attempted &&
+    left.baseline.scored === right.baseline.scored &&
+    left.baseline.skipped === right.baseline.skipped &&
+    left.baseline.errors === right.baseline.errors &&
+    numbersEqual(left.baseline.mean, right.baseline.mean) &&
+    left.candidate.attempted === right.candidate.attempted &&
+    left.candidate.scored === right.candidate.scored &&
+    left.candidate.skipped === right.candidate.skipped &&
+    left.candidate.errors === right.candidate.errors &&
+    numbersEqual(left.candidate.mean, right.candidate.mean) &&
+    numbersEqual(left.delta, right.delta)
+  );
+}
+
 function gateIsConsistent(gate: ReleaseDecision['gates'][number]): boolean {
   const expectedFailures = [
     !gate.coverage_passed ? 'coverage' : null,
@@ -134,6 +194,7 @@ function gateIsConsistent(gate: ReleaseDecision['gates'][number]): boolean {
     !gate.regression_passed ? 'regression' : null,
   ].filter((value): value is 'coverage' | 'threshold' | 'regression' => value != null);
   return (
+    aggregateIsInternallyConsistent(gate.aggregate) &&
     gate.metric === gate.aggregate.metric &&
     (gate.slice ?? null) === (gate.aggregate.slice ?? null) &&
     (gate.status === 'failed') === (expectedFailures.length > 0) &&
@@ -147,12 +208,21 @@ function caseIsConsistent(
 ): boolean {
   const baselineScored = item.baseline.status === 'scored';
   const candidateScored = item.candidate.status === 'scored';
+  const comparable = baselineScored && candidateScored;
   const baselinePassed = item.baseline_passed ?? null;
   const candidatePassed = item.candidate_passed ?? null;
   if (
-    baselineScored !== (baselinePassed != null) ||
-    candidateScored !== (candidatePassed != null) ||
-    (baselineScored && candidateScored) !== (item.delta != null)
+    comparable !== (baselinePassed != null && candidatePassed != null) ||
+    comparable !== (item.delta != null) ||
+    (!comparable && (baselinePassed != null || candidatePassed != null))
+  ) {
+    return false;
+  }
+  if (
+    comparable &&
+    (item.baseline.value == null ||
+      item.candidate.value == null ||
+      !numbersEqual(item.delta, item.candidate.value - item.baseline.value))
   ) {
     return false;
   }
@@ -169,6 +239,39 @@ function caseIsConsistent(
   return item.change === expectedChange;
 }
 
+function distributionMatchesGate(
+  distributions: ReleaseDecisionDistributions,
+  gate: ReleaseDecision['gates'][number],
+): boolean {
+  const { aggregate } = gate;
+  const { baseline, candidate, delta } = distributions.score;
+  const attempted = aggregate.baseline.attempted;
+  const operationalAttempts = [
+    distributions.baseline.latency_ms.attempted,
+    distributions.baseline.input_units.attempted,
+    distributions.baseline.output_units.attempted,
+    distributions.baseline.total_units.attempted,
+    distributions.candidate.latency_ms.attempted,
+    distributions.candidate.input_units.attempted,
+    distributions.candidate.output_units.attempted,
+    distributions.candidate.total_units.attempted,
+  ];
+  return (
+    baseline.attempted === aggregate.baseline.attempted &&
+    baseline.scored === aggregate.baseline.scored &&
+    baseline.skipped === aggregate.baseline.skipped &&
+    baseline.errors === aggregate.baseline.errors &&
+    numbersEqual(baseline.statistics.mean, aggregate.baseline.mean) &&
+    candidate.attempted === aggregate.candidate.attempted &&
+    candidate.scored === aggregate.candidate.scored &&
+    candidate.skipped === aggregate.candidate.skipped &&
+    candidate.errors === aggregate.candidate.errors &&
+    numbersEqual(candidate.statistics.mean, aggregate.candidate.mean) &&
+    delta.attempted === attempted &&
+    operationalAttempts.every((value) => value === attempted)
+  );
+}
+
 export function buildReleaseDashboardModel({
   cases,
   decision,
@@ -180,9 +283,26 @@ export function buildReleaseDashboardModel({
   distributions: ReleaseDecisionDistributions;
   projectId: string;
 }): ReleaseDashboardModel {
+  const uniqueGateIds = new Set(
+    decision.gates.map((gate) => gateId(gate.metric, gate.slice)),
+  );
+  const expectedDecisionStatus = decision.gates.some(
+    (gate) => gate.status === 'failed',
+  )
+    ? 'failed'
+    : 'passed';
   if (
     decision.gates.length === 0 ||
+    uniqueGateIds.size !== decision.gates.length ||
+    decision.status !== expectedDecisionStatus ||
+    decision.aggregates.some((aggregate) => !aggregateIsInternallyConsistent(aggregate)) ||
     decision.gates.some((gate) => !gateIsConsistent(gate)) ||
+    decision.gates.some(
+      (gate) =>
+        !decision.aggregates.some((aggregate) =>
+          aggregatesMatch(gate.aggregate, aggregate),
+        ),
+    ) ||
     cases.decision_id !== decision.decision_id ||
     distributions.decision_id !== decision.decision_id ||
     distributions.baseline.run_id !== decision.baseline_run_id ||
@@ -200,6 +320,9 @@ export function buildReleaseDashboardModel({
       gate.metric === selectedMetric && (gate.slice ?? null) === selectedSlice,
   );
   if (!selectedGate) return inconsistentEvidence();
+  if (!distributionMatchesGate(distributions, selectedGate)) {
+    return inconsistentEvidence();
+  }
   if (
     cases.items.some(
       (item) =>

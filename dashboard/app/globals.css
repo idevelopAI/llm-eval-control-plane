@@ -821,6 +821,10 @@ h1 {
   color: var(--failure);
 }
 
+.neutral-text {
+  color: var(--ink-muted);
+}
+
 .case-metric {
   display: block;
   margin-top: 11px;
