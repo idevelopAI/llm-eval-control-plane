@@ -332,15 +332,21 @@ export default function ReleaseDashboard() {
         busy={live.state.kind === 'loading'}
         caseChangeFilter={ready.caseChange}
         caseDisplayLimitReached={
-          ready.casePage.next_cursor != null &&
+          ready.casePage?.next_cursor != null &&
           ready.casePage.items.length >= LIVE_CASE_DISPLAY_LIMIT
         }
+        caseEvidenceIssue={ready.caseIssue}
         caseLoadMoreAvailable={
-          ready.casePage.next_cursor != null &&
+          ready.casePage?.next_cursor != null &&
           ready.casePage.items.length < LIVE_CASE_DISPLAY_LIMIT
         }
+        distributionEvidenceIssue={ready.distributionIssue}
         model={ready.model}
         onLoadMoreCases={() => void live.loadMoreCases()}
+        onRetryCaseEvidence={live.retryCaseEvidence}
+        onRetryDistributionEvidence={() =>
+          void live.retryDistributionEvidence()
+        }
         onSelectCaseChange={(caseChange) =>
           void live.selectCaseChange(caseChange)
         }

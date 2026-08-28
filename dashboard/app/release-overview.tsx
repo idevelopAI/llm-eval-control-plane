@@ -29,7 +29,9 @@ function gateScope(gate: GateView) {
   return gate.gate.slice ?? 'all cases';
 }
 
-function changeLabel(value: ReleaseDashboardModel['cases'][number]['change']) {
+function changeLabel(
+  value: NonNullable<ReleaseDashboardModel['cases']>[number]['change'],
+) {
   return value.replaceAll('_', ' ');
 }
 
@@ -59,9 +61,19 @@ export type ReleaseOverviewViewProps = Readonly<{
   busy?: boolean;
   caseChangeFilter?: ReleaseCaseChangeFilter;
   caseDisplayLimitReached?: boolean;
+  caseEvidenceIssue?: Readonly<{
+    message: string;
+    requestId: string | null;
+  }> | null;
   caseLoadMoreAvailable?: boolean;
+  distributionEvidenceIssue?: Readonly<{
+    message: string;
+    requestId: string | null;
+  }> | null;
   model: ReleaseDashboardModel;
   onLoadMoreCases?: () => void;
+  onRetryCaseEvidence?: () => void;
+  onRetryDistributionEvidence?: () => void;
   onSelectCaseChange?: (change: ReleaseCaseChangeFilter) => void;
   onSelectGate: (gateId: string) => void;
   sourceLabel: string;
@@ -71,9 +83,13 @@ export function ReleaseOverviewView({
   busy = false,
   caseChangeFilter,
   caseDisplayLimitReached = false,
+  caseEvidenceIssue = null,
   caseLoadMoreAvailable = false,
+  distributionEvidenceIssue = null,
   model,
   onLoadMoreCases,
+  onRetryCaseEvidence,
+  onRetryDistributionEvidence,
   onSelectCaseChange,
   onSelectGate,
   sourceLabel,
@@ -91,9 +107,9 @@ export function ReleaseOverviewView({
   );
   const visibleCases = useMemo(
     () =>
-      model.cases.filter((item) =>
+      model.cases?.filter((item) =>
         item.gateIds.some((gateId) => gateId === model.selectedGateId),
-      ),
+      ) ?? [],
     [model.cases, model.selectedGateId],
   );
   const selectedGate = model.gates.find(
@@ -101,9 +117,9 @@ export function ReleaseOverviewView({
   );
   const failedGates = model.gates.filter((gate) => gate.gate.status === 'failed');
   const reviewGate = failedGates[0] ?? model.gates[0];
-  const newlyFailingCases = model.cases.filter(
-    (item) => item.change === 'newly_failing',
-  ).length;
+  const newlyFailingCases =
+    model.cases?.filter((item) => item.change === 'newly_failing').length ??
+    null;
   const releaseFailed = model.release.status === 'failed';
 
   function focusCaseInbox() {
@@ -206,8 +222,12 @@ export function ReleaseOverviewView({
               <span>of {model.gates.length} gates failed</span>
             </div>
             <div className="summary-number secondary">
-              <strong>{newlyFailingCases}</strong>
-              <span>newly failing shown for selected gate</span>
+              <strong>{newlyFailingCases ?? '—'}</strong>
+              <span>
+                {newlyFailingCases == null
+                  ? 'case projection unavailable'
+                  : 'newly failing shown for selected gate'}
+              </span>
             </div>
             {reviewGate ? (
               <button
@@ -340,8 +360,9 @@ export function ReleaseOverviewView({
                 </h2>
               </div>
               <span className="case-count">
-                {visibleCases.length} shown · selected gate
-                {model.casePageTruncated ? ' · more available' : ''}
+                {model.cases == null
+                  ? 'Unavailable'
+                  : `${visibleCases.length} shown · selected gate${model.casePageTruncated ? ' · more available' : ''}`}
               </span>
             </div>
 
@@ -376,89 +397,117 @@ export function ReleaseOverviewView({
               </div>
             ) : null}
 
-            <div className="case-list">
-              {visibleCases.length ? (
-                visibleCases.map((item) => {
-                  const expanded = expandedCaseId === item.id;
-                  const evidenceId = `case-evidence-${encodeURIComponent(item.id)}`;
-                  return (
-                    <article className="case-card" key={item.id}>
-                      <div className="case-title">
-                        <div>
-                          <span className="transition-badge">
-                            {changeLabel(item.change)}
+            {model.cases == null ? (
+              <div className="panel-evidence-error" role="alert">
+                <strong>Case evidence is unavailable.</strong>
+                <p>
+                  {caseEvidenceIssue?.message ??
+                    'The case projection could not be loaded.'}
+                </p>
+                {caseEvidenceIssue?.requestId ? (
+                  <small>Request ID: {caseEvidenceIssue.requestId}</small>
+                ) : null}
+                {onRetryCaseEvidence ? (
+                  <button
+                    disabled={busy}
+                    onClick={onRetryCaseEvidence}
+                    type="button"
+                  >
+                    Retry case evidence
+                  </button>
+                ) : null}
+              </div>
+            ) : (
+              <div className="case-list">
+                {visibleCases.length ? (
+                  visibleCases.map((item) => {
+                    const expanded = expandedCaseId === item.id;
+                    const evidenceId = `case-evidence-${encodeURIComponent(item.id)}`;
+                    return (
+                      <article className="case-card" key={item.id}>
+                        <div className="case-title">
+                          <div>
+                            <span className="transition-badge">
+                              {changeLabel(item.change)}
+                            </span>
+                            <h3>{item.id}</h3>
+                          </div>
+                          <span className="case-transition">
+                            <span className={passClass(item.baselinePassed)}>
+                              {passLabel(item.baselinePassed)}
+                            </span>
+                            <span aria-hidden="true">→</span>
+                            <span className={passClass(item.candidatePassed)}>
+                              {passLabel(item.candidatePassed)}
+                            </span>
                           </span>
-                          <h3>{item.id}</h3>
                         </div>
-                        <span className="case-transition">
-                          <span className={passClass(item.baselinePassed)}>
-                            {passLabel(item.baselinePassed)}
-                          </span>
-                          <span aria-hidden="true">→</span>
-                          <span className={passClass(item.candidatePassed)}>
-                            {passLabel(item.candidatePassed)}
-                          </span>
-                        </span>
-                      </div>
 
-                      <code className="case-metric">{item.metric}</code>
-                      <div className="slice-tags" aria-label="Case slices">
-                        {item.slices.length ? (
-                          item.slices.map((slice) => <span key={slice}>{slice}</span>)
-                        ) : (
-                          <span>no slice labels</span>
-                        )}
-                      </div>
-
-                      <button
-                        aria-controls={evidenceId}
-                        aria-expanded={expanded}
-                        aria-label={`${expanded ? 'Hide' : 'Inspect'} scoring evidence for ${item.id}`}
-                        className="evidence-toggle"
-                        onClick={() => setExpandedCaseId(expanded ? null : item.id)}
-                        type="button"
-                      >
-                        {expanded ? 'Hide scoring evidence' : 'Inspect scoring evidence'}
-                        <span aria-hidden="true">{expanded ? '−' : '+'}</span>
-                      </button>
-
-                      {expanded ? (
-                        <div className="case-evidence" id={evidenceId}>
-                          <dl>
-                            <div>
-                              <dt>Baseline value</dt>
-                              <dd>
-                                {formatScore(item.baselineValue)} ·{' '}
-                                {passLabel(item.baselinePassed)}
-                              </dd>
-                            </div>
-                            <div>
-                              <dt>Candidate value</dt>
-                              <dd>
-                                {formatScore(item.candidateValue)} ·{' '}
-                                {passLabel(item.candidatePassed)}
-                              </dd>
-                            </div>
-                            <div>
-                              <dt>Case delta</dt>
-                              <dd>{formatDelta(item.delta)}</dd>
-                            </div>
-                          </dl>
-                          <p>
-                            Score-only projection. Prompt, expected value, target
-                            output, SQL, and stored rows are not present.
-                          </p>
+                        <code className="case-metric">{item.metric}</code>
+                        <div className="slice-tags" aria-label="Case slices">
+                          {item.slices.length ? (
+                            item.slices.map((slice) => (
+                              <span key={slice}>{slice}</span>
+                            ))
+                          ) : (
+                            <span>no slice labels</span>
+                          )}
                         </div>
-                      ) : null}
-                    </article>
-                  );
-                })
-              ) : (
-                <div className="empty-state">
-                  No cases are attached to this bounded gate projection.
-                </div>
-              )}
-            </div>
+
+                        <button
+                          aria-controls={evidenceId}
+                          aria-expanded={expanded}
+                          aria-label={`${expanded ? 'Hide' : 'Inspect'} scoring evidence for ${item.id}`}
+                          className="evidence-toggle"
+                          onClick={() =>
+                            setExpandedCaseId(expanded ? null : item.id)
+                          }
+                          type="button"
+                        >
+                          {expanded
+                            ? 'Hide scoring evidence'
+                            : 'Inspect scoring evidence'}
+                          <span aria-hidden="true">{expanded ? '−' : '+'}</span>
+                        </button>
+
+                        {expanded ? (
+                          <div className="case-evidence" id={evidenceId}>
+                            <dl>
+                              <div>
+                                <dt>Baseline value</dt>
+                                <dd>
+                                  {formatScore(item.baselineValue)} ·{' '}
+                                  {passLabel(item.baselinePassed)}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt>Candidate value</dt>
+                                <dd>
+                                  {formatScore(item.candidateValue)} ·{' '}
+                                  {passLabel(item.candidatePassed)}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt>Case delta</dt>
+                                <dd>{formatDelta(item.delta)}</dd>
+                              </div>
+                            </dl>
+                            <p>
+                              Score-only projection. Prompt, expected value,
+                              target output, SQL, and stored rows are not present.
+                            </p>
+                          </div>
+                        ) : null}
+                      </article>
+                    );
+                  })
+                ) : (
+                  <div className="empty-state">
+                    No cases are attached to this bounded gate projection.
+                  </div>
+                )}
+              </div>
+            )}
 
             {caseLoadMoreAvailable && onLoadMoreCases ? (
               <button
@@ -486,7 +535,36 @@ export function ReleaseOverviewView({
           </aside>
         </div>
 
-        <DistributionComparison distributions={model.distributions} />
+        {model.distributions ? (
+          <DistributionComparison distributions={model.distributions} />
+        ) : (
+          <section
+            className="distribution-panel panel-evidence-error"
+            aria-labelledby="distribution-unavailable-heading"
+            role="alert"
+          >
+            <p className="eyebrow">Privacy-bounded analytics</p>
+            <h2 id="distribution-unavailable-heading">
+              Distribution evidence is unavailable
+            </h2>
+            <p>
+              {distributionEvidenceIssue?.message ??
+                'The distribution projection could not be loaded.'}
+            </p>
+            {distributionEvidenceIssue?.requestId ? (
+              <small>Request ID: {distributionEvidenceIssue.requestId}</small>
+            ) : null}
+            {onRetryDistributionEvidence ? (
+              <button
+                disabled={busy}
+                onClick={onRetryDistributionEvidence}
+                type="button"
+              >
+                Retry distribution evidence
+              </button>
+            ) : null}
+          </section>
+        )}
 
         <footer className="provenance-strip">
           <p>

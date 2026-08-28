@@ -150,6 +150,178 @@ describe('ReleaseDashboard', () => {
     ).toBeTruthy();
   });
 
+  it('keeps distributions available and retries case evidence independently', async () => {
+    const user = userEvent.setup();
+    let caseReads = 0;
+    let distributionReads = 0;
+    const fetchMock = vi.fn(async (request: Request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/v1/release-decisions') {
+        return jsonResponse(releaseDecisionPage);
+      }
+      if (url.pathname === '/v1/release-decisions/decision-001') {
+        return jsonResponse(releaseDecision);
+      }
+      if (url.pathname.endsWith('/cases')) {
+        caseReads += 1;
+        if (caseReads > 1) return jsonResponse(releaseCases);
+        return jsonResponse(
+          {
+            error: {
+              code: 'persistence_unavailable',
+              details: [],
+              message: 'private-case-error-sentinel',
+              request_id: 'request_live_001',
+            },
+            schema_version: 'api-error/v1',
+          },
+          503,
+        );
+      }
+      if (url.pathname.endsWith('/distributions')) {
+        distributionReads += 1;
+        return jsonResponse(releaseDistributions);
+      }
+      throw new Error('unexpected test request');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { container } = render(<ReleaseDashboard />);
+
+    await enterLiveMode(user);
+    await submitCredential(user);
+    await screen.findByText('Case evidence is unavailable.');
+    expect(
+      screen.getByRole('heading', { name: 'Distribution comparison' }),
+    ).toBeTruthy();
+    expect(document.body.textContent).not.toContain('private-case-error-sentinel');
+    const partialResults = await axe.run(container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(partialResults.violations).toEqual([]);
+
+    await user.click(screen.getByRole('button', { name: 'Retry case evidence' }));
+    await screen.findByRole('heading', { name: 'case-001' });
+    expect(screen.queryByText('Case evidence is unavailable.')).toBeNull();
+    expect(caseReads).toBe(2);
+    expect(distributionReads).toBe(1);
+  });
+
+  it('clears successful sibling evidence when a case retry loses authorization', async () => {
+    const user = userEvent.setup();
+    let caseReads = 0;
+    const fetchMock = vi.fn(async (request: Request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/v1/release-decisions') {
+        return jsonResponse(releaseDecisionPage);
+      }
+      if (url.pathname === '/v1/release-decisions/decision-001') {
+        return jsonResponse(releaseDecision);
+      }
+      if (url.pathname.endsWith('/cases')) {
+        caseReads += 1;
+        return jsonResponse(
+          {
+            error: {
+              code:
+                caseReads === 1
+                  ? 'persistence_unavailable'
+                  : 'authentication_required',
+              details: [],
+              message: 'private-auth-retry-sentinel',
+              request_id: 'request_live_001',
+            },
+            schema_version: 'api-error/v1',
+          },
+          caseReads === 1 ? 503 : 401,
+        );
+      }
+      if (url.pathname.endsWith('/distributions')) {
+        return jsonResponse(releaseDistributions);
+      }
+      throw new Error('unexpected test request');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<ReleaseDashboard />);
+
+    await enterLiveMode(user);
+    await submitCredential(user);
+    await screen.findByText('Case evidence is unavailable.');
+    await user.click(screen.getByRole('button', { name: 'Retry case evidence' }));
+
+    await screen.findByRole('heading', { name: 'Live evidence is unavailable' });
+    expect(screen.queryByRole('heading', { name: 'Release blocked' })).toBeNull();
+    expect(
+      screen.queryByRole('heading', { name: 'Distribution comparison' }),
+    ).toBeNull();
+    expect(screen.getByLabelText('Read-only access token')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Retry live request' })).toBeNull();
+    expect(document.body.textContent).not.toContain('private-auth-retry-sentinel');
+  });
+
+  it('keeps cases available and retries distributions independently', async () => {
+    const user = userEvent.setup();
+    let caseReads = 0;
+    let distributionReads = 0;
+    const fetchMock = vi.fn(async (request: Request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/v1/release-decisions') {
+        return jsonResponse(releaseDecisionPage);
+      }
+      if (url.pathname === '/v1/release-decisions/decision-001') {
+        return jsonResponse(releaseDecision);
+      }
+      if (url.pathname.endsWith('/cases')) {
+        caseReads += 1;
+        return jsonResponse(releaseCases);
+      }
+      if (url.pathname.endsWith('/distributions')) {
+        distributionReads += 1;
+        if (distributionReads > 1) return jsonResponse(releaseDistributions);
+        return jsonResponse(
+          {
+            error: {
+              code: 'persistence_unavailable',
+              details: [],
+              message: 'private-distribution-error-sentinel',
+              request_id: 'request_live_001',
+            },
+            schema_version: 'api-error/v1',
+          },
+          503,
+        );
+      }
+      throw new Error('unexpected test request');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { container } = render(<ReleaseDashboard />);
+
+    await enterLiveMode(user);
+    await submitCredential(user);
+    await screen.findByRole('heading', {
+      name: 'Distribution evidence is unavailable',
+    });
+    expect(screen.getByRole('heading', { name: 'case-001' })).toBeTruthy();
+    expect(document.body.textContent).not.toContain(
+      'private-distribution-error-sentinel',
+    );
+    const partialResults = await axe.run(container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(partialResults.violations).toEqual([]);
+
+    await user.click(
+      screen.getByRole('button', { name: 'Retry distribution evidence' }),
+    );
+    await screen.findByRole('heading', { name: 'Distribution comparison' });
+    expect(
+      screen.queryByRole('heading', {
+        name: 'Distribution evidence is unavailable',
+      }),
+    ).toBeNull();
+    expect(caseReads).toBe(1);
+    expect(distributionReads).toBe(2);
+  });
+
   it('filters case transitions without refetching aggregate distributions', async () => {
     const user = userEvent.setup();
     const fetchMock = liveFetch();
@@ -333,8 +505,13 @@ describe('ReleaseDashboard', () => {
       'newly_passing',
     );
 
-    await screen.findByText('Selected gate evidence could not be refreshed.');
+    await screen.findByText('Case evidence is unavailable.');
     expect(screen.getByRole('heading', { name: 'Release blocked' })).toBeTruthy();
+    expect(
+      screen.getByRole('heading', { name: 'Distribution comparison' }),
+    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Retry case evidence' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'case-001' })).toBeNull();
     expect(document.body.textContent).not.toContain(
       'Release case projection is inconsistent',
     );
