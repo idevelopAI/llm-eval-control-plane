@@ -149,6 +149,104 @@ describe('ReleaseDashboard', () => {
     ).toBeTruthy();
   });
 
+  it('switches between the bounded newest decision history', async () => {
+    const user = userEvent.setup();
+    const olderDecision = {
+      ...releaseDecision,
+      created_at: '2026-08-26T10:15:00Z',
+      decision_digest: `sha256:${'8'.repeat(64)}`,
+      decision_id: 'decision-000',
+    };
+    const decisions = {
+      ...releaseDecisionPage,
+      items: [
+        releaseDecisionPage.items[0],
+        {
+          ...releaseDecisionPage.items[0],
+          created_at: olderDecision.created_at,
+          decision_digest: olderDecision.decision_digest,
+          decision_id: olderDecision.decision_id,
+        },
+      ],
+      next_cursor: 'older-page-available',
+    };
+    const fetchMock = vi.fn(async (request: Request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/v1/release-decisions') {
+        return jsonResponse(decisions);
+      }
+      if (url.pathname === '/v1/release-decisions/decision-000') {
+        return jsonResponse(olderDecision);
+      }
+      if (url.pathname === '/v1/release-decisions/decision-001') {
+        return jsonResponse(releaseDecision);
+      }
+      if (url.pathname.endsWith('/cases')) {
+        return jsonResponse(
+          url.pathname.includes('decision-000')
+            ? { ...releaseCases, decision_id: 'decision-000' }
+            : releaseCases,
+        );
+      }
+      if (url.pathname.endsWith('/distributions')) {
+        return jsonResponse(
+          url.pathname.includes('decision-000')
+            ? { ...releaseDistributions, decision_id: 'decision-000' }
+            : releaseDistributions,
+        );
+      }
+      throw new Error('unexpected test request');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<ReleaseDashboard />);
+
+    await enterLiveMode(user);
+    await submitCredential(user);
+    await screen.findByRole('heading', { name: 'Release blocked' });
+    const picker = screen.getByLabelText('Decision history');
+    const selectedValue = () =>
+      (picker as unknown as { value: string }).value;
+    expect(screen.getAllByRole('option')).toHaveLength(2);
+    expect(selectedValue()).toBe('decision-001');
+    expect(
+      screen.getByText('2 newest immutable decisions loaded · older decisions available through the API'),
+    ).toBeTruthy();
+
+    await user.selectOptions(picker, 'decision-000');
+    await waitFor(() => expect(selectedValue()).toBe('decision-000'));
+    expect(
+      document.querySelector('.provenance-strip code')?.textContent,
+    ).toBe('decision-000');
+    const paths = fetchMock.mock.calls.map(
+      (call) => new URL((call[0] as unknown as Request).url).pathname,
+    );
+    expect(paths).toContain('/v1/release-decisions/decision-000');
+    expect(paths).toContain('/v1/release-decisions/decision-000/cases');
+    expect(paths).toContain('/v1/release-decisions/decision-000/distributions');
+  });
+
+  it('rejects a duplicate decision list before requesting details', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        ...releaseDecisionPage,
+        items: [
+          releaseDecisionPage.items[0],
+          releaseDecisionPage.items[0],
+        ],
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    render(<ReleaseDashboard />);
+
+    await enterLiveMode(user);
+    await submitCredential(user);
+
+    await screen.findByRole('heading', { name: 'Live evidence is unavailable' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByLabelText('Decision history')).toBeNull();
+  });
+
   it('aborts and ignores an in-flight response when disconnected', async () => {
     const user = userEvent.setup();
     const pending: {
