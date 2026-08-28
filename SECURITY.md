@@ -141,7 +141,10 @@ unsafe request IDs. The view model additionally reconciles list/detail identity,
 decision and gate outcomes, aggregate membership, case arithmetic and change
 classes, distribution/run identity, and count relationships. Superseded reads
 are aborted and guarded by a generation counter so late completions cannot
-replace current evidence.
+replace current evidence. Non-authorization failures are isolated to the case or
+distribution panel, and retry only that projection while retaining the validated
+sibling. Authorization failures are never isolated: they abort sibling reads,
+discard prior evidence, and clear the volatile session.
 
 Case projections contain only bounded IDs, slice labels, score status, numeric
 score, pass state, candidate-minus-baseline delta, and transition class. They do
