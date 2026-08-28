@@ -805,6 +805,35 @@ h1 {
   font-size: 11px;
 }
 
+.case-filter {
+  display: grid;
+  gap: 6px;
+  margin: 0 16px 13px;
+}
+
+.case-filter label {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.case-filter select {
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  padding: 8px 30px 8px 9px;
+}
+
+.case-filter select:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.2);
+  outline-offset: 2px;
+}
+
 .scope-note strong {
   color: var(--ink);
   font-family: var(--mono);

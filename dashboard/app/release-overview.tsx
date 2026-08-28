@@ -7,6 +7,7 @@ import {
   demoDashboardModel,
   demoModelForGate,
 } from '@/src/features/release-decisions/demo-release';
+import type { ReleaseCaseChangeFilter } from '@/src/features/release-decisions/use-live-release';
 import {
   filterOptions,
   type FilterId,
@@ -42,16 +43,32 @@ function passClass(value: boolean | null) {
   return value ? 'pass-text' : 'fail-text';
 }
 
+const caseChangeOptions: readonly Readonly<{
+  id: ReleaseCaseChangeFilter;
+  label: string;
+}>[] = [
+  { id: 'all', label: 'All transitions' },
+  { id: 'newly_failing', label: 'Newly failing' },
+  { id: 'newly_passing', label: 'Newly passing' },
+  { id: 'unchanged_failing', label: 'Unchanged failing' },
+  { id: 'unchanged_passing', label: 'Unchanged passing' },
+  { id: 'incomparable', label: 'Incomparable' },
+];
+
 export type ReleaseOverviewViewProps = Readonly<{
   busy?: boolean;
+  caseChangeFilter?: ReleaseCaseChangeFilter;
   model: ReleaseDashboardModel;
+  onSelectCaseChange?: (change: ReleaseCaseChangeFilter) => void;
   onSelectGate: (gateId: string) => void;
   sourceLabel: string;
 }>;
 
 export function ReleaseOverviewView({
   busy = false,
+  caseChangeFilter,
   model,
+  onSelectCaseChange,
   onSelectGate,
   sourceLabel,
 }: ReleaseOverviewViewProps) {
@@ -330,6 +347,28 @@ export function ReleaseOverviewView({
             ) : (
               <p className="scope-note">Select a gate to inspect scoring evidence.</p>
             )}
+
+            {caseChangeFilter && onSelectCaseChange ? (
+              <div className="case-filter">
+                <label htmlFor="case-change-filter">Case transition</label>
+                <select
+                  disabled={busy}
+                  id="case-change-filter"
+                  onChange={(event) =>
+                    onSelectCaseChange(
+                      event.currentTarget.value as ReleaseCaseChangeFilter,
+                    )
+                  }
+                  value={caseChangeFilter}
+                >
+                  {caseChangeOptions.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
 
             <div className="case-list">
               {visibleCases.length ? (

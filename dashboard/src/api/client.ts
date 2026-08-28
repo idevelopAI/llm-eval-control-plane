@@ -21,6 +21,7 @@ export type ReleaseDecisionCasePage =
   components['schemas']['ReleaseDecisionCasePage'];
 export type ReleaseDecisionDistributions =
   components['schemas']['ReleaseDecisionDistributionsResponse'];
+export type ReleaseCaseChange = components['schemas']['CaseChange'];
 export type ReleaseStatus = components['schemas']['ReleaseStatus'];
 
 type ApiErrorDocument = components['schemas']['ApiErrorDocument'];
