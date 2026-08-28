@@ -162,12 +162,14 @@ The submission response contains a `Location: /v1/jobs/{job_id}` header. Run
 submission and detail responses contain identifiers, content digests, execution
 mode, case-status counts, and aggregate metrics; decision submission and detail
 responses also contain gate results. Collection pages use bounded indexed
-discovery projections and do not load the canonical evidence documents. Across
-resources, their fields are limited to resource identifiers, kind or status,
-safe failure codes, digests, timestamps, dataset identity and case count,
-execution mode, and comparison run IDs where applicable. No response returns
-case inputs, expectations, target outputs, SQL, rows, idempotency keys, request
-digests, database URLs, or exception text.
+discovery projections and do not load the canonical evidence documents.
+Resource collection fields are limited to identifiers, kind or status, safe
+failure codes, digests, timestamps, dataset identity and case count, execution
+mode, and comparison run IDs where applicable. Dashboard analytical routes
+separately expose the score-only case and fixed aggregate fields described
+above. No response returns case inputs, expectations, target outputs, SQL, rows,
+idempotency keys, request digests, database URLs, raw operational samples, or
+exception text.
 
 | Method | Path | Purpose |
 |---|---|---|

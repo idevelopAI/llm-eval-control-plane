@@ -3,16 +3,15 @@
 ## System objective
 
 LLM Eval Control Plane turns AI application behavior into reproducible evidence.
-The implemented Phase 6 slice places project-bound authorization and
-privacy-safe observability around durable evaluation work. It registers
-immutable dataset revisions, accepts idempotent run and comparison submissions,
-stores resolved worker payloads and private trace links, executes them through
-leased workers, recovers expired attempts, and preserves append-only evidence in
-PostgreSQL. A versioned HTTP API exposes only safe resource, job, attempt, and
-metric surfaces for one project per deployment. The same application core
-supports the CLI evaluation, comparison, and DataBridge workflows. DataBridge
-adds strict HTTP normalization, SQL safety policy, and bounded read-only
-PostgreSQL replay without weakening the provider-neutral application ports.
+The implemented Phase 7 slice adds privacy-bounded analytical reads and a local
+release-review dashboard to the project-bound durable control plane. It
+registers immutable dataset revisions, accepts idempotent run and comparison
+submissions, executes them through leased workers, and preserves append-only
+evidence in PostgreSQL. A versioned HTTP API exposes safe resource, job,
+attempt, metric, redacted case, and fixed-distribution surfaces for one project
+per deployment. The browser validates those projections again before rendering
+them. The same application core supports the CLI evaluation, comparison, and
+DataBridge workflows without weakening the provider-neutral application ports.
 
 ## Architectural style
 
@@ -26,6 +25,8 @@ flowchart LR
     CLI --> COMPARE["Comparison + gate service"]
     CLI --> ADAPTERS["Concrete adapters"]
     API["FastAPI composition root"] --> CONTROL["Control-plane service"]
+    DASHBOARD["React release dashboard"] -->|loopback same-origin proxy| API
+    API --> ANALYTICS["Bounded dashboard analytics"]
     API --> DB["PostgreSQL repository"]
     API --> AUTH["Project-bound authorizer"]
     API --> TELEMETRY["Isolated metrics + tracing + safe logs"]
@@ -76,6 +77,7 @@ src/llm_eval_control_plane/
 │   ├── runner.py          # serial in-process orchestration and aggregation
 │   ├── comparison.py      # alignment, slice aggregation, and gate decisions
 │   ├── control_plane.py   # enqueue-only submissions and repository protocol
+│   ├── dashboard.py       # fixed content-free release analytics
 │   └── worker.py          # leased attempt orchestration and fenced publication
 ├── adapters/
 │   ├── control_plane_db.py # SQLAlchemy PostgreSQL repository
@@ -89,6 +91,7 @@ src/llm_eval_control_plane/
 │   ├── scorers.py         # deterministic built-in evaluators
 │   └── sql_policy.py      # PostgreSQL syntax and object allowlist
 └── domain/
+    ├── analytics.py       # bounded score and operational distributions
     ├── artifacts.py       # immutable version references
     ├── canonical.py       # strict parsing and RFC 8785 hashing
     ├── datasets.py        # reviewed cases and dataset versions
@@ -101,6 +104,15 @@ src/llm_eval_control_plane/
     └── sql.py             # strict SQL expectation/output/replay contracts
 
 migrations/                # Alembic environment and versioned PostgreSQL DDL
+```
+
+```text
+dashboard/
+├── app/                    # source control, live controller, accessible views
+├── src/api/                # generated client, strict validators, safe errors
+├── src/features/           # requests and cross-response view-model checks
+├── src/security/           # loopback policy and volatile credential vault
+└── vite.config.ts          # explicit loopback-only development proxy
 ```
 
 ## Evaluation and release flow
@@ -281,6 +293,60 @@ database URLs, local paths, or exception text. Request and application failures
 use the stable `api-error/v1` envelope with a generated request ID; caller
 request IDs are never retained or reflected;
 non-ready health checks instead return `503` with `health/v1`.
+
+Dashboard analytical routes are a separate bounded surface: they expose
+score-only case transitions and fixed aggregate statistics selected by one
+configured gate. They still omit every input, expectation, output, SQL row, raw
+operational sample, storage path, and exception. Their privacy contract is
+described below.
+
+## Privacy-bounded dashboard read flow
+
+The dashboard is a read-only projection over immutable release evidence. It
+does not receive the canonical decision document or either pinned run document.
+The API reconstructs each analytical response from verified stored evidence,
+then discards the underlying samples before serialization.
+
+```mermaid
+sequenceDiagram
+    participant Operator
+    participant Dashboard
+    participant API
+    participant Store as PostgreSQL repository
+
+    Operator->>Dashboard: opt into local live mode
+    Dashboard->>Dashboard: retain read credential in closure
+    Dashboard->>API: list newest 20 decisions
+    API->>Store: bounded metadata page
+    Store-->>API: immutable decision list items
+    API-->>Dashboard: redacted list page + no-store
+    Dashboard->>API: decision summary
+    API-->>Dashboard: gates, aggregates, identities, digests
+    par Gate-scoped score projection
+        Dashboard->>API: cases(metric, slice, change, cursor, limit)
+        API->>Store: verify immutable decision
+        API-->>Dashboard: IDs, slices, score states, values, delta, change
+    and Fixed analytical projection
+        Dashboard->>API: distributions(metric, slice)
+        API->>Store: verify decision and pinned runs
+        API-->>Dashboard: score statistics + suppressed operations
+    end
+    Dashboard->>Dashboard: validate schemas and cross-response invariants
+    Dashboard-->>Operator: bounded release evidence
+```
+
+The case endpoint exposes only fields needed to explain a gate. It never
+returns inputs, expectations, outputs, SQL, rows, failure text, or raw
+operational samples. The distribution endpoint fixes the set of statistics.
+Score statistics remain exact because authorized case scores are already part of
+the projection; latency and usage-unit statistics are suppressed below 20
+measurements. Counts remain visible so suppression cannot be mistaken for zero.
+
+Browser bearer entry is a local-development capability. It is rendered only on
+an HTTP loopback origin and sent only through the same-origin proxy to an
+explicit loopback API. Hosted builds remain in zero-request fixture mode until a
+server-side session boundary exists. This decision is recorded in
+[ADR 0009](adr/0009-privacy-bounded-dashboard-projections.md).
 
 ## Observability boundary
 
@@ -479,6 +545,10 @@ submission remains authoritative on replay.
   Request collection sizes and derived comparison work are also bounded.
 - PostgreSQL holds complete evidence even though API responses are redacted.
   Database volumes and backups are sensitive and require access controls.
+- The local dashboard accepts a read-only credential only on an HTTP loopback
+  origin, retains it in volatile closure state, rejects redirects and unexpected
+  response fields, and clears it on disconnect or authorization failure. Hosted
+  browser bearer entry is unsupported.
 - `Idempotency-Key` is an opaque retry identifier, not a secret container. It
   must never contain credentials, prompts, customer identifiers, or other
   sensitive content.
@@ -496,8 +566,8 @@ idempotency support. A cancellation request cannot undo an external effect that
 already happened.
 
 The worker registry is not exposed by a scrape endpoint in the current Compose
-topology, and the fixed JSON span exporter has no external OTLP destination. A
-dashboard, cloud infrastructure, Kubernetes, multi-cloud abstractions, billing, and
-arbitrary third-party Python plugins remain outside the implemented scope. The
-repository does not schedule backups and claims no recovery point or recovery
-time objective.
+topology, and the fixed JSON span exporter has no external OTLP destination.
+Hosted live dashboard sessions, cloud infrastructure, Kubernetes, multi-cloud
+abstractions, billing, and arbitrary third-party Python plugins remain outside
+the implemented scope. The repository does not schedule backups and claims no
+recovery point or recovery time objective.
