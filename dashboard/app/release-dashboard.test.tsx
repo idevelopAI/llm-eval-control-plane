@@ -180,6 +180,145 @@ describe('ReleaseDashboard', () => {
     ).toHaveLength(1);
   });
 
+  it('loads bounded case pages without repeating distribution reads', async () => {
+    const user = userEvent.setup();
+    const twoAggregate = {
+      ...releaseDecision.aggregates[0],
+      baseline: {
+        ...releaseDecision.aggregates[0].baseline,
+        attempted: 2,
+        scored: 2,
+      },
+      candidate: {
+        ...releaseDecision.aggregates[0].candidate,
+        attempted: 2,
+        scored: 2,
+      },
+    };
+    const decisionWithTwoCases = {
+      ...releaseDecision,
+      aggregates: [twoAggregate],
+      gates: [{ ...releaseDecision.gates[0], aggregate: twoAggregate }],
+    };
+    const twoMeasurement = {
+      ...releaseDistributions.baseline.latency_ms,
+      attempted: 2,
+      measured: 2,
+      statistics: {
+        ...releaseDistributions.baseline.latency_ms.statistics,
+        sample_count: 2,
+      },
+    };
+    const distributionsWithTwoCases = {
+      ...releaseDistributions,
+      baseline: {
+        ...releaseDistributions.baseline,
+        input_units: twoMeasurement,
+        latency_ms: twoMeasurement,
+        output_units: twoMeasurement,
+        total_units: twoMeasurement,
+      },
+      candidate: {
+        ...releaseDistributions.candidate,
+        input_units: twoMeasurement,
+        latency_ms: twoMeasurement,
+        output_units: twoMeasurement,
+        total_units: twoMeasurement,
+      },
+      score: {
+        ...releaseDistributions.score,
+        baseline: {
+          ...releaseDistributions.score.baseline,
+          attempted: 2,
+          scored: 2,
+          statistics: {
+            ...releaseDistributions.score.baseline.statistics,
+            sample_count: 2,
+          },
+        },
+        candidate: {
+          ...releaseDistributions.score.candidate,
+          attempted: 2,
+          scored: 2,
+          statistics: {
+            ...releaseDistributions.score.candidate.statistics,
+            sample_count: 2,
+          },
+        },
+        delta: {
+          ...releaseDistributions.score.delta,
+          attempted: 2,
+          compared: 2,
+          statistics: {
+            ...releaseDistributions.score.delta.statistics,
+            sample_count: 2,
+          },
+        },
+      },
+    };
+    const secondPage = {
+      ...releaseCases,
+      items: [{ ...releaseCases.items[0], case_id: 'case-002' }],
+      next_cursor: null,
+    };
+    const fetchMock = vi.fn(async (request: Request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/v1/release-decisions') {
+        return jsonResponse(releaseDecisionPage);
+      }
+      if (url.pathname === '/v1/release-decisions/decision-001') {
+        return jsonResponse(decisionWithTwoCases);
+      }
+      if (url.pathname.endsWith('/cases')) {
+        return jsonResponse(url.searchParams.has('cursor') ? secondPage : releaseCases);
+      }
+      if (url.pathname.endsWith('/distributions')) {
+        return jsonResponse(distributionsWithTwoCases);
+      }
+      throw new Error('unexpected test request');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<ReleaseDashboard />);
+
+    await enterLiveMode(user);
+    await submitCredential(user);
+    await screen.findByRole('heading', { name: 'Release blocked' });
+    await user.click(screen.getByRole('button', { name: 'Load more cases' }));
+
+    await screen.findByRole('heading', { name: 'case-002' });
+    expect(screen.getByText('2 shown · selected gate')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Load more cases' })).toBeNull();
+    const requests = fetchMock.mock.calls.map(
+      (call) => new URL((call[0] as unknown as Request).url),
+    );
+    const caseRequests = requests.filter((url) => url.pathname.endsWith('/cases'));
+    expect(caseRequests).toHaveLength(2);
+    expect(caseRequests[1].searchParams.get('cursor')).toBe(
+      'bounded-next-page',
+    );
+    expect(
+      requests.filter((url) => url.pathname.endsWith('/distributions')),
+    ).toHaveLength(1);
+  });
+
+  it('rejects duplicate case IDs returned by a later page', async () => {
+    const user = userEvent.setup();
+    const fetchMock = liveFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<ReleaseDashboard />);
+
+    await enterLiveMode(user);
+    await submitCredential(user);
+    await screen.findByRole('heading', { name: 'Release blocked' });
+    await user.click(screen.getByRole('button', { name: 'Load more cases' }));
+
+    await screen.findByText('Selected gate evidence could not be refreshed.');
+    expect(screen.getByRole('heading', { name: 'case-001' })).toBeTruthy();
+    expect(document.body.textContent).not.toContain(
+      'Release case pagination is inconsistent',
+    );
+  });
+
   it('fails closed when a filtered case projection contradicts its query', async () => {
     const user = userEvent.setup();
     const fetchMock = liveFetch();

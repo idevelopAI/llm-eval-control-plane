@@ -154,5 +154,16 @@ describe('buildReleaseDashboardModel', () => {
         projectId: 'project-alpha',
       }),
     ).toThrow('Release dashboard evidence is inconsistent.');
+    expect(() =>
+      buildReleaseDashboardModel({
+        cases: {
+          ...releaseCases,
+          items: [releaseCases.items[0], { ...releaseCases.items[0], case_id: 'case-002' }],
+        },
+        decision: releaseDecision,
+        distributions: releaseDistributions,
+        projectId: 'project-alpha',
+      }),
+    ).toThrow('Release dashboard evidence is inconsistent.');
   });
 });
