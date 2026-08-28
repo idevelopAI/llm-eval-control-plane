@@ -26,6 +26,10 @@ loopback, an operator can explicitly connect it to the local control plane and
 review the newest decision history, failed-first gates, transition-filtered case
 scores, and privacy-bounded score, latency, and usage-unit distributions.
 
+![Deterministic release evidence dashboard showing a blocked release, failed gate, and redacted scoring evidence](docs/assets/release-dashboard-fixture.jpg)
+
+_Deterministic fixture mode: no credential or API request is used._
+
 Raw evaluation content is outside the dashboard contract. Case reads expose
 only IDs, slice labels, score status, pass state, numeric score, delta, and change
 class. Operational quantiles are withheld below the minimum aggregate size.
