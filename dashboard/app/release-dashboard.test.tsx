@@ -725,4 +725,58 @@ describe('ReleaseDashboard', () => {
     });
     expect(results.violations).toEqual([]);
   });
+
+  it('has no structural accessibility violations in ready and expanded states', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', liveFetch());
+    const { container } = render(<ReleaseDashboard />);
+
+    await enterLiveMode(user);
+    await submitCredential(user);
+    await screen.findByRole('heading', { name: 'Release blocked' });
+    const readyResults = await axe.run(container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(readyResults.violations).toEqual([]);
+
+    await user.click(
+      screen.getByRole('button', {
+        name: 'Inspect scoring evidence for case-001',
+      }),
+    );
+    const expandedResults = await axe.run(container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(expandedResults.violations).toEqual([]);
+  });
+
+  it('has no structural accessibility violations in a live error state', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse(
+          {
+            error: {
+              code: 'persistence_unavailable',
+              details: [],
+              message: 'private-error-sentinel',
+              request_id: 'request_live_001',
+            },
+            schema_version: 'api-error/v1',
+          },
+          503,
+        ),
+      ),
+    );
+    const { container } = render(<ReleaseDashboard />);
+
+    await enterLiveMode(user);
+    await submitCredential(user);
+    await screen.findByRole('heading', { name: 'Live evidence is unavailable' });
+    const results = await axe.run(container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(results.violations).toEqual([]);
+  });
 });
