@@ -144,9 +144,61 @@ describe('ReleaseDashboard', () => {
     const caseRequest = requests.find((request) => request.url.includes('/cases?'));
     expect(caseRequest?.url).toContain('limit=100');
     expect(caseRequest?.url).toContain('gate_slice=language%2Fde');
+    expect(caseRequest?.url).not.toContain('change=');
     expect(
       requests.find((request) => request.url.includes('/distributions?')),
     ).toBeTruthy();
+  });
+
+  it('filters case transitions without refetching aggregate distributions', async () => {
+    const user = userEvent.setup();
+    const fetchMock = liveFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<ReleaseDashboard />);
+
+    await enterLiveMode(user);
+    await submitCredential(user);
+    await screen.findByRole('heading', { name: 'Release blocked' });
+    const filter = screen.getByLabelText('Case transition');
+    expect((filter as unknown as { value: string }).value).toBe('all');
+
+    await user.selectOptions(filter, 'newly_failing');
+    await waitFor(() =>
+      expect((filter as unknown as { value: string }).value).toBe(
+        'newly_failing',
+      ),
+    );
+
+    const requests = fetchMock.mock.calls.map(
+      (call) => new URL((call[0] as unknown as Request).url),
+    );
+    const caseRequests = requests.filter((url) => url.pathname.endsWith('/cases'));
+    expect(caseRequests).toHaveLength(2);
+    expect(caseRequests[1].searchParams.get('change')).toBe('newly_failing');
+    expect(
+      requests.filter((url) => url.pathname.endsWith('/distributions')),
+    ).toHaveLength(1);
+  });
+
+  it('fails closed when a filtered case projection contradicts its query', async () => {
+    const user = userEvent.setup();
+    const fetchMock = liveFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<ReleaseDashboard />);
+
+    await enterLiveMode(user);
+    await submitCredential(user);
+    await screen.findByRole('heading', { name: 'Release blocked' });
+    await user.selectOptions(
+      screen.getByLabelText('Case transition'),
+      'newly_passing',
+    );
+
+    await screen.findByText('Selected gate evidence could not be refreshed.');
+    expect(screen.getByRole('heading', { name: 'Release blocked' })).toBeTruthy();
+    expect(document.body.textContent).not.toContain(
+      'Release case projection is inconsistent',
+    );
   });
 
   it('switches between the bounded newest decision history', async () => {
@@ -206,7 +258,7 @@ describe('ReleaseDashboard', () => {
     const picker = screen.getByLabelText('Decision history');
     const selectedValue = () =>
       (picker as unknown as { value: string }).value;
-    expect(screen.getAllByRole('option')).toHaveLength(2);
+    expect(picker.querySelectorAll('option')).toHaveLength(2);
     expect(selectedValue()).toBe('decision-001');
     expect(
       screen.getByText('2 newest immutable decisions loaded · older decisions available through the API'),
