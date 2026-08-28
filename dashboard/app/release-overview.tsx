@@ -37,6 +37,11 @@ function passLabel(value: boolean | null) {
   return value ? 'passed' : 'failed';
 }
 
+function passClass(value: boolean | null) {
+  if (value == null) return 'neutral-text';
+  return value ? 'pass-text' : 'fail-text';
+}
+
 export type ReleaseOverviewViewProps = Readonly<{
   busy?: boolean;
   model: ReleaseDashboardModel;
@@ -179,9 +184,7 @@ export function ReleaseOverviewView({
             </div>
             <div className="summary-number secondary">
               <strong>{newlyFailingCases}</strong>
-              <span>
-                newly failing {model.casePageTruncated ? 'cases shown' : 'cases'}
-              </span>
+              <span>newly failing shown for selected gate</span>
             </div>
             {reviewGate ? (
               <button
@@ -314,7 +317,8 @@ export function ReleaseOverviewView({
                 </h2>
               </div>
               <span className="case-count">
-                {visibleCases.length}{model.casePageTruncated ? '+' : ''} shown
+                {visibleCases.length} shown · selected gate
+                {model.casePageTruncated ? ' · more available' : ''}
               </span>
             </div>
 
@@ -342,11 +346,11 @@ export function ReleaseOverviewView({
                           <h3>{item.id}</h3>
                         </div>
                         <span className="case-transition">
-                          <span className={item.baselinePassed ? 'pass-text' : 'fail-text'}>
+                          <span className={passClass(item.baselinePassed)}>
                             {passLabel(item.baselinePassed)}
                           </span>
                           <span aria-hidden="true">→</span>
-                          <span className={item.candidatePassed ? 'pass-text' : 'fail-text'}>
+                          <span className={passClass(item.candidatePassed)}>
                             {passLabel(item.candidatePassed)}
                           </span>
                         </span>
