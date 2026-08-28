@@ -11,12 +11,30 @@ A deterministic-first control plane for evaluating AI application behavior,
 preserving case-level evidence, and making quality, safety, latency, and usage
 changes measurable before release.
 
-> **Status:** Phase 6 project-bound authorization, privacy-safe observability,
-> and supply-chain gates. The versioned FastAPI service authenticates a bounded
-> bearer credential, requires the deployment's exact project assertion, emits
-> allowlisted logs, metrics, and traces, and durably links accepted request trace
-> context to leased worker execution. The fenced PostgreSQL recovery protocol
-> and the DataBridge PostgreSQL evaluation remain available.
+> **Status:** Phase 7 privacy-bounded release analytics and a local live review
+> dashboard. The FastAPI service exposes redacted case transitions and fixed
+> aggregate distributions for immutable decisions. The React dashboard validates
+> every response at runtime, keeps read-only credentials in volatile memory, and
+> permits bearer entry only on an HTTP loopback origin. Project authorization,
+> privacy-safe observability, fenced PostgreSQL recovery, and the DataBridge
+> evaluation remain available.
+
+## Release evidence dashboard
+
+The dashboard opens in an immutable, zero-request fixture mode. When served on
+loopback, an operator can explicitly connect it to the local control plane and
+review the newest decision history, failed-first gates, transition-filtered case
+scores, and privacy-bounded score, latency, and usage-unit distributions.
+
+Raw evaluation content is outside the dashboard contract. Case reads expose
+only IDs, slice labels, score status, pass state, numeric score, delta, and change
+class. Operational quantiles are withheld below the minimum aggregate size.
+Credentials never enter tracked configuration or browser persistence, and a
+hosted origin cannot render the local bearer-entry form.
+
+See the [dashboard operator guide](dashboard/README.md) for its trust boundary,
+local workflow, and validation commands. Hosted live access is deliberately
+deferred until a server-side session boundary is implemented.
 
 ## Durable HTTP control plane
 
@@ -166,6 +184,8 @@ digests, database URLs, or exception text.
 | `POST` | `/v1/comparisons` | Submit a baseline/candidate comparison |
 | `GET` | `/v1/release-decisions` | Page release decisions |
 | `GET` | `/v1/release-decisions/{decision_id}` | Read one redacted decision |
+| `GET` | `/v1/release-decisions/{decision_id}/cases` | Page score-only decision cases for one gate |
+| `GET` | `/v1/release-decisions/{decision_id}/distributions` | Read fixed score and operational distributions |
 | `GET` | `/openapi.json` | Read the generated API contract |
 
 The runtime does not serve an interactive documentation UI, so a
@@ -500,6 +520,12 @@ performed safely.
 - Digest-only bearer authentication with exact project assertion and separate
   read, write, cancellation, and observability scopes for one project per
   deployment and database
+- A responsive release-evidence dashboard with explicit fixture/live modes,
+  volatile read-only credentials, recent-decision navigation, failed-first gate
+  review, transition filtering, bounded case pagination, and accessible states
+- Strict runtime response allowlists and cross-response integrity checks for
+  decision identity, gate aggregates, case arithmetic, distribution counts, and
+  stale or contradictory evidence
 - Privacy-safe structured logs, low-cardinality Prometheus metrics, strict W3C
   request context, durable submission trace links, and content-free worker,
   target, and evaluator spans
