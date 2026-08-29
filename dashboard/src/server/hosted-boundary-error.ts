@@ -4,6 +4,7 @@ export type HostedBoundaryErrorCode =
   | 'method_not_allowed'
   | 'permission_denied'
   | 'request_not_allowed'
+  | 'resource_not_found'
   | 'service_configuration_invalid'
   | 'unexpected_upstream_response'
   | 'upstream_unavailable';
@@ -40,6 +41,11 @@ const ERROR_SPECS: Readonly<Record<HostedBoundaryErrorCode, ErrorSpec>> =
       headers: {},
       message: 'The hosted request is not allowed.',
       status: 403,
+    },
+    resource_not_found: {
+      headers: {},
+      message: 'The hosted release evidence was not found.',
+      status: 404,
     },
     service_configuration_invalid: {
       headers: {},
