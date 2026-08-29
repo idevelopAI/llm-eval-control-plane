@@ -1,5 +1,6 @@
 export type HostedBoundaryErrorCode =
   | 'authentication_required'
+  | 'internal_error'
   | 'invalid_request'
   | 'method_not_allowed'
   | 'permission_denied'
@@ -21,6 +22,11 @@ const ERROR_SPECS: Readonly<Record<HostedBoundaryErrorCode, ErrorSpec>> =
       headers: {},
       message: 'Authentication is required.',
       status: 401,
+    },
+    internal_error: {
+      headers: {},
+      message: 'Hosted live evidence could not complete the request.',
+      status: 500,
     },
     invalid_request: {
       headers: {},
