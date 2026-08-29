@@ -1,3 +1,5 @@
+import 'server-only';
+
 import type { components } from '../api/generated/schema';
 import {
   isReleaseDecision,
