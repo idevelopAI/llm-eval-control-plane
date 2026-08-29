@@ -23,6 +23,8 @@ _PUBLIC_ENV_NAME = re.compile(r"\b(?:NEXT_PUBLIC|VITE)_[A-Z0-9_]+\b")
 _SERVER_ONLY_MODULES = (
     DASHBOARD_ROOT / "src" / "server" / "dashboard-read-executor.ts",
     DASHBOARD_ROOT / "src" / "server" / "hosted-config.ts",
+    DASHBOARD_ROOT / "src" / "server" / "hosted-read-handler.ts",
+    DASHBOARD_ROOT / "src" / "server" / "hosted-read-response.ts",
 )
 _CREDENTIAL_PATTERNS = (
     re.compile(r"sk-[A-Za-z0-9]{20,}"),
