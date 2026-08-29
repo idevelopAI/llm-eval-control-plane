@@ -44,8 +44,22 @@ messages are discarded, and successful JSON is checked against strict runtime
 allowlists before it reaches the view model.
 
 Hosted live access is intentionally unsupported in this phase. A later hosted
-version requires a server-side session or backend-for-frontend boundary; do not
-enable browser bearer entry on a public origin.
+version requires the stateless, platform-authenticated backend-for-frontend
+boundary described below; do not enable browser bearer entry on a public origin.
+
+## Implemented disabled foundation
+
+Tested server-only helpers now define the future hosted read boundary: platform
+owner identity, private configuration, same-origin request provenance, four
+allowlisted GET operations, bounded JSON reads, and strict response projection.
+They are not connected to a runtime binding or application route, and no Site
+secret is configured. The hosted dashboard remains an owner-only, zero-request
+fixture with no live behavior change.
+
+Enabling these helpers requires verified server-only secret binding and request
+dispatch in the production Worker runtime, a separately provisioned read-only
+service token, reverified owner-only private access, and explicit route adapters
+that deny every non-GET method (including `HEAD` and `OPTIONS`).
 
 ## Run locally
 

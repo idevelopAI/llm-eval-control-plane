@@ -48,6 +48,28 @@ The Site has these release invariants:
    service credential. It must expose explicit bounded GET routes instead of a
    generic reverse proxy.
 
+## Implemented disabled foundation
+
+The repository contains an isolated server-only foundation for that future read
+boundary. Its identity, configuration, request-provenance, operation-allowlist,
+URL-construction, bounded-JSON, and response-projection checks are pure; the
+fixed read executor receives its network dependency explicitly. No runtime or
+platform binding composes these modules, no application route invokes them, and
+no Site secret is configured. The production Site therefore remains the same
+owner-only, zero-request fixture.
+
+Activation remains blocked until all of these conditions are met:
+
+1. Server-only secret binding and request-dispatcher behavior are verified in
+   the production Worker runtime.
+2. A separate read-only service token is provisioned outside source, build
+   output, the hosting manifest, browser code, and logs.
+3. Owner-only private Site access is reverified immediately before activation
+   and deployment.
+4. Explicit route adapters expose only the allowlisted GET operations and deny
+   every other method, including `HEAD` and `OPTIONS`, without introducing a
+   generic path or proxy.
+
 ## Consequences
 
 - The owner can verify a real production Worker deployment without placing an
