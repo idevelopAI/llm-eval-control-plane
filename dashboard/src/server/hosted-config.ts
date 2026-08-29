@@ -1,3 +1,5 @@
+import 'server-only';
+
 import { HostedBoundaryError } from './hosted-boundary-error';
 import {
   requirePlatformOwner,
