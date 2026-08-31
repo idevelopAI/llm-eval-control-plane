@@ -36,7 +36,11 @@ export default function DistributionComparison({
     score.delta.statistics.small_sample;
 
   return (
-    <section className="distribution-panel" aria-labelledby="distribution-heading">
+    <section
+      className="distribution-panel"
+      id="distribution-evidence"
+      aria-labelledby="distribution-heading"
+    >
       <div className="panel-heading distribution-heading">
         <div>
           <p className="eyebrow">Bounded aggregates</p>
