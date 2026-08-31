@@ -122,18 +122,14 @@ export function ReleaseOverviewView({
   const failedGates = model.gates.filter((gate) => gate.gate.status === 'failed');
   const reviewGate = failedGates[0] ?? model.gates[0];
   const newlyFailingCases =
-    model.cases?.filter((item) => item.change === 'newly_failing').length ??
-    null;
+    model.cases == null
+      ? null
+      : visibleCases.filter((item) => item.change === 'newly_failing').length;
   const releaseFailed = model.release.status === 'failed';
   const passedGateCount = model.gates.length - failedGates.length;
-  const candidateAttempted = Math.max(
-    0,
-    ...model.gates.map((gate) => gate.gate.aggregate.candidate.attempted),
-  );
-  const candidateScored = Math.max(
-    0,
-    ...model.gates.map((gate) => gate.gate.aggregate.candidate.scored),
-  );
+  const candidateAttempted =
+    selectedGate?.gate.aggregate.candidate.attempted ?? 0;
+  const candidateScored = selectedGate?.gate.aggregate.candidate.scored ?? 0;
 
   function focusCaseInbox() {
     window.requestAnimationFrame(() => caseHeadingRef.current?.focus());
@@ -253,7 +249,10 @@ export function ReleaseOverviewView({
               <strong>
                 {passedGateCount}<small> / {model.gates.length}</small>
               </strong>
-              <span>{failedGates.length} gate requires review</span>
+              <span>
+                {failedGates.length} {failedGates.length === 1 ? 'gate' : 'gates'}{' '}
+                {failedGates.length === 1 ? 'requires' : 'require'} review
+              </span>
             </article>
             <article className={`metric-card decision-metric ${releaseFailed ? 'is-failed' : 'is-passed'}`}>
               <p>Release decision</p>
@@ -263,14 +262,14 @@ export function ReleaseOverviewView({
             <article className="metric-card">
               <p>Newly failing cases</p>
               <strong>{newlyFailingCases ?? '—'}</strong>
-              <span>Selected evidence projection</span>
+              <span>Selected gate projection</span>
             </article>
             <article className="metric-card">
-              <p>Candidate coverage</p>
+              <p>Selected gate coverage</p>
               <strong>
                 {candidateScored}<small> / {candidateAttempted}</small>
               </strong>
-              <span>Scored evaluation cases</span>
+              <span>Scored / attempted cases</span>
             </article>
           </section>
 
@@ -644,6 +643,7 @@ export function ReleaseOverviewView({
         ) : (
           <section
             className="distribution-panel panel-evidence-error"
+            id="distribution-evidence"
             aria-labelledby="distribution-unavailable-heading"
             role="alert"
           >
