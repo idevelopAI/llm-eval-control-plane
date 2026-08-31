@@ -1,5 +1,5 @@
-import ReleaseDashboard from './release-dashboard';
+import PublicReleaseDashboard from './public-release-dashboard';
 
 export default function Home() {
-  return <ReleaseDashboard />;
+  return <PublicReleaseDashboard />;
 }

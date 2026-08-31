@@ -10,11 +10,12 @@
     "api:generate": "openapi-typescript ../docs/openapi-v1.json --output src/api/generated/schema.ts --alphabetize",
     "api:check": "openapi-typescript ../docs/openapi-v1.json --output src/api/generated/schema.ts --alphabetize --check",
     "dev": "vinext dev",
-    "build": "vinext build",
+    "build": "vinext build && node scripts/verify-public-build.mjs",
     "start": "vinext start",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "verify:public-build": "node scripts/verify-public-build.mjs",
     "check": "pnpm run api:check && pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run build"
   },
   "dependencies": {
