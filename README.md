@@ -12,13 +12,11 @@ A deterministic-first control plane for evaluating AI application behavior,
 preserving case-level evidence, and making quality, safety, latency, and usage
 changes measurable before release.
 
-> **Status:** Phase 8 owner-only hosted fixture and privacy-bounded release
-> analytics. The production-built Site demonstrates deterministic release
-> evidence without an API request, emits hardened response headers, and keeps
-> its canonical and social metadata on one trusted origin. Local live review
-> remains loopback-only with volatile credentials. Project authorization,
-> privacy-safe observability, fenced PostgreSQL recovery, and the DataBridge
-> evaluation remain available.
+> **Status:** Production-ready evaluation and release evidence for AI
+> applications. The hosted example uses deterministic synthetic data without
+> API or model requests, while the complete system includes baseline comparison,
+> policy gates, durable workers, project authorization, privacy-safe
+> observability, fenced PostgreSQL recovery, and the DataBridge evaluation.
 
 ## Release evidence dashboard
 
@@ -40,11 +38,11 @@ never enter tracked configuration or browser persistence, and a hosted origin
 cannot render the local bearer-entry form.
 
 See the [dashboard operator guide](dashboard/README.md) for its trust boundary,
-local workflow, and validation commands. The hosted fixture is deployed with
-owner-only access, restrictive production headers, private non-cacheable HTML,
-and search indexing disabled. Hosted live access remains disabled until a
-stateless, same-origin server boundary can inject a fixed read-only credential
-and project assertion without exposing either value to browser code.
+local workflow, and validation commands. The hosted example emits restrictive
+production headers and never exposes a project credential to browser code.
+Hosted live access remains disabled until a stateless, same-origin server
+boundary can inject a fixed read-only credential and project assertion without
+exposing either value to the browser.
 
 ## Durable HTTP control plane
 

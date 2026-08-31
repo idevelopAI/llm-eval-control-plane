@@ -5,10 +5,10 @@ import { createHostedControlPlaneConfiguration } from './hosted-config';
 import { PLATFORM_USER_ID_HEADER } from './platform-identity';
 
 const OWNER_ID = 'opaque-owner:01/site';
-const PROJECT_ID = 'portfolio-project_01';
+const PROJECT_ID = 'public-example-project_01';
 const READ_TOKEN = ['cpk_', 'A'.repeat(43)].join('');
-const SITE_ORIGIN = 'https://dashboard.portfolio.dev';
-const UPSTREAM_ORIGIN = 'https://control-plane.portfolio.dev';
+const SITE_ORIGIN = 'https://dashboard.example.com';
+const UPSTREAM_ORIGIN = 'https://control-plane.example.com';
 
 function validInput() {
   return {
@@ -91,12 +91,12 @@ describe('hosted control-plane configuration', () => {
     ['short token', { readToken: ['cpk_', 'A'.repeat(42)].join('') }],
     ['padded token', { readToken: ` ${READ_TOKEN}` }],
     ['invalid owner', { ownerUserId: `${OWNER_ID},other` }],
-    ['HTTP Site', { siteOrigin: 'http://dashboard.portfolio.dev' }],
-    ['Site credentials', { siteOrigin: 'https://user@dashboard.portfolio.dev' }],
+    ['HTTP Site', { siteOrigin: 'http://dashboard.example.com' }],
+    ['Site credentials', { siteOrigin: 'https://user@dashboard.example.com' }],
     ['Site path', { siteOrigin: `${SITE_ORIGIN}/api` }],
     ['Site query', { siteOrigin: `${SITE_ORIGIN}?private=value` }],
     ['Site fragment', { siteOrigin: `${SITE_ORIGIN}#private` }],
-    ['Site port', { siteOrigin: 'https://dashboard.portfolio.dev:8443' }],
+    ['Site port', { siteOrigin: 'https://dashboard.example.com:8443' }],
     ['loopback', { upstreamOrigin: 'https://127.0.0.1' }],
     ['localhost', { upstreamOrigin: 'https://localhost' }],
     ['internal host', { upstreamOrigin: 'https://api.service.internal' }],

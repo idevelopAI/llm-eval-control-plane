@@ -11,15 +11,15 @@ import { PLATFORM_USER_ID_HEADER } from './platform-identity';
 import { requireHostedReadProvenance } from './request-provenance';
 
 const OWNER_ID = 'opaque-owner:01/site';
-const SITE_ORIGIN = 'https://dashboard.portfolio.dev';
+const SITE_ORIGIN = 'https://dashboard.example.com';
 
 function configuration(): HostedControlPlaneConfiguration {
   return createHostedControlPlaneConfiguration({
     ownerUserId: OWNER_ID,
-    projectId: 'portfolio-project_01',
+    projectId: 'public-example-project_01',
     readToken: ['cpk_', 'A'.repeat(43)].join(''),
     siteOrigin: SITE_ORIGIN,
-    upstreamOrigin: 'https://control-plane.portfolio.dev',
+    upstreamOrigin: 'https://control-plane.example.com',
   });
 }
 
@@ -105,9 +105,9 @@ describe('hosted read provenance', () => {
   );
 
   it.each([
-    ['HTTP URL', { url: 'http://dashboard.portfolio.dev/api/control-plane' }],
+    ['HTTP URL', { url: 'http://dashboard.example.com/api/control-plane' }],
     ['wrong host', { url: 'https://attacker.example/api/control-plane' }],
-    ['wrong port', { url: 'https://dashboard.portfolio.dev:8443/api/control-plane' }],
+    ['wrong port', { url: 'https://dashboard.example.com:8443/api/control-plane' }],
     ['cross-site fetch', { header: 'Sec-Fetch-Site', value: 'cross-site' }],
     ['same-site fetch', { header: 'Sec-Fetch-Site', value: 'same-site' }],
     ['navigation', { header: 'Sec-Fetch-Mode', value: 'navigate' }],

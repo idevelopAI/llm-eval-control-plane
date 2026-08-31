@@ -206,17 +206,21 @@ export default function ReleaseDashboard() {
   const sourceControl = (
     <section className="source-control" aria-label="Dashboard data source">
       <div>
-        <span className={`source-badge ${sourceMode}`}>{sourceMode}</span>
+        <span className={`source-badge ${sourceMode}`}>
+          {sourceMode === 'fixture' ? 'example' : sourceMode}
+        </span>
         <strong>
           {sourceMode === 'fixture'
-            ? 'Immutable portfolio fixture'
+            ? 'Public example environment'
             : 'Local live control plane'}
         </strong>
       </div>
       {sourceMode === 'fixture' ? (
-        <button disabled={!loopbackEnabled} onClick={enterLiveMode} type="button">
-          Use local live data
-        </button>
+        loopbackEnabled ? (
+          <button onClick={enterLiveMode} type="button">
+            Use local live data
+          </button>
+        ) : null
       ) : (
         <button onClick={returnToFixture} type="button">
           Disconnect and return to fixture
@@ -224,7 +228,7 @@ export default function ReleaseDashboard() {
       )}
       {!loopbackEnabled && sourceMode === 'fixture' ? (
         <small>
-          Browser bearer entry is disabled outside an HTTP loopback origin.
+          Synthetic data · no credentials, API, or model requests.
         </small>
       ) : null}
     </section>
@@ -237,7 +241,7 @@ export default function ReleaseDashboard() {
         <ReleaseOverviewView
           model={fixtureModel}
           onSelectGate={(gateId) => setFixtureModel(demoModelForGate(gateId))}
-          sourceLabel="Immutable fixture · no live request made"
+          sourceLabel="Synthetic release evidence · zero API or model calls"
         />
       </>
     );

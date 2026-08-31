@@ -25,7 +25,7 @@ import {
   releaseDistributions,
 } from '../test/release-evidence';
 
-const PROJECT_ID = 'portfolio-project_01';
+const PROJECT_ID = 'public-example-project_01';
 const READ_TOKEN = ['cpk_', 'A'.repeat(43)].join('');
 
 function configuration(): HostedControlPlaneConfiguration {
@@ -33,8 +33,8 @@ function configuration(): HostedControlPlaneConfiguration {
     ownerUserId: 'opaque-owner:01/site',
     projectId: PROJECT_ID,
     readToken: READ_TOKEN,
-    siteOrigin: 'https://dashboard.portfolio.dev',
-    upstreamOrigin: 'https://control-plane.portfolio.dev',
+    siteOrigin: 'https://dashboard.example.com',
+    upstreamOrigin: 'https://control-plane.example.com',
   });
 }
 
@@ -90,7 +90,7 @@ describe('hosted dashboard read executor', () => {
     expect(fetchMock).toHaveBeenCalledOnce();
     const [url, init] = fetchMock.mock.calls[0] as unknown as [URL, RequestInit];
     expect(url.toString()).toBe(
-      'https://control-plane.portfolio.dev/v1/release-decisions?limit=10&order=desc',
+      'https://control-plane.example.com/v1/release-decisions?limit=10&order=desc',
     );
     expect(init).toMatchObject({
       cache: 'no-store',

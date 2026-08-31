@@ -12,7 +12,7 @@ page could also be indexed or cached even when it contains only demonstration
 data. Deployment metadata, source transfer, and runtime configuration must not
 become a second path for secrets to enter the repository.
 
-The hosted surface therefore needs a useful portfolio artifact without implying
+The hosted surface therefore needs a useful review artifact without implying
 that it is connected to operational evidence. It must preserve the loopback-only
 live policy, fail closed on hosted origins, and make its access and cache
 properties explicit.

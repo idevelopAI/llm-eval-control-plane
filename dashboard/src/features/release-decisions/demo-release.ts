@@ -36,10 +36,10 @@ export const demoRelease: ReleaseView = {
   datasetDigest: '0b6717a9…a0a31',
   decisionDigest: '49d78403…c8c2dff',
   decisionId: 'decision_regression_001',
-  executionMode: 'Deterministic fixture',
-  project: 'release-gate-demo',
+  executionMode: 'Offline deterministic evaluation',
+  project: 'public-example',
   simulated: true,
-  spec: 'production-release-v1',
+  spec: 'synthetic-release-policy-v1',
   status: 'failed',
 };
 
