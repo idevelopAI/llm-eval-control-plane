@@ -15,6 +15,10 @@ import {
   type ReleaseDashboardModel,
 } from '@/src/features/release-decisions/view-model';
 
+const REPOSITORY_URL = 'https://github.com/idevelopAI/llm-eval-control-plane';
+const ARCHITECTURE_URL = `${REPOSITORY_URL}/blob/main/docs/architecture.md`;
+const SECURITY_URL = `${REPOSITORY_URL}/blob/main/docs/security/threat-model.md`;
+
 function formatScore(value: number | null | undefined) {
   return value == null ? '—' : value.toFixed(3);
 }
@@ -121,6 +125,15 @@ export function ReleaseOverviewView({
     model.cases?.filter((item) => item.change === 'newly_failing').length ??
     null;
   const releaseFailed = model.release.status === 'failed';
+  const passedGateCount = model.gates.length - failedGates.length;
+  const candidateAttempted = Math.max(
+    0,
+    ...model.gates.map((gate) => gate.gate.aggregate.candidate.attempted),
+  );
+  const candidateScored = Math.max(
+    0,
+    ...model.gates.map((gate) => gate.gate.aggregate.candidate.scored),
+  );
 
   function focusCaseInbox() {
     window.requestAnimationFrame(() => caseHeadingRef.current?.focus());
@@ -146,36 +159,121 @@ export function ReleaseOverviewView({
 
   return (
     <div className="dashboard-shell" aria-busy={busy}>
-      <header className="masthead">
-        <a className="brand" href="#decision" aria-label="Eval Control home">
+      <aside className="app-sidebar" aria-label="Product navigation">
+        <a className="brand" href="#decision" aria-label="LLM Eval Control Plane home">
           <span className="brand-mark" aria-hidden="true">
             EC
           </span>
           <span>
             <strong>Eval Control</strong>
-            <small>Release evidence</small>
+            <small>LLM release system</small>
           </span>
         </a>
 
-        <div className="project-context" aria-label="Current project">
-          <span>Project</span>
-          <strong>{model.release.project}</strong>
-        </div>
+        <nav className="sidebar-nav" aria-label="Evidence sections">
+          <p>Evidence</p>
+          <a className="is-active" href="#decision">
+            <span aria-hidden="true">01</span>
+            Overview
+          </a>
+          <a href="#gate-ledger">
+            <span aria-hidden="true">02</span>
+            Release gates
+          </a>
+          <a href="#case-evidence">
+            <span aria-hidden="true">03</span>
+            Case evidence
+          </a>
+          <a href="#distribution-evidence">
+            <span aria-hidden="true">04</span>
+            Distributions
+          </a>
+        </nav>
 
-        <div className="mode-pill">
-          <span className="mode-dot" aria-hidden="true" />
-          <span>
-            <strong>{model.release.executionMode}</strong>
-            <small>
-              {model.release.simulated
-                ? 'Synthetic latency and usage'
-                : 'Observed latency and usage'}
-            </small>
-          </span>
-        </div>
-      </header>
+        <nav className="sidebar-nav sidebar-resources" aria-label="Project resources">
+          <p>Resources</p>
+          <a href={REPOSITORY_URL} rel="noreferrer" target="_blank">
+            <span aria-hidden="true">↗</span>
+            Source code
+          </a>
+          <a href={ARCHITECTURE_URL} rel="noreferrer" target="_blank">
+            <span aria-hidden="true">↗</span>
+            Architecture
+          </a>
+          <a href={SECURITY_URL} rel="noreferrer" target="_blank">
+            <span aria-hidden="true">↗</span>
+            Security model
+          </a>
+        </nav>
 
-      <main>
+        <div className="sidebar-assurance">
+          <span aria-hidden="true">✓</span>
+          <p>
+            <strong>Request-free example</strong>
+            Synthetic evidence only. No credentials or model calls.
+          </p>
+        </div>
+      </aside>
+
+      <div className="dashboard-workspace">
+        <header className="masthead">
+          <div className="workspace-heading">
+            <p className="eyebrow">LLM Eval Control Plane</p>
+            <h1>Release evidence</h1>
+            <p>
+              Compare a candidate against an immutable baseline and trace every
+              policy decision to bounded evidence.
+            </p>
+          </div>
+
+          <div className="workspace-context">
+            <div className="project-context" aria-label="Current project">
+              <span>Project</span>
+              <strong>{model.release.project}</strong>
+            </div>
+
+            <div className="mode-pill">
+              <span className="mode-dot" aria-hidden="true" />
+              <span>
+                <strong>{model.release.executionMode}</strong>
+                <small>
+                  {model.release.simulated
+                    ? 'Synthetic latency and usage'
+                    : 'Observed latency and usage'}
+                </small>
+              </span>
+            </div>
+          </div>
+        </header>
+
+        <main>
+          <section className="metric-grid" aria-label="Release summary">
+            <article className="metric-card metric-card-primary">
+              <p>Gates passed</p>
+              <strong>
+                {passedGateCount}<small> / {model.gates.length}</small>
+              </strong>
+              <span>{failedGates.length} gate requires review</span>
+            </article>
+            <article className={`metric-card decision-metric ${releaseFailed ? 'is-failed' : 'is-passed'}`}>
+              <p>Release decision</p>
+              <strong>{releaseFailed ? 'Blocked' : 'Passed'}</strong>
+              <span>{releaseFailed ? 'Policy prevented regression' : 'Policy requirements met'}</span>
+            </article>
+            <article className="metric-card">
+              <p>Newly failing cases</p>
+              <strong>{newlyFailingCases ?? '—'}</strong>
+              <span>Selected evidence projection</span>
+            </article>
+            <article className="metric-card">
+              <p>Candidate coverage</p>
+              <strong>
+                {candidateScored}<small> / {candidateAttempted}</small>
+              </strong>
+              <span>Scored evaluation cases</span>
+            </article>
+          </section>
+
         <section
           className={`decision-hero ${releaseFailed ? 'is-failed' : 'is-passed'}`}
           id="decision"
@@ -189,7 +287,7 @@ export function ReleaseOverviewView({
                 {releaseFailed ? '×' : '✓'}
               </span>
               <div>
-                <h1>{releaseFailed ? 'Release blocked' : 'Release passed'}</h1>
+                <h2>{releaseFailed ? 'Release blocked' : 'Release passed'}</h2>
                 <p>
                   {releaseFailed
                     ? `Blocked by ${failedGates.length} of ${model.gates.length} configured gates.`
@@ -217,18 +315,16 @@ export function ReleaseOverviewView({
           </div>
 
           <div className="decision-summary">
-            <div className="summary-number">
-              <strong>{failedGates.length}</strong>
-              <span>of {model.gates.length} gates failed</span>
-            </div>
-            <div className="summary-number secondary">
-              <strong>{newlyFailingCases ?? '—'}</strong>
-              <span>
-                {newlyFailingCases == null
-                  ? 'case projection unavailable'
-                  : 'newly failing shown for selected gate'}
-              </span>
-            </div>
+            <p className="eyebrow">First review</p>
+            <strong className="review-gate-name">
+              {reviewGate?.label ?? 'No configured gate'}
+            </strong>
+            {reviewGate ? <code>{reviewGate.gate.metric}</code> : null}
+            <p>
+              {releaseFailed
+                ? 'Inspect the blocked gate, then follow its case-level score transitions.'
+                : 'Inspect the strongest available gate evidence for this decision.'}
+            </p>
             {reviewGate ? (
               <button
                 className="primary-action"
@@ -267,7 +363,11 @@ export function ReleaseOverviewView({
         </section>
 
         <div className="decision-grid">
-          <section className="ledger-panel" aria-labelledby="ledger-heading">
+          <section
+            className="ledger-panel"
+            id="gate-ledger"
+            aria-labelledby="ledger-heading"
+          >
             <div className="panel-heading">
               <div>
                 <p className="eyebrow">Decision evidence</p>
@@ -351,7 +451,11 @@ export function ReleaseOverviewView({
             </div>
           </section>
 
-          <aside className="case-panel" aria-labelledby="case-heading">
+          <aside
+            className="case-panel"
+            id="case-evidence"
+            aria-labelledby="case-heading"
+          >
             <div className="panel-heading case-heading">
               <div>
                 <p className="eyebrow">Regression inbox</p>
@@ -578,7 +682,8 @@ export function ReleaseOverviewView({
           </p>
           <p>{sourceLabel}</p>
         </footer>
-      </main>
+        </main>
+      </div>
     </div>
   );
 }

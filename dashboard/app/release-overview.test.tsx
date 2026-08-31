@@ -1,5 +1,5 @@
 import axe from 'axe-core';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
@@ -12,9 +12,18 @@ describe('ReleaseOverview', () => {
     expect(
       screen.getByRole('heading', { name: 'Release blocked' }),
     ).toBeTruthy();
-    expect(
-      screen.getByText('1', { selector: '.summary-number strong' }),
-    ).toBeTruthy();
+    const releaseSummary = screen.getByRole('region', {
+      name: 'Release summary',
+    });
+    const gateCard = within(releaseSummary)
+      .getByText('Gates passed')
+      .closest('article');
+    const decisionCard = within(releaseSummary)
+      .getByText('Release decision')
+      .closest('article');
+
+    expect(gateCard?.textContent).toContain('3 / 4');
+    expect(decisionCard?.textContent).toContain('Blocked');
     expect(screen.getByText('−0.125')).toBeTruthy();
     expect(
       screen.getByText(
