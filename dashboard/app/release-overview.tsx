@@ -168,7 +168,7 @@ export function ReleaseOverviewView({
             <strong>{model.release.executionMode}</strong>
             <small>
               {model.release.simulated
-                ? 'Simulated latency and usage'
+                ? 'Synthetic latency and usage'
                 : 'Observed latency and usage'}
             </small>
           </span>
@@ -589,7 +589,7 @@ export default function ReleaseOverview() {
     <ReleaseOverviewView
       model={model}
       onSelectGate={(gateId) => setModel(demoModelForGate(gateId))}
-      sourceLabel="Immutable fixture · no live request made"
+      sourceLabel="Synthetic release evidence · zero API or model calls"
     />
   );
 }

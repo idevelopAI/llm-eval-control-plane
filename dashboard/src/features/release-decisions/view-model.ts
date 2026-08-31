@@ -120,7 +120,7 @@ function utcTimestamp(value: string): string {
 function executionModeLabel(mode: ReleaseDecision['execution_mode']): string {
   if (mode === 'live') return 'Live execution';
   if (mode === 'offline_mock') return 'Offline mock';
-  return 'Deterministic fixture';
+  return 'Offline deterministic evaluation';
 }
 
 function inconsistentEvidence(): never {

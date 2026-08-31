@@ -67,7 +67,7 @@ credential. Browser pagination retains at most 500 redacted cases.
   it does not persist a second analytical document that could drift.
 - The browser cannot inspect prompt-level or output-level evidence. A separate,
   more privileged workflow would need its own authorization and audit boundary.
-- A hosted portfolio build can demonstrate the deterministic fixture but cannot
+- A hosted example build can demonstrate the deterministic fixture but cannot
   accept a live bearer credential.
 
 ## Rejected alternatives

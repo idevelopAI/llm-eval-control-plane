@@ -79,14 +79,12 @@ describe('ReleaseDashboard', () => {
     render(<ReleaseDashboard />);
 
     expect(
-      (screen.getByRole('button', {
-        name: 'Use local live data',
-      }) as HTMLButtonElement).disabled,
-    ).toBe(true);
+      screen.queryByRole('button', { name: 'Use local live data' }),
+    ).toBeNull();
     expect(screen.queryByLabelText('Read-only access token')).toBeNull();
     expect(
       screen.getByText(
-        'Browser bearer entry is disabled outside an HTTP loopback origin.',
+        'Synthetic data · no credentials, API, or model requests.',
       ),
     ).toBeTruthy();
   });
@@ -97,7 +95,7 @@ describe('ReleaseDashboard', () => {
     render(<ReleaseDashboard />);
 
     expect(
-      screen.getByText('Immutable fixture · no live request made'),
+      screen.getByText('Synthetic release evidence · zero API or model calls'),
     ).toBeTruthy();
     await waitFor(() =>
       expect(
@@ -648,7 +646,7 @@ describe('ReleaseDashboard', () => {
     pending.resolve?.(jsonResponse(releaseDecisionPage));
     await waitFor(() =>
       expect(
-        screen.getByText('Immutable fixture · no live request made'),
+        screen.getByText('Synthetic release evidence · zero API or model calls'),
       ).toBeTruthy(),
     );
     expect(

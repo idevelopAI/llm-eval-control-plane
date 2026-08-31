@@ -14,9 +14,9 @@ import {
 } from './hosted-config';
 
 const OWNER_ID = 'opaque-owner:01/site';
-const PROJECT_ID = 'portfolio-project_01';
+const PROJECT_ID = 'public-example-project_01';
 const READ_TOKEN = ['cpk_', 'A'.repeat(43)].join('');
-const SITE_ORIGIN = 'https://dashboard.portfolio.dev';
+const SITE_ORIGIN = 'https://dashboard.example.com';
 
 function configuration(): HostedControlPlaneConfiguration {
   return createHostedControlPlaneConfiguration({
@@ -24,7 +24,7 @@ function configuration(): HostedControlPlaneConfiguration {
     projectId: PROJECT_ID,
     readToken: READ_TOKEN,
     siteOrigin: SITE_ORIGIN,
-    upstreamOrigin: 'https://control-plane.portfolio.dev',
+    upstreamOrigin: 'https://control-plane.example.com',
   });
 }
 
@@ -84,7 +84,7 @@ describe('hosted read handler', () => {
 
     const [url, init] = fetchMock.mock.calls[0] as unknown as [URL, RequestInit];
     expect(url.toString()).toBe(
-      'https://control-plane.portfolio.dev/v1/release-decisions/decision-001',
+      'https://control-plane.example.com/v1/release-decisions/decision-001',
     );
     expect([...(init.headers as Headers).entries()]).toEqual([
       ['accept', 'application/json'],

@@ -8,7 +8,7 @@ target outputs, SQL, rows, provider responses, or exception text.
 ## Data-source modes
 
 The initial **fixture** mode is deterministic and makes no API requests. It is
-safe for a portfolio preview and is always labeled as a fixture.
+safe for a public example environment and is always labeled as synthetic data.
 
 The **local live** mode is available only when the dashboard itself is served
 over plain HTTP on `localhost`, `127.0.0.1`, or `[::1]`. It connects through the
@@ -43,8 +43,8 @@ use `no-store`, redirects are rejected, referrers are suppressed, server error
 messages are discarded, and successful JSON is checked against strict runtime
 allowlists before it reaches the view model.
 
-Hosted live access is intentionally unsupported in this phase. A later hosted
-version requires the stateless, platform-authenticated backend-for-frontend
+Hosted live access is intentionally unsupported in the public example. A later
+hosted version requires the stateless, platform-authenticated backend-for-frontend
 boundary described below; do not enable browser bearer entry on a public origin.
 
 ## Implemented disabled foundation
@@ -53,8 +53,8 @@ Tested server-only helpers now define the future hosted read boundary: platform
 owner identity, private configuration, same-origin request provenance, four
 allowlisted GET operations, bounded JSON reads, and strict response projection.
 They are not connected to a runtime binding or application route, and no Site
-secret is configured. The hosted dashboard remains an owner-only, zero-request
-fixture with no live behavior change.
+secret is configured. The hosted dashboard remains a zero-request synthetic
+example with no live behavior change.
 
 Enabling these helpers requires verified server-only secret binding and request
 dispatch in the production Worker runtime, a separately provisioned read-only

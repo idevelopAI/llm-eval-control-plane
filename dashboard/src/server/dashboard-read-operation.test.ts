@@ -19,10 +19,10 @@ import {
 function configuration(): HostedControlPlaneConfiguration {
   return createHostedControlPlaneConfiguration({
     ownerUserId: 'opaque-owner:01/site',
-    projectId: 'portfolio-project_01',
+    projectId: 'public-example-project_01',
     readToken: ['cpk_', 'A'.repeat(43)].join(''),
-    siteOrigin: 'https://dashboard.portfolio.dev',
-    upstreamOrigin: 'https://control-plane.portfolio.dev',
+    siteOrigin: 'https://dashboard.example.com',
+    upstreamOrigin: 'https://control-plane.example.com',
   });
 }
 
@@ -53,7 +53,7 @@ describe('dashboard read operations', () => {
     );
 
     expect(buildDashboardReadUrl(configuration(), operation).toString()).toBe(
-      'https://control-plane.portfolio.dev/v1/release-decisions?limit=25&cursor=opaque_cursor-01&status=failed&order=desc',
+      'https://control-plane.example.com/v1/release-decisions?limit=25&cursor=opaque_cursor-01&status=failed&order=desc',
     );
     expect(Object.isFrozen(operation)).toBe(true);
     expect(Object.isFrozen(operation.query)).toBe(true);
@@ -63,7 +63,7 @@ describe('dashboard read operations', () => {
     const operation = parseDecisionDetail('decision:2026.08-01');
 
     expect(buildDashboardReadUrl(configuration(), operation).toString()).toBe(
-      'https://control-plane.portfolio.dev/v1/release-decisions/decision%3A2026.08-01',
+      'https://control-plane.example.com/v1/release-decisions/decision%3A2026.08-01',
     );
     expectInvalid(() =>
       parseDecisionDetail('decision-01', new URLSearchParams('debug=true')),
@@ -84,7 +84,7 @@ describe('dashboard read operations', () => {
     );
 
     expect(buildDashboardReadUrl(configuration(), operation).toString()).toBe(
-      'https://control-plane.portfolio.dev/v1/release-decisions/decision-01/cases?metric=quality%2Fgroundedness%3Av1&limit=100&cursor=next_page-01&gate_slice=tier%3Dcritical&case_slice=locale%3Aen-US&change=newly_failing',
+      'https://control-plane.example.com/v1/release-decisions/decision-01/cases?metric=quality%2Fgroundedness%3Av1&limit=100&cursor=next_page-01&gate_slice=tier%3Dcritical&case_slice=locale%3Aen-US&change=newly_failing',
     );
   });
 
@@ -98,7 +98,7 @@ describe('dashboard read operations', () => {
     );
 
     expect(buildDashboardReadUrl(configuration(), operation).toString()).toBe(
-      'https://control-plane.portfolio.dev/v1/release-decisions/decision-01/distributions?metric=safety%2Frefusal&gate_slice=tier%3Dcritical',
+      'https://control-plane.example.com/v1/release-decisions/decision-01/distributions?metric=safety%2Frefusal&gate_slice=tier%3Dcritical',
     );
   });
 
@@ -106,7 +106,7 @@ describe('dashboard read operations', () => {
     const operation = parseDecisionListQuery(new URLSearchParams());
 
     expect(buildDashboardReadUrl(configuration(), operation).toString()).toBe(
-      'https://control-plane.portfolio.dev/v1/release-decisions',
+      'https://control-plane.example.com/v1/release-decisions',
     );
   });
 
