@@ -21,9 +21,17 @@ describe('ReleaseOverview', () => {
     const decisionCard = within(releaseSummary)
       .getByText('Release decision')
       .closest('article');
+    const failingCaseCard = within(releaseSummary)
+      .getByText('Newly failing cases')
+      .closest('article');
+    const coverageCard = within(releaseSummary)
+      .getByText('Selected gate coverage')
+      .closest('article');
 
     expect(gateCard?.textContent).toContain('3 / 4');
     expect(decisionCard?.textContent).toContain('Blocked');
+    expect(failingCaseCard?.textContent).toContain('1');
+    expect(coverageCard?.textContent).toContain('8 / 8');
     expect(screen.getByText('−0.125')).toBeTruthy();
     expect(
       screen.getByText(

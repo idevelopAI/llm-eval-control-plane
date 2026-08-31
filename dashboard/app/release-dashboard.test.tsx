@@ -298,6 +298,7 @@ describe('ReleaseDashboard', () => {
     await screen.findByRole('heading', {
       name: 'Distribution evidence is unavailable',
     });
+    expect(container.querySelector('#distribution-evidence')).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'case-001' })).toBeTruthy();
     expect(document.body.textContent).not.toContain(
       'private-distribution-error-sentinel',

@@ -1516,7 +1516,7 @@ body {
 
 .sidebar-nav p {
   margin: 0 10px 8px;
-  color: #8a968f;
+  color: #5f6e65;
   font-size: 10px;
   font-weight: 750;
   letter-spacing: 0.13em;
@@ -1612,7 +1612,7 @@ body {
 
 .dashboard-workspace {
   min-width: 0;
-  overflow: hidden;
+  overflow: clip;
   border: 1px solid #edf1ee;
   border-radius: 20px;
   background: #f4f7f5;
@@ -1759,7 +1759,7 @@ body {
 .metric-card > span {
   display: block;
   margin-top: 17px;
-  color: #718078;
+  color: #59685f;
   font-size: 10px;
 }
 
@@ -2097,6 +2097,10 @@ body {
     align-items: flex-start;
     border-top: 0;
   }
+
+  .decision-hero {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 700px) {
@@ -2186,11 +2190,6 @@ body {
 
   .sidebar-nav a {
     padding: 0 8px;
-  }
-
-  .sidebar-nav a:nth-of-type(3),
-  .sidebar-nav a:nth-of-type(4) {
-    display: none;
   }
 
   .metric-card p,
