@@ -6,11 +6,11 @@ export const SITE_ORIGIN = new URL(
 
 export const SITE_TITLE = 'LLM Eval Control Plane';
 export const SITE_DESCRIPTION =
-  'Deterministic release gates and decision evidence for production AI systems.';
+  'Inspect release gates, regression evidence, and privacy-bounded metrics using synthetic data with zero API or model calls.';
 export const SOCIAL_PREVIEW_URL = new URL('/og.png', SITE_ORIGIN).toString();
 
 const socialPreview = {
-  alt: 'LLM Eval Control Plane release-gate preview',
+  alt: 'LLM Eval Control Plane release evidence dashboard',
   height: 630,
   url: SOCIAL_PREVIEW_URL,
   width: 1200,

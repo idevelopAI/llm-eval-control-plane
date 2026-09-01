@@ -10,6 +10,12 @@ target outputs, SQL, rows, provider responses, or exception text.
 The initial **fixture** mode is deterministic and makes no API requests. It is
 safe for a public example environment and is always labeled as synthetic data.
 
+The production homepage imports a dedicated fixture-only component. API client,
+credential, live-mode, and loopback-proxy modules are absent from its client and
+server-rendered application chunks. Development resolves the homepage to the
+local live-capable component only while `vinext dev` is running; production
+builds do not use that development substitution.
+
 The **local live** mode is available only when the dashboard itself is served
 over plain HTTP on `localhost`, `127.0.0.1`, or `[::1]`. It connects through the
 same-origin Vite proxy to an explicit loopback control-plane origin. A hosted
@@ -46,6 +52,22 @@ allowlists before it reaches the view model.
 Hosted live access is intentionally unsupported in the public example. A later
 hosted version requires the stateless, platform-authenticated backend-for-frontend
 boundary described below; do not enable browser bearer entry on a public origin.
+
+## Hosted build boundary
+
+`pnpm run build` runs an artifact verifier after compilation. The verifier fails
+if the live dashboard enters the public module graph; if application chunks
+contain control-plane routes, credential markers, model-provider endpoints, or
+browser persistence; if the output contains secrets, source maps, credential
+files, gradients, or unexpected runtime bindings; or if a server-only prerender
+secret reaches a client artifact.
+
+`pnpm run smoke:public` starts the built runtime on a temporary loopback port,
+checks the hardened response and non-cacheable fixture HTML, and proves that
+GET, POST, HEAD, and OPTIONS requests below `/api` and `/v1` all resolve to 404.
+These gates verify the shipped artifact rather than relying only on source-level
+origin checks. The proposed access and rollback policy is recorded in
+[ADR 0011](../docs/adr/0011-public-example-site.md).
 
 ## Implemented disabled foundation
 
@@ -90,9 +112,11 @@ pnpm run lint
 pnpm run typecheck
 pnpm run test
 pnpm run build
+pnpm run smoke:public
 ```
 
 The test suite includes runtime-contract rejection, credential non-persistence,
 origin restrictions, stale-response cancellation, authorization clearing,
 decision identity checks, isolated projection recovery, pagination boundaries,
-and automated accessibility checks for the major UI states.
+automated accessibility checks for the major UI states, a solid-fill visual
+contract, production artifact inspection, and built-runtime route probes.

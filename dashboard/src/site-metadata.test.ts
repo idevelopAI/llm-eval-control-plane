@@ -37,7 +37,7 @@ describe('hosted Site metadata', () => {
     });
   });
 
-  it('keeps the private fixture out of search indexes', () => {
+  it('keeps the pre-public fixture out of search indexes', () => {
     expect(SITE_METADATA.robots).toEqual({
       follow: false,
       index: false,

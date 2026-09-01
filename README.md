@@ -8,15 +8,14 @@
 [![Worker Recovery Gate](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/worker-recovery-gate.yml/badge.svg)](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/worker-recovery-gate.yml)
 [![Security Gate](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/security-gate.yml/badge.svg)](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/security-gate.yml)
 
-A deterministic-first control plane for evaluating AI application behavior,
-preserving case-level evidence, and making quality, safety, latency, and usage
-changes measurable before release.
+A deterministic evaluation control plane for AI applications. Compare immutable
+baseline and candidate runs, enforce release policy across critical slices, and
+trace every decision to bounded evidence.
 
-> **Status:** Production-ready evaluation and release evidence for AI
-> applications. The hosted example uses deterministic synthetic data without
-> API or model requests, while the complete system includes baseline comparison,
-> policy gates, durable workers, project authorization, privacy-safe
-> observability, fenced PostgreSQL recovery, and the DataBridge evaluation.
+> **Current scope:** Deterministic release evidence, baseline comparison, policy
+> gates, durable workers, project authorization, privacy-safe observability,
+> fenced PostgreSQL recovery, and the DataBridge evaluation. The hosted example
+> is a synthetic, request-free build with no API or model calls.
 
 ## Release evidence dashboard
 
@@ -38,11 +37,14 @@ never enter tracked configuration or browser persistence, and a hosted origin
 cannot render the local bearer-entry form.
 
 See the [dashboard operator guide](dashboard/README.md) for its trust boundary,
-local workflow, and validation commands. The hosted example emits restrictive
-production headers and never exposes a project credential to browser code.
-Hosted live access remains disabled until a stateless, same-origin server
-boundary can inject a fixed read-only credential and project assertion without
-exposing either value to the browser.
+local workflow, and validation commands. The hosted build uses a dedicated
+fixture-only entry: CI rejects control-plane routes, credential UI, model
+endpoints, browser persistence, unexpected runtime bindings, secrets, and
+gradients in the production artifact. A built-runtime probe also verifies
+restrictive response headers and confirms that `/api` and `/v1` expose no
+handlers. Hosted live access remains disabled until a separately reviewed,
+stateless server boundary can keep its fixed read-only identity outside the
+browser.
 
 ## Durable HTTP control plane
 
@@ -586,7 +588,8 @@ uv run llm-eval validate examples/evaluation-spec.json
 - [Architecture](docs/architecture.md)
 - [Domain model](docs/domain-model.md)
 - [Architecture decisions](docs/adr/)
-- [Hosted fixture decision](docs/adr/0010-owner-only-hosted-fixture.md)
+- [Owner-only Site decision](docs/adr/0010-owner-only-hosted-fixture.md)
+- [Proposed public Site decision](docs/adr/0011-public-example-site.md)
 - [Threat model](docs/security/threat-model.md)
 - [Incident and recovery runbook](docs/operations/recovery.md)
 
