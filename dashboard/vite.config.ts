@@ -1,5 +1,6 @@
 import { sites } from '@openai/sites-vite-plugin';
 import tailwindcss from '@tailwindcss/postcss';
+import { fileURLToPath } from 'node:url';
 import vinext from 'vinext';
 import { defineConfig } from 'vite';
 import hostingConfig from './.openai/hosting.json' with { type: 'json' };
@@ -7,6 +8,9 @@ import { resolveControlPlaneDevOrigin } from './src/config/dev-origin.ts';
 
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
   '00000000-0000-4000-8000-000000000000';
+const localDashboardEntry = fileURLToPath(
+  new URL('./app/release-dashboard.tsx', import.meta.url),
+);
 
 const { d1, r2 } = hostingConfig;
 
@@ -38,7 +42,7 @@ const localBindingConfig = {
     : [],
 };
 
-export default defineConfig(async () => {
+export default defineConfig(async ({ command, mode }) => {
   // Keep Wrangler and Miniflare state project-local. These are non-secret tool
   // settings; application environment belongs in ignored `.env*` files.
   process.env.WRANGLER_WRITE_LOGS ??= 'false';
@@ -61,6 +65,21 @@ export default defineConfig(async () => {
         : undefined,
     },
     plugins: [
+      {
+        name: 'local-live-dashboard-entry',
+        enforce: 'pre',
+        resolveId(source, importer) {
+          if (
+            command === 'serve' &&
+            mode !== 'test' &&
+            source === './public-release-dashboard' &&
+            importer?.endsWith('/app/page.tsx')
+          ) {
+            return localDashboardEntry;
+          }
+          return null;
+        },
+      },
       vinext(),
       sites(),
       cloudflare({
