@@ -47,7 +47,7 @@ describe('PublicReleaseDashboard', () => {
     );
     await user.click(
       screen.getByRole('button', {
-        name: 'Inspect scoring evidence for refusal-de-001',
+        name: 'Inspect scoring evidence for synthetic-public-case-refusal-de-001',
       }),
     );
 

@@ -5,6 +5,12 @@ import type {
   ReleaseDashboardModel,
   ReleaseView,
 } from './view-model';
+import {
+  PUBLIC_FIXTURE_CASE_ID_PREFIX,
+  PUBLIC_FIXTURE_DECISION_ID_PREFIX,
+  PUBLIC_FIXTURE_RUN_ID_PREFIX,
+  PUBLIC_FIXTURE_SCHEMA_VERSION,
+} from './public-fixture-contract';
 import { gateId } from './view-model';
 
 export { filterOptions } from './view-model';
@@ -35,7 +41,7 @@ export const demoRelease: ReleaseView = {
   dataset: 'release-gate-40 · revision 1',
   datasetDigest: '0b6717a9…a0a31',
   decisionDigest: '49d78403…c8c2dff',
-  decisionId: 'decision_regression_001',
+  decisionId: `${PUBLIC_FIXTURE_DECISION_ID_PREFIX}regression-001`,
   executionMode: 'Offline deterministic evaluation',
   project: 'public-example',
   simulated: true,
@@ -151,7 +157,7 @@ export const demoCases = [
     change: 'newly_failing',
     delta: -1,
     gateIds: [SAFETY_GATE_ID],
-    id: 'refusal-de-001',
+    id: `${PUBLIC_FIXTURE_CASE_ID_PREFIX}refusal-de-001`,
     metric: 'safety.refusal_correct',
     slices: ['language/de', 'task/refusal', 'safety/refusal'],
   },
@@ -163,7 +169,7 @@ export const demoCases = [
     change: 'newly_failing',
     delta: -1,
     gateIds: [QUALITY_GATE_ID, QUALITY_DE_GATE_ID],
-    id: 'quality-de-001',
+    id: `${PUBLIC_FIXTURE_CASE_ID_PREFIX}quality-de-001`,
     metric: 'quality.exact_match',
     slices: ['language/de', 'task/qa', 'answerability/answerable'],
   },
@@ -175,7 +181,7 @@ export const demoCases = [
     change: 'newly_failing',
     delta: -1,
     gateIds: [QUALITY_GATE_ID],
-    id: 'quality-en-001',
+    id: `${PUBLIC_FIXTURE_CASE_ID_PREFIX}quality-en-001`,
     metric: 'quality.exact_match',
     slices: ['language/en', 'task/qa', 'answerability/answerable'],
   },
@@ -216,7 +222,7 @@ function demoDistributions(gate: GateFixture): ReleaseDecisionDistributions {
     latency_ms: measurement(baseline.attempted, 5 + valueOffset),
     output_units: measurement(baseline.attempted, 7 + valueOffset),
     role,
-    run_id: `run-${role}-fixture`,
+    run_id: `${PUBLIC_FIXTURE_RUN_ID_PREFIX}${role}-001`,
     simulated: true,
     total_units: measurement(baseline.attempted, 25 + valueOffset),
   });
@@ -252,15 +258,27 @@ function demoDistributions(gate: GateFixture): ReleaseDecisionDistributions {
   };
 }
 
+export const publicSyntheticFixture = {
+  cases: demoCases,
+  distributions: demoGates.map((gate) => demoDistributions(gate)),
+  gates: demoGates,
+  release: demoRelease,
+  schemaVersion: PUBLIC_FIXTURE_SCHEMA_VERSION,
+} as const;
+
+// The safety contract and pinned canonical digest cover this exact payload, and
+// every public dashboard interaction below reads directly from it.
+
 export function demoModelForGate(gateId: string): ReleaseDashboardModel {
-  const selectedGate = demoGates.find((gate) => gate.id === gateId);
+  const selectedGateIndex = demoGates.findIndex((gate) => gate.id === gateId);
+  const selectedGate = demoGates[selectedGateIndex];
   if (!selectedGate) throw new Error('Fixture gate is unavailable.');
   return {
     casePageTruncated: false,
-    cases: demoCases,
-    distributions: demoDistributions(selectedGate),
-    gates: demoGates,
-    release: demoRelease,
+    cases: publicSyntheticFixture.cases,
+    distributions: publicSyntheticFixture.distributions[selectedGateIndex],
+    gates: publicSyntheticFixture.gates,
+    release: publicSyntheticFixture.release,
     selectedGateId: selectedGate.id,
   };
 }

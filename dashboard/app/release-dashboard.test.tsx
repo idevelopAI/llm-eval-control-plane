@@ -9,6 +9,7 @@ import {
   releaseDecisionPage,
   releaseDistributions,
 } from '@/src/test/release-evidence';
+import { demoRelease } from '@/src/features/release-decisions/demo-release';
 import ReleaseDashboard from './release-dashboard';
 
 const TEST_TOKEN = `cpk_${'A'.repeat(43)}`;
@@ -671,7 +672,7 @@ describe('ReleaseDashboard', () => {
     await submitCredential(user);
 
     await screen.findByRole('heading', { name: 'No release decisions yet' });
-    expect(screen.queryByText('decision_regression_001')).toBeNull();
+    expect(screen.queryByText(demoRelease.decisionId)).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -774,7 +775,7 @@ describe('ReleaseDashboard', () => {
 
     await screen.findByRole('heading', { name: 'Live evidence is unavailable' });
     expect(document.body.textContent).not.toContain('private-server-message-sentinel');
-    expect(screen.queryByText('decision_regression_001')).toBeNull();
+    expect(screen.queryByText(demoRelease.decisionId)).toBeNull();
     expect(screen.getByText('Request ID: request_live_001')).toBeTruthy();
     expect(
       screen.getByRole('button', { name: 'Retry live request' }),
