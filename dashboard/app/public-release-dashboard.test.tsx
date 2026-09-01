@@ -1,5 +1,5 @@
 import axe from 'axe-core';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -54,6 +54,29 @@ describe('PublicReleaseDashboard', () => {
     expect(screen.getByText('1.000 · passed')).toBeTruthy();
     expect(fetchMock).not.toHaveBeenCalled();
     expect(storageWrite).not.toHaveBeenCalled();
+  });
+
+  it('keeps keyboard and project navigation available at every viewport', () => {
+    const { container } = render(<PublicReleaseDashboard />);
+
+    expect(
+      screen
+        .getByRole('link', { name: 'Skip to release evidence' })
+        .getAttribute('href'),
+    ).toBe('#overview');
+    expect(container.querySelector('main#overview')).toBeTruthy();
+
+    const overviewLink = screen.getByRole('link', { name: 'Overview' });
+    const gatesLink = screen.getByRole('link', { name: 'Release gates' });
+    expect(overviewLink.getAttribute('aria-current')).toBe('location');
+
+    fireEvent.click(gatesLink);
+    expect(gatesLink.getAttribute('aria-current')).toBe('location');
+    expect(overviewLink.hasAttribute('aria-current')).toBe(false);
+
+    expect(screen.getByRole('link', { name: 'Source code' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Architecture' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Security model' })).toBeTruthy();
   });
 
   it('has no automated structural accessibility violations', async () => {

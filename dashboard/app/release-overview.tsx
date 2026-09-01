@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import DistributionComparison from './distribution-comparison';
 import {
@@ -18,6 +18,15 @@ import {
 const REPOSITORY_URL = 'https://github.com/idevelopAI/llm-eval-control-plane';
 const ARCHITECTURE_URL = `${REPOSITORY_URL}/blob/main/docs/architecture.md`;
 const SECURITY_URL = `${REPOSITORY_URL}/blob/main/docs/security/threat-model.md`;
+
+const evidenceSectionIds = [
+  'overview',
+  'gate-ledger',
+  'case-evidence',
+  'distribution-evidence',
+] as const;
+
+type EvidenceSectionId = (typeof evidenceSectionIds)[number];
 
 function formatScore(value: number | null | undefined) {
   return value == null ? '—' : value.toFixed(3);
@@ -99,8 +108,25 @@ export function ReleaseOverviewView({
   sourceLabel,
 }: ReleaseOverviewViewProps) {
   const [activeFilter, setActiveFilter] = useState<FilterId>('all');
+  const [activeSection, setActiveSection] =
+    useState<EvidenceSectionId>('overview');
   const [expandedCaseId, setExpandedCaseId] = useState<string | null>(null);
   const caseHeadingRef = useRef<HTMLHeadingElement>(null);
+
+  useEffect(() => {
+    function syncSectionFromHash() {
+      const hash = window.location.hash?.slice(1) ?? '';
+      setActiveSection(
+        evidenceSectionIds.includes(hash as EvidenceSectionId)
+          ? (hash as EvidenceSectionId)
+          : 'overview',
+      );
+    }
+
+    syncSectionFromHash();
+    window.addEventListener('hashchange', syncSectionFromHash);
+    return () => window.removeEventListener('hashchange', syncSectionFromHash);
+  }, []);
 
   const visibleGates = useMemo(
     () =>
@@ -132,6 +158,7 @@ export function ReleaseOverviewView({
   const candidateScored = selectedGate?.gate.aggregate.candidate.scored ?? 0;
 
   function focusCaseInbox() {
+    setActiveSection('case-evidence');
     window.requestAnimationFrame(() => caseHeadingRef.current?.focus());
   }
 
@@ -155,8 +182,16 @@ export function ReleaseOverviewView({
 
   return (
     <div className="dashboard-shell" aria-busy={busy}>
+      <a className="skip-link" href="#overview">
+        Skip to release evidence
+      </a>
       <aside className="app-sidebar" aria-label="Product navigation">
-        <a className="brand" href="#decision" aria-label="LLM Eval Control Plane home">
+        <a
+          className="brand"
+          href="#overview"
+          aria-label="LLM Eval Control Plane overview"
+          onClick={() => setActiveSection('overview')}
+        >
           <span className="brand-mark" aria-hidden="true">
             EC
           </span>
@@ -168,19 +203,43 @@ export function ReleaseOverviewView({
 
         <nav className="sidebar-nav" aria-label="Evidence sections">
           <p>Evidence</p>
-          <a className="is-active" href="#decision">
+          <a
+            aria-current={activeSection === 'overview' ? 'location' : undefined}
+            className={activeSection === 'overview' ? 'is-active' : undefined}
+            href="#overview"
+            onClick={() => setActiveSection('overview')}
+          >
             <span aria-hidden="true">01</span>
             Overview
           </a>
-          <a href="#gate-ledger">
+          <a
+            aria-current={activeSection === 'gate-ledger' ? 'location' : undefined}
+            className={activeSection === 'gate-ledger' ? 'is-active' : undefined}
+            href="#gate-ledger"
+            onClick={() => setActiveSection('gate-ledger')}
+          >
             <span aria-hidden="true">02</span>
             Release gates
           </a>
-          <a href="#case-evidence">
+          <a
+            aria-current={activeSection === 'case-evidence' ? 'location' : undefined}
+            className={activeSection === 'case-evidence' ? 'is-active' : undefined}
+            href="#case-evidence"
+            onClick={() => setActiveSection('case-evidence')}
+          >
             <span aria-hidden="true">03</span>
             Case evidence
           </a>
-          <a href="#distribution-evidence">
+          <a
+            aria-current={
+              activeSection === 'distribution-evidence' ? 'location' : undefined
+            }
+            className={
+              activeSection === 'distribution-evidence' ? 'is-active' : undefined
+            }
+            href="#distribution-evidence"
+            onClick={() => setActiveSection('distribution-evidence')}
+          >
             <span aria-hidden="true">04</span>
             Distributions
           </a>
@@ -205,8 +264,8 @@ export function ReleaseOverviewView({
         <div className="sidebar-assurance">
           <span aria-hidden="true">✓</span>
           <p>
-            <strong>Request-free example</strong>
-            Synthetic evidence only. No credentials or model calls.
+            <strong>No API or model requests</strong>
+            Synthetic evidence only. No credentials or backend dependency.
           </p>
         </div>
       </aside>
@@ -242,7 +301,7 @@ export function ReleaseOverviewView({
           </div>
         </header>
 
-        <main>
+        <main id="overview" tabIndex={-1}>
           <section className="metric-grid" aria-label="Release summary">
             <article className="metric-card metric-card-primary">
               <p>Gates passed</p>

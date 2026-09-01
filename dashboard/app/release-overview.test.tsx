@@ -66,6 +66,11 @@ describe('ReleaseOverview', () => {
       name: 'Scoring evidence',
     });
     await waitFor(() => expect(document.activeElement).toBe(evidenceHeading));
+    expect(
+      screen
+        .getByRole('link', { name: 'Case evidence' })
+        .getAttribute('aria-current'),
+    ).toBe('location');
 
     await user.click(
       screen.getByRole('button', {
