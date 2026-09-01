@@ -47,6 +47,25 @@ a:focus-visible,
   outline-offset: 3px;
 }
 
+.skip-link {
+  position: fixed;
+  z-index: 100;
+  top: 12px;
+  left: 12px;
+  padding: 10px 14px;
+  border: 2px solid var(--focus);
+  border-radius: 8px;
+  background: var(--raised);
+  color: var(--ink);
+  font-weight: 750;
+  text-decoration: none;
+  transform: translateY(-180%);
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
 .dashboard-shell {
   min-height: 100vh;
 }
@@ -217,7 +236,7 @@ a:focus-visible,
 }
 
 .decision-picker select:focus-visible {
-  outline: 3px solid rgba(37, 99, 235, 0.22);
+  outline: 3px solid var(--focus);
   outline-offset: 2px;
 }
 
@@ -827,7 +846,7 @@ h1 {
 }
 
 .case-filter select:focus-visible {
-  outline: 3px solid rgba(37, 99, 235, 0.2);
+  outline: 3px solid var(--focus);
   outline-offset: 2px;
 }
 
@@ -2052,7 +2071,6 @@ body {
 
   .brand small,
   .sidebar-nav p,
-  .sidebar-resources,
   .sidebar-assurance {
     display: none;
   }
@@ -2067,7 +2085,13 @@ body {
   }
 
   .app-sidebar .sidebar-resources {
-    display: none;
+    display: flex;
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+    margin: 0;
+    padding-top: 10px;
+    border-top: 1px solid var(--line);
+    overflow-x: auto;
   }
 
   .sidebar-nav a {
@@ -2194,7 +2218,7 @@ body {
 
   .metric-card p,
   .metric-card > span {
-    font-size: 9px;
+    font-size: 11px;
   }
 
   .decision-hero {
