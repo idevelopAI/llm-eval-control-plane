@@ -1,5 +1,5 @@
 import { readdir, readFile } from 'node:fs/promises';
-import { extname, join, relative } from 'node:path';
+import { extname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const dashboardRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -8,6 +8,10 @@ const failures = [];
 
 function fail(message) {
   failures.push(message);
+}
+
+function portableRelative(path) {
+  return relative(distRoot, path).split(sep).join('/');
 }
 
 async function walk(directory) {
@@ -29,14 +33,29 @@ function assertEmpty(value, label) {
   const empty = Array.isArray(value)
     ? value.length === 0
     : value != null && typeof value === 'object'
-      ? Object.keys(value).length === 0
+      ? Object.values(value).every((nested) => {
+          if (Array.isArray(nested)) return nested.length === 0;
+          if (nested != null && typeof nested === 'object') {
+            return Object.keys(nested).length === 0;
+          }
+          return nested == null;
+        })
       : value == null;
   if (!empty) fail(`${label} must be empty in the public Site build.`);
 }
 
 const files = await walk(distRoot);
-const relativeFiles = files.map((path) => relative(distRoot, path));
-const textExtensions = new Set(['.css', '.html', '.js', '.json', '.mjs', '.txt']);
+const relativeFiles = files.map(portableRelative);
+const textExtensions = new Set([
+  '.css',
+  '.html',
+  '.js',
+  '.json',
+  '.mjs',
+  '.svg',
+  '.txt',
+  '.xml',
+]);
 const textFiles = files.filter((path) => textExtensions.has(extname(path)));
 const textByFile = new Map(
   await Promise.all(
@@ -49,6 +68,90 @@ for (const path of relativeFiles) {
   if (forbiddenFile.test(path)) fail(`Forbidden build artifact: ${path}`);
 }
 
+const clientManifestPath = join(distRoot, 'client', '.vite', 'manifest.json');
+const clientManifest = await readJson(clientManifestPath);
+const publicEntryKey = 'app/public-release-dashboard.tsx';
+const publicEntry = clientManifest[publicEntryKey];
+if (!publicEntry?.file) {
+  fail('The fixture-only public dashboard is missing from the client manifest.');
+}
+if (clientManifest['app/release-dashboard.tsx']) {
+  fail('The local live dashboard entered the public client manifest.');
+}
+
+function reachableManifestKeys(startKey) {
+  const reachable = new Set();
+  const pending = [startKey];
+  while (pending.length > 0) {
+    const key = pending.pop();
+    if (!key || reachable.has(key)) continue;
+    const entry = clientManifest[key];
+    if (!entry) {
+      fail(`Client manifest dependency ${key} could not be classified.`);
+      continue;
+    }
+    reachable.add(key);
+    pending.push(...(entry.imports ?? []), ...(entry.dynamicImports ?? []));
+  }
+  return reachable;
+}
+
+const reachableKeys = publicEntry ? reachableManifestKeys(publicEntryKey) : new Set();
+const reachableApplicationKeys = [...reachableKeys].filter((key) => {
+  const source = clientManifest[key]?.src ?? key;
+  return /^(?:app|src)\//.test(source);
+});
+if (
+  reachableApplicationKeys.some((key) => {
+    const source = clientManifest[key]?.src ?? key;
+    return source === 'app/release-dashboard.tsx';
+  })
+) {
+  fail('The local live dashboard is reachable from the public client entry.');
+}
+
+const reachableApplicationClientChunks = reachableApplicationKeys
+  .map((key) => clientManifest[key]?.file)
+  .filter((file) => typeof file === 'string')
+  .map((file) => join(distRoot, 'client', file));
+
+const publicClientChunks = reachableApplicationClientChunks.filter((path) =>
+  /client\/_next\/static\/chunks\/public-release-dashboard-[^/]+\.js$/.test(
+    portableRelative(path),
+  ),
+);
+const publicSsrChunks = files.filter((path) =>
+  /server\/ssr\/_next\/static\/public-release-dashboard-[^/]+\.js$/.test(
+    portableRelative(path),
+  ),
+);
+if (publicClientChunks.length !== 1) {
+  fail(`Expected one public client entry chunk; found ${publicClientChunks.length}.`);
+}
+if (publicSsrChunks.length !== 1) {
+  fail(`Expected one public SSR entry chunk; found ${publicSsrChunks.length}.`);
+}
+
+const ssrChunkPrefix = 'server/ssr/_next/static/';
+const knownFrameworkSsrChunk = /^(?:app-prefetch-fetch-queue|app-router-scroll|error-boundary|layout-segment-context|react|static\.edge|streamed-icons)-[^/]+\.js$/;
+const unknownSsrChunks = files
+  .map((path) => [path, portableRelative(path)])
+  .filter(([, path]) => path.startsWith(ssrChunkPrefix))
+  .filter(([, path]) => {
+    const name = path.slice(ssrChunkPrefix.length);
+    return (
+      !knownFrameworkSsrChunk.test(name) &&
+      !/^public-release-dashboard-[^/]+\.js$/.test(name)
+    );
+  });
+for (const [, path] of unknownSsrChunks) {
+  fail(`Unclassified public SSR chunk: ${path}`);
+}
+
+const applicationChunks = [
+  ...new Set([...reachableApplicationClientChunks, ...publicSsrChunks]),
+];
+
 const capabilityMarkers = [
   ['control-plane API route', /\/v1\//i],
   ['authorization header', /\bauthorization\b/i],
@@ -60,49 +163,23 @@ const capabilityMarkers = [
   ['model provider SDK', /(?:openai|anthropic)[-_/](?:sdk|client)|@(?:anthropic-ai|google)\//i],
   ['model endpoint', /api\.(?:openai|anthropic)\.com|generativelanguage\.googleapis\.com/i],
 ];
-const applicationOnlyMarkers = new Set([
-  'authorization header',
-  'bearer credential',
-]);
+const requestMarkers = [
+  ['fetch', /\bfetch\s*\(/],
+  ['XMLHttpRequest', /\bXMLHttpRequest\b/],
+  ['WebSocket', /\bWebSocket\b/],
+  ['EventSource', /\bEventSource\b/],
+  ['background beacon', /\bsendBeacon\b/],
+  ['image beacon', /\bnew\s+Image\s*\(|document\.createElement\(["'`]img["'`]\)/],
+  ['form submission element', /["'`]form["'`]/],
+];
 
-for (const [path, content] of textByFile) {
-  if (extname(path) !== '.js') continue;
-  for (const [label, pattern] of capabilityMarkers) {
-    const applicationEntry = /public-release-dashboard-[^/]+\.js$/.test(path);
-    if (
-      pattern.test(content) &&
-      (!applicationOnlyMarkers.has(label) || applicationEntry)
-    ) {
-      fail(`${label} found in ${relative(distRoot, path)}.`);
+for (const path of applicationChunks) {
+  const content = textByFile.get(path) ?? '';
+  for (const [label, pattern] of [...capabilityMarkers, ...requestMarkers]) {
+    if (pattern.test(content)) {
+      fail(`${label} found in application chunk ${portableRelative(path)}.`);
     }
   }
-}
-
-const clientManifestPath = join(distRoot, 'client', '.vite', 'manifest.json');
-const clientManifest = await readJson(clientManifestPath);
-const publicEntry = clientManifest['app/public-release-dashboard.tsx'];
-if (!publicEntry?.file) {
-  fail('The fixture-only public dashboard is missing from the client manifest.');
-}
-if (clientManifest['app/release-dashboard.tsx']) {
-  fail('The local live dashboard entered the public client manifest.');
-}
-
-const publicClientChunks = files.filter((path) =>
-  /client\/_next\/static\/chunks\/public-release-dashboard-[^/]+\.js$/.test(
-    path,
-  ),
-);
-const publicSsrChunks = files.filter((path) =>
-  /server\/ssr\/_next\/static\/public-release-dashboard-[^/]+\.js$/.test(
-    path,
-  ),
-);
-if (publicClientChunks.length !== 1) {
-  fail(`Expected one public client entry chunk; found ${publicClientChunks.length}.`);
-}
-if (publicSsrChunks.length !== 1) {
-  fail(`Expected one public SSR entry chunk; found ${publicSsrChunks.length}.`);
 }
 
 const persistenceMarkers = [
@@ -114,11 +191,11 @@ const persistenceMarkers = [
   ['WebSocket', /\bWebSocket\b/],
   ['EventSource', /\bEventSource\b/],
 ];
-for (const path of [...publicClientChunks, ...publicSsrChunks]) {
+for (const path of applicationChunks) {
   const content = textByFile.get(path) ?? '';
   for (const [label, pattern] of persistenceMarkers) {
     if (pattern.test(content)) {
-      fail(`${label} found in application entry ${relative(distRoot, path)}.`);
+      fail(`${label} found in application chunk ${portableRelative(path)}.`);
     }
   }
 }
@@ -133,15 +210,21 @@ const secretPatterns = [
 for (const [path, content] of textByFile) {
   for (const [label, pattern] of secretPatterns) {
     if (pattern.test(content)) {
-      fail(`${label} found in ${relative(distRoot, path)}.`);
+      fail(`${label} found in ${portableRelative(path)}.`);
     }
   }
 }
 
-const publicCss = textFiles.filter((path) => extname(path) === '.css');
-for (const path of publicCss) {
-  if (/(?:linear|radial|conic)-gradient\s*\(/i.test(textByFile.get(path) ?? '')) {
-    fail(`Gradient found in ${relative(distRoot, path)}.`);
+const gradientFiles = textFiles.filter((path) =>
+  new Set(['.css', '.html', '.js', '.svg', '.xml']).has(extname(path)),
+);
+for (const path of gradientFiles) {
+  const content = textByFile.get(path) ?? '';
+  if (
+    /(?:linear|radial|conic)-gradient\s*\(/i.test(content) ||
+    /<(?:linearGradient|radialGradient)\b/i.test(content)
+  ) {
+    fail(`Gradient found in ${portableRelative(path)}.`);
   }
 }
 
@@ -155,33 +238,60 @@ if (hostingKeys.join(',') !== 'd1,project_id,r2') {
 }
 
 const wrangler = await readJson(join(distRoot, 'server', 'wrangler.json'));
-const emptyBindingPaths = [
-  ['vars', wrangler.vars],
-  ['durable_objects.bindings', wrangler.durable_objects?.bindings],
-  ['kv_namespaces', wrangler.kv_namespaces],
-  ['queues.producers', wrangler.queues?.producers],
-  ['queues.consumers', wrangler.queues?.consumers],
-  ['connect', wrangler.connect],
-  ['r2_buckets', wrangler.r2_buckets],
-  ['d1_databases', wrangler.d1_databases],
-  ['vectorize', wrangler.vectorize],
-  ['ai_search_namespaces', wrangler.ai_search_namespaces],
-  ['ai_search', wrangler.ai_search],
-  ['agent_memory', wrangler.agent_memory],
-  ['hyperdrive', wrangler.hyperdrive],
-  ['workflows', wrangler.workflows],
-  ['secrets_store_secrets', wrangler.secrets_store_secrets],
-  ['services', wrangler.services],
-  ['analytics_engine_datasets', wrangler.analytics_engine_datasets],
-  ['dispatch_namespaces', wrangler.dispatch_namespaces],
-  ['send_email', wrangler.send_email],
-  ['mtls_certificates', wrangler.mtls_certificates],
-  ['pipelines', wrangler.pipelines],
-  ['vpc_services', wrangler.vpc_services],
-  ['vpc_networks', wrangler.vpc_networks],
-  ['triggers', wrangler.triggers],
-];
-for (const [label, value] of emptyBindingPaths) assertEmpty(value, label);
+const allowedNonBindingKeys = new Set([
+  'assets',
+  'build',
+  'compatibility_date',
+  'compatibility_flags',
+  'dev',
+  'jsx_factory',
+  'jsx_fragment',
+  'main',
+  'name',
+  'no_bundle',
+  'observability',
+  'python_modules',
+  'rules',
+  'topLevelName',
+]);
+for (const [key, value] of Object.entries(wrangler)) {
+  if (!allowedNonBindingKeys.has(key)) assertEmpty(value, `wrangler.${key}`);
+}
+
+if (wrangler.main !== 'index.js' || wrangler.no_bundle !== true) {
+  fail('The public Worker entry must be the unbundled generated index.js.');
+}
+if (wrangler.assets?.directory !== '../client') {
+  fail('The public Worker assets directory is unexpected.');
+}
+if (
+  !Array.isArray(wrangler.compatibility_flags) ||
+  wrangler.compatibility_flags.join(',') !== 'nodejs_compat'
+) {
+  fail('Unexpected Worker compatibility flags.');
+}
+const devKeys = Object.keys(wrangler.dev ?? {}).sort().join(',');
+if (devKeys !== 'enable_containers,generate_types,ip,local_protocol,upstream_protocol') {
+  fail(`Unexpected public Worker dev keys: ${devKeys}`);
+}
+const buildKeys = Object.keys(wrangler.build ?? {}).sort().join(',');
+if (buildKeys !== 'watch_dir') fail(`Unexpected Worker build keys: ${buildKeys}`);
+const observabilityKeys = Object.keys(wrangler.observability ?? {}).sort().join(',');
+if (observabilityKeys !== 'enabled') {
+  fail(`Unexpected Worker observability keys: ${observabilityKeys}`);
+}
+const pythonModuleKeys = Object.keys(wrangler.python_modules ?? {}).sort().join(',');
+if (pythonModuleKeys !== 'exclude') {
+  fail(`Unexpected Worker Python module keys: ${pythonModuleKeys}`);
+}
+if (
+  !Array.isArray(wrangler.rules) ||
+  wrangler.rules.length !== 1 ||
+  wrangler.rules[0]?.type !== 'ESModule' ||
+  wrangler.rules[0]?.globs?.join(',') !== '**/*.js,**/*.mjs'
+) {
+  fail('Unexpected public Worker module rules.');
+}
 
 const serverManifest = await readJson(
   join(distRoot, 'server', '.vite', 'manifest.json'),
@@ -205,7 +315,7 @@ if (typeof prerenderSecret !== 'string' || prerenderSecret.length < 32) {
   );
   for (const [path, content] of clientFiles) {
     if (content.includes(prerenderSecret)) {
-      fail(`Server prerender secret leaked into ${relative(distRoot, path)}.`);
+      fail(`Server prerender secret leaked into ${portableRelative(path)}.`);
     }
   }
 }

@@ -17,6 +17,13 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function fetchWithTimeout(input, init = {}, timeoutMs = 2_000) {
+  return fetch(input, {
+    ...init,
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+}
+
 async function reservePort() {
   const server = createServer();
   server.listen(0, '127.0.0.1');
@@ -30,18 +37,26 @@ async function reservePort() {
 }
 
 async function waitForRuntime(origin, processExited) {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
     if (processExited()) throw new Error('Production runtime exited before readiness.');
     try {
-      const response = await fetch(origin, { redirect: 'manual' });
+      const response = await fetchWithTimeout(
+        origin,
+        { redirect: 'manual' },
+        750,
+      );
       if (response.status === 200) return response;
     } catch {
       // The server has not opened its listener yet.
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error('Production runtime did not become ready within 8 seconds.');
+  throw new Error('Production runtime did not become ready within 15 seconds.');
 }
+
+const expectedCsp =
+  "default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; manifest-src 'self'; object-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; worker-src 'self'; upgrade-insecure-requests";
 
 const port = await reservePort();
 const origin = `http://127.0.0.1:${port}/`;
@@ -75,11 +90,16 @@ try {
   assert(html.includes('Public example environment'), 'Public fixture copy is missing.');
   assert(!html.includes('Use local live data'), 'Local live UI reached production HTML.');
   assert(!html.includes('Read-only access token'), 'Credential UI reached production HTML.');
-  assert(cacheControl.includes('private'), 'Root response must be private.');
-  assert(cacheControl.includes('no-store'), 'Root response must be non-cacheable.');
-  assert(csp.includes("connect-src 'self'"), 'CSP connect boundary is missing.');
-  assert(csp.includes("frame-ancestors 'none'"), 'CSP frame boundary is missing.');
-  assert(csp.includes("object-src 'none'"), 'CSP object boundary is missing.');
+  const cacheTokens = cacheControl
+    .split(',')
+    .map((token) => token.trim().toLowerCase())
+    .filter(Boolean)
+    .sort();
+  assert(
+    cacheTokens.join(',') === ['max-age=0', 'no-store', 'private'].sort().join(','),
+    `Unexpected root Cache-Control policy: ${cacheControl}`,
+  );
+  assert(csp === expectedCsp, `Unexpected Content-Security-Policy: ${csp}`);
   assert(root.headers.get('x-frame-options') === 'DENY', 'Frame denial is missing.');
   assert(
     root.headers.get('x-content-type-options') === 'nosniff',
@@ -94,7 +114,7 @@ try {
   const paths = ['/api/public-build-probe', '/v1/public-build-probe'];
   for (const path of paths) {
     for (const method of methods) {
-      const response = await fetch(new URL(path, origin), {
+      const response = await fetchWithTimeout(new URL(path, origin), {
         method,
         redirect: 'manual',
       });
@@ -106,7 +126,7 @@ try {
   }
 
   console.log(
-    'Public runtime verified: hardened fixture HTML and no /api or /v1 handlers.',
+    'Public runtime verified: hardened fixture HTML and representative /api and /v1 probes fail closed.',
   );
 } catch (error) {
   if (output.trim()) console.error(output.trim());

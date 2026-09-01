@@ -12,8 +12,9 @@ import {
  * Public Site entry point.
  *
  * This module intentionally has no API client, credential, storage, or live-mode
- * imports. The production build aliases the homepage directly to this component
- * so those capabilities cannot enter the hosted module graph.
+ * imports. The homepage imports this component directly for production, while a
+ * development-only resolver substitutes the loopback live component during
+ * `vinext dev`.
  */
 export default function PublicReleaseDashboard() {
   const [model, setModel] = useState(demoDashboardModel);
