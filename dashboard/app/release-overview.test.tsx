@@ -40,7 +40,9 @@ describe('ReleaseOverview', () => {
           element.textContent === '8/8 ↔ 8/8',
       ),
     ).toBeTruthy();
-    expect(screen.getByText('refusal-de-001')).toBeTruthy();
+    expect(
+      screen.getByText('synthetic-public-case-refusal-de-001'),
+    ).toBeTruthy();
     expect(
       screen.getByText('Small sample · descriptive result'),
     ).toBeTruthy();
@@ -67,7 +69,7 @@ describe('ReleaseOverview', () => {
 
     await user.click(
       screen.getByRole('button', {
-        name: 'Inspect scoring evidence for refusal-de-001',
+        name: 'Inspect scoring evidence for synthetic-public-case-refusal-de-001',
       }),
     );
     expect(screen.getByText('1.000 · passed')).toBeTruthy();
