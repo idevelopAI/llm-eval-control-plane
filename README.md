@@ -41,7 +41,8 @@ local workflow, and validation commands. The hosted build uses a dedicated
 fixture-only entry: CI rejects control-plane routes, credential UI, model
 endpoints, browser persistence, unexpected runtime bindings, secrets, and
 gradients in the production artifact. A built-runtime probe also verifies
-restrictive response headers and confirms that `/api` and `/v1` expose no
+restrictive response headers and representative fail-closed `/api` and `/v1`
+requests; the generated route manifest independently rejects application route
 handlers. Hosted live access remains disabled until a separately reviewed,
 stateless server boundary can keep its fixed read-only identity outside the
 browser.

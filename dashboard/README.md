@@ -64,8 +64,9 @@ secret reaches a client artifact.
 
 `pnpm run smoke:public` starts the built runtime on a temporary loopback port,
 checks the hardened response and non-cacheable fixture HTML, and proves that
-GET, POST, HEAD, and OPTIONS requests below `/api` and `/v1` all resolve to 404.
-These gates verify the shipped artifact rather than relying only on source-level
+GET, POST, HEAD, and OPTIONS requests against representative paths below `/api`
+and `/v1` all resolve to 404. Together with the generated route-manifest check,
+these gates verify the shipped artifact rather than relying only on source-level
 origin checks. The proposed access and rollback policy is recorded in
 [ADR 0011](../docs/adr/0011-public-example-site.md).
 

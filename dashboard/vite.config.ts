@@ -68,7 +68,7 @@ export default defineConfig(async ({ command, mode }) => {
       {
         name: 'local-live-dashboard-entry',
         enforce: 'pre',
-        resolveId(source, importer) {
+        resolveId(source: string, importer: string | undefined) {
           if (
             command === 'serve' &&
             mode !== 'test' &&
