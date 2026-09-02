@@ -1,7 +1,9 @@
 # ADR 0011: Public synthetic example Site
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-01
+- Accepted: 2026-09-02
+- Supersedes: [ADR 0010](0010-owner-only-hosted-fixture.md)
 
 ## Context
 
@@ -17,14 +19,14 @@ review. Those capabilities must remain separate at build time: a hidden control,
 an origin check, or a disabled runtime branch would still ship the live code to
 an untrusted browser.
 
-Publication also needs two distinct decisions. Deploying a build does not make
-it public, and making it reachable does not authorize search indexing. Until an
-explicit publication review is complete, the current owner-only policy in ADR
-0010 remains authoritative.
+Publication needs two distinct decisions. Deploying a build does not make it
+public, and making it reachable does not authorize search indexing. The public
+access review is recorded separately from the build so that both decisions
+remain auditable.
 
 ## Decision
 
-We propose publishing a public Site whose application behavior is limited to a
+We publish a public Site whose application behavior is limited to a
 deterministic synthetic fixture. It presents plausible release-gate, transition,
 and distribution states, while clearly labeling the environment and evidence as
 synthetic. It must not claim that the displayed records came from a customer,
@@ -101,9 +103,9 @@ with the publication.
 
 ## Access verification and supersession
 
-This ADR remains proposed while the Site is owner-only or while public access is
-unverified. A deployment preview, an authenticated owner session, or a platform
-sharing setting alone is insufficient evidence of public reachability.
+This ADR remained proposed while the Site was owner-only and while public access
+was unverified. A deployment preview, an authenticated owner session, or a
+platform sharing setting alone was insufficient evidence of public reachability.
 
 Acceptance requires a deliberate access change followed by all of these checks
 against the canonical production origin:
@@ -120,10 +122,10 @@ against the canonical production origin:
 5. Network inspection shows no application API or model request during initial
    render and every supported interaction.
 
-Only after those checks are recorded may this ADR be changed to accepted and
-marked as superseding ADR 0010. Until then, ADR 0010 continues to govern the
-hosted fixture. Public indexing is a later, independent approval and is not a
-condition for accepting the access change.
+The checks are recorded in the
+[public Site release record](../operations/public-site-release.md). This ADR is
+therefore accepted and supersedes ADR 0010. Public indexing remains a later,
+independent approval and was not a condition for accepting the access change.
 
 ## Rollback
 
