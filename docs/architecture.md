@@ -3,15 +3,17 @@
 ## System objective
 
 LLM Eval Control Plane turns AI application behavior into reproducible evidence.
-The implemented Phase 8 slice adds an owner-only production-hosted fixture to
-the privacy-bounded analytical reads and local release-review dashboard. It
-registers immutable dataset revisions, accepts idempotent run and comparison
-submissions, executes them through leased workers, and preserves append-only
-evidence in PostgreSQL. A versioned HTTP API exposes safe resource, job,
-attempt, metric, redacted case, and fixed-distribution surfaces for one project
-per deployment. The browser validates those projections again before rendering
-them. The same application core supports the CLI evaluation, comparison, and
-DataBridge workflows without weakening the provider-neutral application ports.
+The implemented system combines a public production-hosted synthetic fixture
+with privacy-bounded analytical reads and a loopback-only release-review
+dashboard. The hosted artifact is a request-free fixture build with no
+operational control-plane or model path. The control plane registers immutable
+dataset revisions, accepts idempotent run and comparison submissions, executes
+them through leased workers, and preserves append-only evidence in PostgreSQL.
+A versioned HTTP API exposes safe resource, job, attempt, metric, redacted case,
+and fixed-distribution surfaces for one project per deployment. The local live
+browser validates those projections again before rendering them. The same
+application core supports the CLI evaluation, comparison, and DataBridge
+workflows without weakening the provider-neutral application ports.
 
 ## Architectural style
 
@@ -26,7 +28,7 @@ flowchart LR
     CLI --> ADAPTERS["Concrete adapters"]
     API["FastAPI composition root"] --> CONTROL["Control-plane service"]
     DASHBOARD["React release dashboard"] -->|loopback same-origin proxy| API
-    HOSTED["Owner-only hosted fixture"] -->|zero-request deterministic evidence| DASHBOARD
+    HOSTED["Public synthetic Site"] -->|zero-request deterministic evidence| DASHBOARD
     API --> ANALYTICS["Bounded dashboard analytics"]
     API --> DB["PostgreSQL repository"]
     API --> AUTH["Project-bound authorizer"]
