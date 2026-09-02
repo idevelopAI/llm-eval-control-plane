@@ -67,8 +67,10 @@ checks the hardened response and non-cacheable fixture HTML, and proves that
 GET, POST, HEAD, and OPTIONS requests against representative paths below `/api`
 and `/v1` all resolve to 404. Together with the generated route-manifest check,
 these gates verify the shipped artifact rather than relying only on source-level
-origin checks. The proposed access and rollback policy is recorded in
-[ADR 0011](../docs/adr/0011-public-example-site.md).
+origin checks. The accepted public-access and rollback policy is recorded in
+[ADR 0011](../docs/adr/0011-public-example-site.md), with the exact deployed
+artifact and unauthenticated review captured in the
+[public Site release record](../docs/operations/public-site-release.md).
 
 ## Implemented disabled foundation
 
@@ -81,8 +83,9 @@ example with no live behavior change.
 
 Enabling these helpers requires verified server-only secret binding and request
 dispatch in the production Worker runtime, a separately provisioned read-only
-service token, reverified owner-only private access, and explicit route adapters
-that deny every non-GET method (including `HEAD` and `OPTIONS`).
+service token, withdrawal of public fixture access followed by reverified
+owner-only private access, and explicit route adapters that deny every non-GET
+method (including `HEAD` and `OPTIONS`).
 
 ## Run locally
 
