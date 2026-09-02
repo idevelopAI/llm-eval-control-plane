@@ -98,6 +98,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Weekly uv, GitHub Actions, and Docker dependency updates, an
   implementation-specific threat model, an incident and recovery runbook, and
   static deployment-hardening tests.
+- A responsive release-evidence workspace with accessible slice lenses,
+  release-gate review, bounded case evidence, and fixed score, latency, and
+  usage distributions.
+- A dedicated fixture-only production graph for the public synthetic Site,
+  backed by an accepted access decision and an exact deployed-artifact release
+  record.
 
 ### Changed
 
@@ -132,6 +138,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Production access logging now uses fixed-schema application events rather than
   raw Uvicorn access lines. Telemetry accepts only bounded route, outcome,
   duration, safe-error, and trace metadata.
+- The dashboard now uses a solid-fill visual system with responsive navigation,
+  failed-first review flow, keyboard-preserving interactions, and an updated
+  release screenshot.
+- The hosted fixture is publicly reachable while search indexing and every
+  hosted-live data path remain separately disabled.
 
 ### Security
 
@@ -175,6 +186,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Security automation uses full-SHA Action pins, checksum-verifies the Gitleaks
   release, scans complete history with redaction, and grants CodeQL only the
   permission required to upload security events.
+- The public build gate rejects live-dashboard modules, credential and model
+  markers, persistence APIs, gradients, source maps, secrets, route handlers,
+  and unexpected runtime bindings, then probes representative `/api` and `/v1`
+  methods against the built server.
+- The accepted public Site retains `private, no-store`, restrictive browser
+  headers, `noindex` and `nofollow`, empty hosted environment and resource
+  bindings, and zero application API or model requests across the verified
+  interaction flow.
 - The service still has no TLS termination, distributed request-rate
   enforcement, or row-level multitenancy. Non-loopback use requires an external
   trusted edge and a separately isolated deployment for every project.
