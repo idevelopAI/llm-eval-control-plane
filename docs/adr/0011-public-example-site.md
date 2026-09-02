@@ -129,12 +129,13 @@ independent approval and was not a condition for accepting the access change.
 
 ## Rollback
 
-If any build, runtime, audience, metadata, or deployed-version check fails before
-acceptance, public access must be removed immediately and the last verified
-owner-only version restored. The Site must remain `noindex` and `nofollow`; the
-failure is corrected in source and the full build, smoke, artifact, and access
-verification sequence is repeated. An in-place production exception is not an
-acceptable repair.
+Any failed build, runtime, audience, metadata, or deployed-version check blocks
+a candidate or replacement version. The last accepted public version remains
+authoritative unless it is itself implicated. If a failed or unverifiable
+version reaches production, public access must be withdrawn immediately and the
+last verified safe version restored before the full build, smoke, artifact, and
+access-verification sequence is repeated. An in-place production exception is
+not an acceptable repair.
 
 After acceptance, discovery of an unexpected request path, credential or secret
 material, storage use, binding, route handler, non-synthetic evidence, indexing
