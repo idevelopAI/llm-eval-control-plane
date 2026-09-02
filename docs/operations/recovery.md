@@ -184,6 +184,38 @@ for this deployment.
 11. Keep the original database isolated and read-only until the incident lead
     approves retention or destruction.
 
+## PostgreSQL major-version upgrade
+
+PostgreSQL 18 changed the official container's default data directory and volume
+layout. The Compose service therefore mounts the named volume at
+`/var/lib/postgresql`; PostgreSQL owns its versioned data directory beneath that
+parent. The former `/var/lib/postgresql/data` target is not compatible with the
+PostgreSQL 18 image.
+
+An existing PostgreSQL 17 data volume cannot be started directly by PostgreSQL
+18. Treat the major-version change as a data migration:
+
+1. Stop application writes and record the source application and database
+   versions without logging credentials or database contents.
+2. Create and verify an encrypted backup before changing an image, mount, or
+   volume reference.
+3. Keep the PostgreSQL 17 source volume isolated and unchanged. Never point the
+   PostgreSQL 18 service at it as an in-place conversion.
+4. Use either a reviewed `pg_upgrade` procedure or a logical dump and restore
+   into a newly created PostgreSQL 18 volume. Exercise the selected procedure
+   against an isolated copy first.
+5. Apply the exact committed Alembic head, then run readiness, repository,
+   PostgreSQL integration, worker-recovery, API, and release gates.
+6. Validate immutable evidence digests, safe record counts, nonterminal job
+   recovery, and one synthetic end-to-end submission before switching service
+   traffic.
+7. Retain the PostgreSQL 17 source and verified backup until the rollback window
+   closes under the operator's retention policy.
+
+Fresh CI and disposable local environments initialize directly in the new
+layout. Their success does not replace the upgrade rehearsal required for an
+existing durable volume.
+
 ## Migration failure
 
 1. Stop API and workers; do not let a mixed application/schema version serve

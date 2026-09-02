@@ -143,6 +143,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   release screenshot.
 - The hosted fixture is publicly reachable while search indexing and every
   hosted-live data path remain separately disabled.
+- Local Compose and every database-backed CI gate now use PostgreSQL 18.6 with
+  its parent-directory volume layout; the recovery runbook defines the required
+  major-version migration for existing PostgreSQL 17 volumes.
+- Coupled CodeQL Action updates are grouped, and unsupported dashboard tooling
+  majors are held until their plugin and runtime contracts are compatible.
 
 ### Security
 
