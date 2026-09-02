@@ -118,6 +118,12 @@ docker compose ps
 curl --fail --silent http://127.0.0.1:8000/health/ready
 ```
 
+The stack uses PostgreSQL 18's parent-directory volume layout. A named volume
+created by PostgreSQL 17 must not be attached to the PostgreSQL 18 service and
+started in place. Preserve and verify a backup, then use `pg_upgrade` or a
+logical dump/restore into a fresh PostgreSQL 18 volume as described in the
+[recovery runbook](docs/operations/recovery.md#postgresql-major-version-upgrade).
+
 The `migrate` service applies the exact Alembic head before the API starts. The
 API and worker start only after migration succeeds. The readiness endpoint
 requires both database connectivity and that schema revision. The API port is
@@ -348,7 +354,7 @@ and passes all seven release gates. The four seeded regressions are then blocked
 by six gates covering overall and German decision accuracy, clarification,
 unsafe-query rejection, read-only policy, and result equivalence. The dedicated
 `DataBridge Offline Gate` check reproduces both outcomes with a digest-pinned
-PostgreSQL 17.6 image and no DataBridge API credential.
+PostgreSQL 18.6 image and no DataBridge API credential.
 
 > **Evidence boundary:** mock target responses, target latency, and token usage
 > are deterministic simulations. PostgreSQL replay is real local execution, but
