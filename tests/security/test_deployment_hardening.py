@@ -19,6 +19,12 @@ GITLEAKS_CONFIG = PROJECT_ROOT / ".gitleaks.toml"
 SECURITY_WORKFLOW = PROJECT_ROOT / ".github" / "workflows" / "security-gate.yml"
 DEPENDABOT_CONFIG = PROJECT_ROOT / ".github" / "dependabot.yml"
 WORKFLOW_ROOT = PROJECT_ROOT / ".github" / "workflows"
+POSTGRES_WORKFLOWS = (
+    WORKFLOW_ROOT / "ci.yml",
+    WORKFLOW_ROOT / "control-plane-api-gate.yml",
+    WORKFLOW_ROOT / "databridge-gate.yml",
+    WORKFLOW_ROOT / "worker-recovery-gate.yml",
+)
 
 _DIGEST_PIN = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 _ACTION_PIN = re.compile(r"^\s*uses:\s*[^\s@]+@([0-9a-f]{40})(?:\s+#.*)?$")
@@ -102,6 +108,32 @@ def test_external_container_and_workflow_inputs_are_immutable() -> None:
             assert match is not None, f"Action is not full-SHA pinned in {path.name}"
             workflow_actions.append(match.group(1))
     assert workflow_actions
+
+
+def test_postgres_major_and_volume_layout_are_consistent() -> None:
+    compose = _read(COMPOSE_FILE)
+    match = re.search(
+        r"(?m)^\s+image:\s+(postgres:(\d+)\.[^\s]+)\s*$",
+        compose,
+    )
+    assert match is not None
+    compose_reference = match.group(1)
+    postgres_major = int(match.group(2))
+
+    for workflow in POSTGRES_WORKFLOWS:
+        references = [
+            reference
+            for reference in _IMAGE_DECLARATION.findall(_read(workflow))
+            if reference.startswith("postgres:")
+        ]
+        assert references == [compose_reference]
+
+    if postgres_major >= 18:
+        assert re.search(
+            r"(?m)^\s+- control-plane-postgres:/var/lib/postgresql\s*$",
+            compose,
+        )
+        assert "control-plane-postgres:/var/lib/postgresql/data" not in compose
 
 
 def test_runtime_image_ends_as_a_fixed_non_root_user() -> None:
