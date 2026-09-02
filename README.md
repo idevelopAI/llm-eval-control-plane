@@ -26,6 +26,8 @@ scores, and privacy-bounded score, latency, and usage-unit distributions.
 
 ![Deterministic release evidence dashboard showing a blocked release, failed gate, and redacted scoring evidence](docs/assets/release-dashboard-fixture.jpg)
 
+[Open the public synthetic release-evidence dashboard](https://llm-eval-control-plane.nick0ne.chatgpt.site/)
+
 _Deterministic fixture mode: no credential or API request is used._
 
 Raw evaluation content is outside the dashboard contract. Case reads expose
@@ -589,8 +591,9 @@ uv run llm-eval validate examples/evaluation-spec.json
 - [Architecture](docs/architecture.md)
 - [Domain model](docs/domain-model.md)
 - [Architecture decisions](docs/adr/)
-- [Owner-only Site decision](docs/adr/0010-owner-only-hosted-fixture.md)
-- [Proposed public Site decision](docs/adr/0011-public-example-site.md)
+- [Superseded owner-only Site decision](docs/adr/0010-owner-only-hosted-fixture.md)
+- [Accepted public synthetic Site decision](docs/adr/0011-public-example-site.md)
+- [Public Site release record](docs/operations/public-site-release.md)
 - [Threat model](docs/security/threat-model.md)
 - [Incident and recovery runbook](docs/operations/recovery.md)
 
