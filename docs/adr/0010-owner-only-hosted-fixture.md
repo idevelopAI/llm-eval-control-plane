@@ -1,7 +1,12 @@
 # ADR 0010: Owner-only hosted fixture
 
-- Status: accepted
+- Status: superseded
 - Date: 2026-08-29
+- Superseded by: [ADR 0011](0011-public-example-site.md) on 2026-09-02
+
+This decision remains the historical owner-only baseline and rollback posture.
+ADR 0011 superseded it only after the synthetic Site's public audience and
+unauthenticated behavior were independently verified.
 
 ## Context
 
