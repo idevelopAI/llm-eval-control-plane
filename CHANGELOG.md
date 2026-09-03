@@ -11,6 +11,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Reproducible Python development environment with a committed `uv.lock`.
 - Immutable artifact references and evaluation specifications.
+- Target-independent, content-addressed evaluation suite versions that bind a
+  resolved dataset, evaluator metric inventories, declared slices, fixed
+  execution semantics, and release gates.
 - Deterministic metric gates with direction, threshold, and regression budget.
 - RFC 8785 canonical JSON, strict JSONL datasets, and content-derived dataset
   identities.

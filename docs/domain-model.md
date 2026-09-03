@@ -38,7 +38,10 @@
 | `SqlExpectation` | Reviewed query, clarification, or refusal oracle | Implemented |
 | `SqlTargetOutput` | Minimal normalized decision and generated-SQL evidence | Implemented |
 | `SqlReplayResult` | Bounded normalized PostgreSQL columns and rows | Implemented |
-| Suite version | Dataset, evaluators, slices, and execution settings | Deferred |
+| `SuiteEvaluator` | Executor binding, resolved evaluator identity, and exact metric inventory | Implemented |
+| `SuiteExecutionSettings` | Adapter, execution mode, canonical order, single invocation, and serial concurrency | Implemented |
+| `EvaluationSuiteVersion` | Target-independent, content-addressed evaluation protocol and release policy | Implemented |
+| Experiment history | Derived suite-pinned runs and release decisions, not a separate mutable entity | Proposed |
 
 The deterministic fake target and built-in scorers are adapter implementations,
 not additional domain entities. Their `ArtifactRef` values identify their exact
@@ -57,6 +60,50 @@ behavior revisions inside a run.
   not part of its content identity.
 - Every resolved artifact digest uses canonical
   `sha256:<64 lowercase hexadecimal characters>` form.
+
+## Proposed suite-version invariants
+
+- An `EvaluationSuiteVersion` has an author-facing name and positive revision,
+  but its `evaluation-suite/v1` content digest excludes both values. Publishing
+  changed semantic content requires a new revision.
+- A suite is target-independent. It contains one resolved dataset reference,
+  one or more `SuiteEvaluator` bindings, declared slices,
+  `SuiteExecutionSettings`, and one or more release gates. Baseline and candidate
+  targets remain separately resolved run artifacts.
+- Each evaluator binding contains a bounded executor name, one resolved
+  evaluator reference, and its complete nonempty metric inventory. Executor
+  names, evaluator logical keys, and metric names are unique. Bindings and
+  metric names have canonical order.
+- Declared slices are unique, lexicographically ordered labels present in the
+  resolved dataset. A sliced gate references a declared slice, and a gate metric
+  is supplied by exactly one suite evaluator. Gates are unique and canonically
+  ordered by metric and optional slice.
+- Suite execution settings contain the adapter, exact execution mode, canonical
+  case-ID order, one target invocation per case, and concurrency fixed to one.
+  These settings describe semantic execution; worker leases, heartbeats,
+  attempts, retry timing, and queue placement remain operational metadata.
+- The suite digest covers the resolved dataset, evaluator bindings and metric
+  inventories, declared slices, execution settings, and release gates with all
+  defaults materialized. It excludes name, revision, registration time, source
+  formatting, credentials, secrets, database configuration, and operational
+  coordination settings.
+- Once suite registration is implemented, an identical put at one
+  `(name, revision)` will be idempotent and different content will conflict.
+  Workers will consume the exact resolved suite snapshot pinned at submission;
+  comparisons will reject different suite revisions or digests rather than
+  treating them as a failed release.
+- Experiment history is derived from immutable suite-pinned runs and the
+  release decisions that connect exact baseline and candidate evidence. No
+  separate experiment definition, table, mutable status, or current-result
+  pointer is part of the proposed domain.
+
+These contracts are proposed in
+[ADR 0012](adr/0012-versioned-evaluation-suites.md). The frozen suite models,
+canonical normalization, and digest calculation are implemented. Registration,
+persistence, API and CLI surfaces, worker payload pinning, derived experiment
+history, and run/decision digest integration are not implemented yet. Existing
+evidence is legacy suite-unpinned evidence and is not assigned an inferred
+suite.
 
 ## Execution invariants
 
