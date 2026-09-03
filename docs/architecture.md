@@ -15,6 +15,13 @@ browser validates those projections again before rendering them. The same
 application core supports the CLI evaluation, comparison, and DataBridge
 workflows without weakening the provider-neutral application ports.
 
+[ADR 0012](adr/0012-versioned-evaluation-suites.md) proposes a
+target-independent `EvaluationSuiteVersion` that binds one resolved dataset,
+resolved evaluator identities and metric inventories, declared slices, fixed
+semantic execution settings, and release gates under one canonical digest. It
+also defines experiment history as a derived view over suite-pinned runs and
+release decisions rather than a separate mutable registry.
+
 ## Architectural style
 
 The project is a modular monolith. The CLI, API, and worker runtimes are
@@ -178,6 +185,15 @@ when both runs use the exact supplied dataset, have identical case and metric
 sets, match their policy target revisions, and contain stored global summaries
 that agree with recomputed case evidence. Baseline and candidate execution modes
 must also match.
+
+The proposed suite contract will move the shared dataset, evaluator, slice,
+execution, and gate choices behind one resolved suite reference while leaving
+target identity on each run. Its frozen domain models and canonical digest are
+implemented, but it is not yet a control-plane capability: suite registration,
+PostgreSQL records, API and CLI projections, durable payload pinning, run and
+decision digest coverage, and suite-aware dashboard history remain to be
+integrated. Existing run and decision evidence remains valid and explicitly
+suite-unpinned rather than receiving an inferred historical suite.
 
 Target expectations are never passed through the target port. Target and
 evaluator exceptions are converted to bounded failure codes; remaining cases
