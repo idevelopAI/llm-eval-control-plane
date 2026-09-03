@@ -74,6 +74,14 @@ from llm_eval_control_plane.domain.sql import (
     SqlResultOrder,
     SqlTargetOutput,
 )
+from llm_eval_control_plane.domain.suites import (
+    EvaluationSuiteVersion,
+    SuiteCaseOrder,
+    SuiteEvaluator,
+    SuiteExecutionSettings,
+    calculate_suite_digest,
+    suite_content,
+)
 
 __all__ = [
     "AggregateComparison",
@@ -91,6 +99,7 @@ __all__ = [
     "ErrorObservation",
     "EvaluationCase",
     "EvaluationSpec",
+    "EvaluationSuiteVersion",
     "ExecutionContract",
     "ExecutionFailure",
     "ExecutionMode",
@@ -124,6 +133,9 @@ __all__ = [
     "SqlReplayResult",
     "SqlResultOrder",
     "SqlTargetOutput",
+    "SuiteCaseOrder",
+    "SuiteEvaluator",
+    "SuiteExecutionSettings",
     "TargetObservation",
     "TargetOutcome",
     "TargetRequest",
@@ -132,7 +144,9 @@ __all__ = [
     "calculate_dataset_digest",
     "calculate_decision_digest",
     "calculate_run_digest",
+    "calculate_suite_digest",
     "canonical_json_bytes",
     "parse_json",
     "sha256_digest",
+    "suite_content",
 ]
