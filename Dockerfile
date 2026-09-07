@@ -8,6 +8,7 @@ RUN apk upgrade --no-cache \
     && apk add --no-cache --upgrade \
         'libcrypto3>=3.5.8-r0' \
         'libssl3>=3.5.8-r0' \
+        'libuuid>=2.41.6-r1' \
         'sqlite-libs>=3.53.4-r0'
 
 COPY --from=uv /uv /usr/local/bin/uv
@@ -33,6 +34,7 @@ RUN apk upgrade --no-cache \
     && apk add --no-cache --upgrade \
         'libcrypto3>=3.5.8-r0' \
         'libssl3>=3.5.8-r0' \
+        'libuuid>=2.41.6-r1' \
         'sqlite-libs>=3.53.4-r0' \
     && addgroup --system --gid 10001 controlplane \
     && adduser \

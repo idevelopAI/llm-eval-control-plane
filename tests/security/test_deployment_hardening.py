@@ -157,6 +157,7 @@ def test_python_container_stages_upgrade_all_base_packages() -> None:
     for stage in python_stages:
         assert "RUN apk upgrade --no-cache" in stage
         assert stage.index("RUN apk upgrade --no-cache") < stage.index("apk add")
+        assert "'libuuid>=2.41.6-r1'" in stage
 
 
 def test_dependabot_covers_every_pinned_dependency_source() -> None:
