@@ -149,6 +149,16 @@ def test_runtime_image_ends_as_a_fixed_non_root_user() -> None:
     assert "python -m pip uninstall --yes pip" in runtime_stage
 
 
+def test_python_container_stages_upgrade_all_base_packages() -> None:
+    stages = re.split(r"(?m)^FROM\s+", _read(DOCKERFILE))[1:]
+    python_stages = [stage for stage in stages if stage.startswith("python:")]
+
+    assert len(python_stages) == 2
+    for stage in python_stages:
+        assert "RUN apk upgrade --no-cache" in stage
+        assert stage.index("RUN apk upgrade --no-cache") < stage.index("apk add")
+
+
 def test_dependabot_covers_every_pinned_dependency_source() -> None:
     config = _read(DEPENDABOT_CONFIG)
     ecosystems = set(
