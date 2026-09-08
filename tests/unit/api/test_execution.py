@@ -11,7 +11,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 from opentelemetry.trace import SpanKind, StatusCode, Tracer
-from pytest import MonkeyPatch
+from pytest import MonkeyPatch, raises
 
 from llm_eval_control_plane.adapters.scorers import (
     BuiltInEvaluatorKind,
@@ -25,6 +25,7 @@ from llm_eval_control_plane.domain import (
     CanonicalJson,
     DatasetVersion,
     EvaluationCase,
+    ExecutionMode,
     RunResult,
     TargetObservation,
 )
@@ -46,6 +47,41 @@ def _dataset() -> DatasetVersion:
             ),
         ),
     )
+
+
+def test_suite_validation_resolves_exact_execution_and_evaluator_behavior() -> None:
+    executor = DeterministicEvaluationExecutor()
+
+    contract = executor.validate_suite(
+        adapter="deterministic_fake",
+        evaluator_names=("exact_match", "usage"),
+    )
+
+    assert contract.execution.adapter == "deterministic_fake"
+    assert contract.execution.execution_mode is ExecutionMode.OFFLINE_MOCK
+    assert contract.execution.invocations_per_case == 1
+    assert contract.execution.max_concurrency == 1
+    assert contract.evaluator_names == ("exact_match", "usage")
+    resolved = build_evaluators(
+        (BuiltInEvaluatorKind.EXACT_MATCH, BuiltInEvaluatorKind.USAGE)
+    )
+    assert tuple(item.artifact for item in contract.evaluators) == tuple(
+        item.ref for item in resolved
+    )
+    assert tuple(item.metrics for item in contract.evaluators) == tuple(
+        item.metric_names for item in resolved
+    )
+
+    with raises(ValueError, match="unsupported target adapter"):
+        executor.validate_suite(
+            adapter="unsupported",
+            evaluator_names=("exact_match",),
+        )
+    with raises(ValueError, match="unsupported evaluator"):
+        executor.validate_suite(
+            adapter="deterministic_fake",
+            evaluator_names=("unsupported",),
+        )
 
 
 def test_deterministic_execution_keeps_the_calling_event_loop_responsive(

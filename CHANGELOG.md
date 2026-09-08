@@ -14,6 +14,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Target-independent, content-addressed evaluation suite versions that bind a
   resolved dataset, evaluator metric inventories, declared slices, fixed
   execution semantics, and release gates.
+- A create-once evaluation-suite registry with exact dataset and executor
+  validation, canonical PostgreSQL records, integrity-checked detail reads, and
+  bounded keyset-paged metadata projections.
 - Deterministic metric gates with direction, threshold, and regression budget.
 - RFC 8785 canonical JSON, strict JSONL datasets, and content-derived dataset
   identities.
@@ -61,8 +64,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - A versioned FastAPI control plane for registering dataset revisions,
   submitting evaluation and comparison jobs, inspecting job state, and paging
   redacted run and release-decision summaries.
-- Durable PostgreSQL records for datasets, jobs, runs, and release decisions,
-  with SQLAlchemy repository ports and an initial Alembic migration.
+- Durable PostgreSQL records for datasets, evaluation suites, jobs, runs, and
+  release decisions, with SQLAlchemy repository ports and versioned Alembic
+  migrations.
 - Atomic semantic idempotency claims for run and comparison submissions,
   compare-and-set job transitions, and transactional evidence insertion with
   terminal job completion.

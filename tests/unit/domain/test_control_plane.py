@@ -3,7 +3,15 @@ from datetime import UTC, datetime, timedelta
 from pydantic import ValidationError
 from pytest import raises
 
-from llm_eval_control_plane.domain import CanonicalJson, DatasetVersion, EvaluationCase
+from llm_eval_control_plane.domain import (
+    CanonicalJson,
+    DatasetVersion,
+    EvaluationCase,
+    EvaluationSuiteVersion,
+    SuiteEvaluator,
+    SuiteExecutionContract,
+    SuiteExecutionSettings,
+)
 from llm_eval_control_plane.domain.artifacts import ArtifactKind, ArtifactRef
 from llm_eval_control_plane.domain.canonical import sha256_digest
 from llm_eval_control_plane.domain.control_plane import (
@@ -19,6 +27,8 @@ from llm_eval_control_plane.domain.control_plane import (
     JobTransitionError,
     RunJobPayload,
     ScenarioOverride,
+    SuiteListRecord,
+    SuiteRecord,
 )
 from llm_eval_control_plane.domain.evaluation import (
     EvaluationSpec,
@@ -166,6 +176,179 @@ def test_records_require_aware_utc_time_and_remain_frozen() -> None:
         DatasetRecord(dataset=dataset, created_at=datetime(2026, 8, 20, 12))
     with raises(ValidationError, match="frozen"):
         record.created_at = NOW + timedelta(seconds=1)
+
+
+def test_suite_execution_contract_requires_canonical_unique_behavior() -> None:
+    exact = SuiteEvaluator(
+        executor_name="exact_match",
+        artifact=ArtifactRef(
+            kind=ArtifactKind.EVALUATOR,
+            name="builtin/exact_match",
+            revision=1,
+            digest=sha256_digest("exact_match"),
+        ),
+        metrics=("quality.exact_match",),
+    )
+    usage = SuiteEvaluator(
+        executor_name="usage",
+        artifact=ArtifactRef(
+            kind=ArtifactKind.EVALUATOR,
+            name="builtin/usage",
+            revision=1,
+            digest=sha256_digest("usage"),
+        ),
+        metrics=("usage.total_units",),
+    )
+    execution = SuiteExecutionSettings(
+        adapter="deterministic_fake",
+        execution_mode=ExecutionMode.OFFLINE_MOCK,
+    )
+
+    contract = SuiteExecutionContract(
+        execution=execution,
+        evaluators=(exact, usage),
+    )
+
+    assert contract.evaluator_names == ("exact_match", "usage")
+    with raises(ValidationError, match="must be ordered"):
+        SuiteExecutionContract(
+            execution=execution,
+            evaluators=(usage, exact),
+        )
+    with raises(ValidationError, match="metrics must be unique"):
+        SuiteExecutionContract(
+            execution=execution,
+            evaluators=(
+                exact,
+                usage.model_copy(update={"metrics": exact.metrics}),
+            ),
+        )
+    with raises(ValidationError, match="names must be unique"):
+        SuiteExecutionContract(
+            execution=execution,
+            evaluators=(
+                exact,
+                usage.model_copy(update={"executor_name": exact.executor_name}),
+            ),
+        )
+    with raises(ValidationError, match="evaluators must be unique"):
+        SuiteExecutionContract(
+            execution=execution,
+            evaluators=(
+                exact,
+                usage.model_copy(update={"artifact": exact.artifact}),
+            ),
+        )
+
+    too_many_metrics = (
+        exact.model_copy(
+            update={
+                "metrics": tuple(f"quality.metric_{index:02d}" for index in range(16))
+            }
+        ),
+        usage.model_copy(
+            update={
+                "metrics": tuple(f"usage.metric_{index:02d}" for index in range(16, 33))
+            }
+        ),
+    )
+    with raises(ValidationError, match="too many metrics"):
+        SuiteExecutionContract(execution=execution, evaluators=too_many_metrics)
+
+    evaluator_overflow = tuple(
+        SuiteEvaluator(
+            executor_name=f"evaluator-{index:02d}",
+            artifact=ArtifactRef(
+                kind=ArtifactKind.EVALUATOR,
+                name=f"builtin/evaluator-{index:02d}",
+                revision=1,
+                digest=sha256_digest({"evaluator": index}),
+            ),
+            metrics=(f"quality.metric_{index:02d}",),
+        )
+        for index in range(33)
+    )
+    with raises(ValidationError):
+        SuiteExecutionContract(execution=execution, evaluators=evaluator_overflow)
+    with raises(ValidationError):
+        SuiteExecutionContract(execution=execution, evaluators=())
+
+
+def test_suite_record_normalizes_time_hides_content_and_remains_frozen() -> None:
+    dataset = DatasetVersion.create(
+        name="fixture",
+        revision=1,
+        cases=(
+            EvaluationCase(
+                case_id="case-001",
+                input=CanonicalJson.from_value("input"),
+            ),
+        ),
+    )
+    evaluator = SuiteEvaluator(
+        executor_name="exact_match",
+        artifact=ArtifactRef(
+            kind=ArtifactKind.EVALUATOR,
+            name="builtin/exact_match",
+            revision=1,
+            digest=sha256_digest("exact_match"),
+        ),
+        metrics=("quality.exact_match",),
+    )
+    suite = EvaluationSuiteVersion.create(
+        name="private/release-core",
+        revision=1,
+        dataset=dataset.artifact_ref,
+        evaluators=(evaluator,),
+        slices=(),
+        execution=SuiteExecutionSettings(
+            adapter="deterministic_fake",
+            execution_mode=ExecutionMode.OFFLINE_MOCK,
+        ),
+        gates=(
+            MetricGate(
+                metric="quality.exact_match",
+                direction=MetricDirection.HIGHER_IS_BETTER,
+                threshold=1.0,
+            ),
+        ),
+    )
+    record = SuiteRecord(
+        suite=suite,
+        created_at=datetime.fromisoformat("2026-08-20T14:00:00+02:00"),
+    )
+
+    assert record.created_at == NOW
+    assert suite.name not in repr(record)
+    with raises(ValidationError, match="timezone"):
+        SuiteRecord(suite=suite, created_at=datetime(2026, 8, 20, 12))
+    with raises(ValidationError, match="frozen"):
+        record.created_at = NOW + timedelta(seconds=1)
+
+
+def test_suite_list_projection_is_bounded_and_normalizes_time() -> None:
+    projection = SuiteListRecord(
+        name="release/core",
+        revision=1,
+        digest=sha256_digest("suite"),
+        dataset_name="release/cases",
+        dataset_revision=2,
+        evaluator_count=2,
+        metric_count=4,
+        slice_count=3,
+        gate_count=2,
+        execution_mode=ExecutionMode.OFFLINE_MOCK,
+        created_at=datetime.fromisoformat("2026-08-20T14:00:00+02:00"),
+    )
+
+    assert projection.created_at == NOW
+    with raises(ValidationError):
+        SuiteListRecord.model_validate(
+            {
+                **projection.model_dump(mode="python"),
+                "metric_count": 33,
+            }
+        )
 
 
 def test_job_record_rejects_inconsistent_failure_evidence_and_times() -> None:

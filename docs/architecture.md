@@ -7,20 +7,22 @@ The implemented system combines a public production-hosted synthetic fixture
 with privacy-bounded analytical reads and a loopback-only release-review
 dashboard. The hosted artifact is a request-free fixture build with no
 operational control-plane or model path. The control plane registers immutable
-dataset revisions, accepts idempotent run and comparison submissions, executes
-them through leased workers, and preserves append-only evidence in PostgreSQL.
+dataset and evaluation-suite revisions, accepts idempotent run and comparison
+submissions, executes them through leased workers, and preserves append-only
+evidence in PostgreSQL.
 A versioned HTTP API exposes safe resource, job, attempt, metric, redacted case,
 and fixed-distribution surfaces for one project per deployment. The local live
 browser validates those projections again before rendering them. The same
 application core supports the CLI evaluation, comparison, and DataBridge
 workflows without weakening the provider-neutral application ports.
 
-[ADR 0012](adr/0012-versioned-evaluation-suites.md) proposes a
+[ADR 0012](adr/0012-versioned-evaluation-suites.md) defines a
 target-independent `EvaluationSuiteVersion` that binds one resolved dataset,
 resolved evaluator identities and metric inventories, declared slices, fixed
 semantic execution settings, and release gates under one canonical digest. It
-also defines experiment history as a derived view over suite-pinned runs and
-release decisions rather than a separate mutable registry.
+also defines create-once suite registration and experiment history as a derived
+view over suite-pinned runs and release decisions rather than a separate mutable
+registry.
 
 ## Architectural style
 
@@ -106,11 +108,12 @@ src/llm_eval_control_plane/
     ├── canonical.py       # strict parsing and RFC 8785 hashing
     ├── datasets.py        # reviewed cases and dataset versions
     ├── comparison.py      # release decision evidence and content digest
-    ├── control_plane.py   # dataset, job, run, and decision records
+    ├── control_plane.py   # dataset, suite, job, run, and decision records
     ├── evaluation.py      # slice-aware release policy
     ├── execution.py       # target and evaluator result envelopes
     ├── models.py          # shared strict/frozen model behavior
     ├── results.py         # case evidence, modes, aggregates, and run digests
+    ├── suites.py          # versioned protocols and canonical suite digest
     └── sql.py             # strict SQL expectation/output/replay contracts
 
 migrations/                # Alembic environment and versioned PostgreSQL DDL
@@ -186,14 +189,22 @@ sets, match their policy target revisions, and contain stored global summaries
 that agree with recomputed case evidence. Baseline and candidate execution modes
 must also match.
 
-The proposed suite contract will move the shared dataset, evaluator, slice,
-execution, and gate choices behind one resolved suite reference while leaving
-target identity on each run. Its frozen domain models and canonical digest are
-implemented, but it is not yet a control-plane capability: suite registration,
-PostgreSQL records, API and CLI projections, durable payload pinning, run and
-decision digest coverage, and suite-aware dashboard history remain to be
-integrated. Existing run and decision evidence remains valid and explicitly
-suite-unpinned rather than receiving an inferred historical suite.
+The suite registry places the shared dataset, evaluator, slice, execution, and
+gate choices behind one target-independent, resolved artifact. A new
+registration resolves the exact stored dataset and executor-supported evaluator
+contract before writing a create-once canonical suite document to PostgreSQL.
+An exact retry at the same name and revision returns the existing record;
+different content conflicts. The dataset foreign key prevents a registered
+dependency from being removed, detail reads cross-check indexed metadata against
+the canonical document, and collection reads use a bounded keyset-paged metadata
+projection without loading that document.
+
+This registry is currently an application and persistence capability. Suite API
+and CLI contracts, suite-backed run submission and worker execution, durable
+payload pinning, run and decision digest coverage, and suite-aware dashboard
+history remain to be integrated. Existing run and decision evidence remains
+valid and explicitly suite-unpinned rather than receiving an inferred historical
+suite. Registering a suite does not invoke a target or provider.
 
 Target expectations are never passed through the target port. Target and
 evaluator exceptions are converted to bounded failure codes; remaining cases

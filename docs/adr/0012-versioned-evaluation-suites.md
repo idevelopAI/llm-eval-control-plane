@@ -1,7 +1,8 @@
 # ADR 0012: Define Target-independent Versioned Evaluation Suites
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-09-03
+- Accepted: 2026-09-07
 
 ## Context
 
@@ -12,12 +13,13 @@ there is no single artifact proving that repeated runs used the same evaluation
 protocol or that a later comparison applied the policy originally reviewed for
 that protocol.
 
-`ArtifactKind.SUITE` was reserved without a suite domain contract. This phase
-defines that contract and its canonical identity; a persistence record,
-registration API, and evidence link do not yet exist. A suite must be reusable
-across candidate and baseline targets, preserve every semantic choice needed to
-interpret a run, and remain compatible with the existing immutable artifact and
-canonical-digest rules.
+`ArtifactKind.SUITE` was originally reserved without a suite domain contract.
+The frozen contract and its canonical identity now exist, together with an
+application registration service and PostgreSQL record. Suite API and CLI
+surfaces and links from run and release evidence do not yet exist. A suite must
+be reusable across candidate and baseline targets, preserve every semantic
+choice needed to interpret a run, and remain compatible with the existing
+immutable artifact and canonical-digest rules.
 
 Experiment history also needs a clear boundary. A separate mutable experiment
 record would duplicate lifecycle already represented by jobs, runs, and release
@@ -28,7 +30,7 @@ latest decision.
 
 ### A suite is a target-independent protocol
 
-`EvaluationSuiteVersion` will represent one immutable revision of an evaluation
+`EvaluationSuiteVersion` represents one immutable revision of an evaluation
 protocol. It contains:
 
 - a resolved dataset `ArtifactRef` with its digest;
@@ -121,20 +123,35 @@ lifecycle, runs describe evaluated evidence, and release decisions connect two
 exact runs through a policy. It avoids a second state machine and prevents a
 mutable experiment pointer from changing the meaning of historical evidence.
 
-### Registration and evidence pinning follow this contract
+### Registration is create-once; evidence pinning follows this contract
 
-This proposed decision defines the domain boundary only. A later implementation
-must add create-once suite registration, PostgreSQL persistence, bounded and
-redacted API and CLI contracts, resolved worker payloads, and suite references
-covered by new run-result and release-decision digest schemas.
+The application service and PostgreSQL repository implement create-once suite
+registration. Before a new record is written, registration loads the exact
+dataset revision and requires its resolved reference, digest, and declared
+slices to match. It asks the selected executor to resolve the adapter and
+evaluator names, then requires exact execution settings, evaluator references,
+and metric inventories. Validation failures use content-safe application errors
+and do not persist a partial suite.
 
-Registration must resolve the dataset and evaluator identities, validate metric
-and slice inventories, enforce resource bounds, and treat an identical retry at
-one `(name, revision)` as success while conflicting content fails. A worker must
-execute the exact suite snapshot pinned at submission rather than resolving a
-mutable alias when it claims a job. Comparisons must reject runs with different
-suite references or digests as configuration errors and must apply the gates
-from the pinned suite rather than accepting a replacement policy.
+The `control_plane_suites` table stores the canonical suite document with its
+digest, dataset identity, bounded evaluator, metric, slice, and gate counts,
+execution mode, and registration time. Its composite foreign key restricts
+removal of the resolved dataset. Detail reads recalculate the suite model and
+cross-check every indexed projection. Collection reads select only bounded
+indexed metadata, use stable keyset pagination, and can filter by exact name.
+
+An identical retry at one `(name, revision)` returns the durable record without
+re-resolving current dataset or executor dependencies. Different content at that
+identity conflicts. Different revisions may intentionally share one semantic
+digest because suite name and revision do not enter content identity.
+
+The remaining integration must add bounded and redacted API and CLI contracts,
+resolved suite-backed job payloads, and suite references covered by new
+run-result and release-decision digest schemas. A worker must execute the exact
+suite snapshot pinned at submission rather than resolving a mutable alias when
+it claims a job. Comparisons must reject runs with different suite references or
+digests as configuration errors and must apply the gates from the pinned suite
+rather than accepting a replacement policy.
 
 Existing run and release-decision digest contracts remain valid. Historical
 evidence without a suite reference is legacy unpinned evidence and must not be
@@ -151,10 +168,10 @@ metric inventories, slices, and gate values remain sensitive metadata available
 only through the existing project-bound authorization boundary. Caller-controlled
 suite fields must not become metric labels or unreviewed telemetry attributes.
 
-The public Site remains a synthetic, request-free fixture. This proposal adds no
-hosted API route, bearer flow, model invocation, persistence, runtime binding,
-or application secret. Any synthetic suite presentation added to that artifact
-remains subject to ADR 0011 and its build and runtime acceptance gates.
+The public Site remains a synthetic, request-free fixture. This registry
+implementation adds no hosted API route, bearer flow, model invocation, runtime
+binding, or application secret. Any synthetic suite presentation added to that
+artifact remains subject to ADR 0011 and its build and runtime acceptance gates.
 
 ## Consequences
 
@@ -166,9 +183,11 @@ remains subject to ADR 0011 and its build and runtime acceptance gates.
   of changing historical meaning.
 - Derived experiment history reuses append-only evidence and avoids another
   mutable lifecycle or synchronization problem.
-- Registration, persistence, job payloads, result and decision digests, API and
-  CLI contracts, migrations, and dashboard projections require later bounded
-  integration before suites are an implemented capability.
+- Create-once application registration, PostgreSQL persistence, migration, and
+  bounded repository projections are implemented without exposing a new public
+  route.
+- Suite-backed job payloads, execution, result and decision digests, API and CLI
+  contracts, and dashboard projections require later bounded integration.
 - Initial execution remains deliberately serial and single-invocation. A future
   sampling or concurrency model requires a new reviewed semantic contract.
 

@@ -73,10 +73,13 @@ from llm_eval_control_plane.domain.control_plane import (
     ReleaseDecisionRecord,
     RunListRecord,
     RunRecord,
+    SuiteListRecord,
+    SuiteRecord,
     WorkerId,
 )
 from llm_eval_control_plane.domain.datasets import DatasetVersion
 from llm_eval_control_plane.domain.results import RunResult
+from llm_eval_control_plane.domain.suites import EvaluationSuiteVersion
 
 CONTROL_PLANE_METADATA = MetaData()
 
@@ -109,6 +112,80 @@ Index(
     datasets_table.c.revision,
 )
 Index("ix_control_plane_datasets_digest", datasets_table.c.digest)
+
+suites_table = Table(
+    "control_plane_suites",
+    CONTROL_PLANE_METADATA,
+    Column("name", String(128), nullable=False),
+    Column("revision", Integer, nullable=False),
+    Column("digest", String(71), nullable=False),
+    Column("dataset_name", String(128), nullable=False),
+    Column("dataset_revision", Integer, nullable=False),
+    Column("evaluator_count", Integer, nullable=False),
+    Column("metric_count", Integer, nullable=False),
+    Column("slice_count", Integer, nullable=False),
+    Column("gate_count", Integer, nullable=False),
+    Column("execution_mode", String(32), nullable=False),
+    Column("document", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    ForeignKeyConstraint(
+        ("dataset_name", "dataset_revision"),
+        (
+            "control_plane_datasets.name",
+            "control_plane_datasets.revision",
+        ),
+        name="fk_control_plane_suites_dataset",
+        ondelete="RESTRICT",
+    ),
+    CheckConstraint("revision > 0", name="ck_control_plane_suites_revision"),
+    CheckConstraint(
+        "dataset_revision > 0",
+        name="ck_control_plane_suites_dataset_revision",
+    ),
+    CheckConstraint(
+        "length(digest) = 71",
+        name="ck_control_plane_suites_digest_length",
+    ),
+    CheckConstraint(
+        "evaluator_count BETWEEN 1 AND 32",
+        name="ck_control_plane_suites_evaluator_count",
+    ),
+    CheckConstraint(
+        "metric_count BETWEEN 1 AND 32",
+        name="ck_control_plane_suites_metric_count",
+    ),
+    CheckConstraint(
+        "slice_count BETWEEN 0 AND 128",
+        name="ck_control_plane_suites_slice_count",
+    ),
+    CheckConstraint(
+        "gate_count BETWEEN 1 AND 64",
+        name="ck_control_plane_suites_gate_count",
+    ),
+    CheckConstraint(
+        "execution_mode IN ('offline_deterministic_fixture', 'offline_mock', 'live')",
+        name="ck_control_plane_suites_execution_mode",
+    ),
+    PrimaryKeyConstraint("name", "revision", name="pk_control_plane_suites"),
+)
+Index(
+    "ix_control_plane_suites_created_name_revision",
+    suites_table.c.created_at,
+    suites_table.c.name,
+    suites_table.c.revision,
+)
+Index(
+    "ix_control_plane_suites_name_created_revision",
+    suites_table.c.name,
+    suites_table.c.created_at,
+    suites_table.c.revision,
+)
+Index("ix_control_plane_suites_digest", suites_table.c.digest)
+Index(
+    "ix_control_plane_suites_dataset_name_revision",
+    suites_table.c.dataset_name,
+    suites_table.c.dataset_revision,
+)
 
 jobs_table = Table(
     "control_plane_jobs",
@@ -561,7 +638,7 @@ def _limit(value: int) -> int:
 
 
 _CURSOR_DOMAIN = b"llm-eval-control-plane/keyset-cursor/v1\0"
-_SCHEMA_REVISION = "20260825_0004"
+_SCHEMA_REVISION = "20260903_0005"
 _DEFAULT_MAX_DOCUMENT_BYTES = 64 * 1024 * 1024
 _MAX_JOB_PAYLOAD_BYTES = 4 * 1024 * 1024
 _MAX_OPERATIONAL_VALUE = 2**63 - 1
@@ -897,6 +974,141 @@ class SqlAlchemyControlPlaneRepository:
                 filters=filters,
                 key=[
                     _cursor_time(records[-1].created_at),
+                    last.name,
+                    last.revision,
+                ],
+            )
+        return CursorPage(items=records, next_cursor=next_cursor)
+
+    def put_suite(self, record: SuiteRecord) -> SuiteRecord:
+        document = _model_text(record.suite)
+        self._require_document_size(document)
+        metric_count = sum(
+            len(evaluator.metrics) for evaluator in record.suite.evaluators
+        )
+        values = {
+            "name": record.suite.name,
+            "revision": record.suite.revision,
+            "digest": record.suite.digest,
+            "dataset_name": record.suite.dataset.name,
+            "dataset_revision": record.suite.dataset.revision,
+            "evaluator_count": len(record.suite.evaluators),
+            "metric_count": metric_count,
+            "slice_count": len(record.suite.slices),
+            "gate_count": len(record.suite.gates),
+            "execution_mode": record.suite.execution.execution_mode.value,
+            "document": document,
+            "created_at": record.created_at,
+        }
+        try:
+            with self._engine.begin() as connection:
+                connection.execute(insert(suites_table).values(**values))
+            return record
+        except IntegrityError:
+            try:
+                existing = self.get_suite(record.suite.name, record.suite.revision)
+            except RecordNotFoundError as error:
+                raise ImmutableRecordConflictError(
+                    "Evaluation suite revision conflicts with existing metadata"
+                ) from error
+            if _model_text(existing.suite) != document:
+                raise ImmutableRecordConflictError(
+                    "Evaluation suite revision already contains different evidence"
+                ) from None
+            return existing
+        except SQLAlchemyError as error:
+            raise ControlPlaneRepositoryError(
+                "Could not store evaluation suite revision"
+            ) from error
+
+    def get_suite(self, name: str, revision: int) -> SuiteRecord:
+        try:
+            with self._engine.connect() as connection:
+                row = (
+                    connection.execute(
+                        select(suites_table).where(
+                            suites_table.c.name == name,
+                            suites_table.c.revision == revision,
+                        )
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+        except SQLAlchemyError as error:
+            raise ControlPlaneRepositoryError(
+                "Could not load evaluation suite revision"
+            ) from error
+        if row is None:
+            raise RecordNotFoundError("Evaluation suite revision was not found")
+        return self._suite_record(row)
+
+    def list_suites(
+        self,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        name: str | None = None,
+    ) -> CursorPage[SuiteListRecord]:
+        page_limit = _limit(limit)
+        filters: dict[str, JsonValue] = {"name": name}
+        statement = select(
+            suites_table.c.name,
+            suites_table.c.revision,
+            suites_table.c.digest,
+            suites_table.c.dataset_name,
+            suites_table.c.dataset_revision,
+            suites_table.c.evaluator_count,
+            suites_table.c.metric_count,
+            suites_table.c.slice_count,
+            suites_table.c.gate_count,
+            suites_table.c.execution_mode,
+            suites_table.c.created_at,
+        )
+        if name is not None:
+            statement = statement.where(suites_table.c.name == name)
+        if cursor is not None:
+            key = _decode_cursor(cursor, stream="suites", filters=filters)
+            if (
+                len(key) != 3
+                or not isinstance(key[1], str)
+                or isinstance(key[2], bool)
+                or not isinstance(key[2], int)
+            ):
+                raise InvalidCursorError("Pagination cursor is invalid")
+            created_at = _decoded_cursor_time(key[0])
+            statement = statement.where(
+                (suites_table.c.created_at > created_at)
+                | and_(
+                    suites_table.c.created_at == created_at,
+                    suites_table.c.name > key[1],
+                )
+                | and_(
+                    suites_table.c.created_at == created_at,
+                    suites_table.c.name == key[1],
+                    suites_table.c.revision > key[2],
+                )
+            )
+        statement = statement.order_by(
+            suites_table.c.created_at,
+            suites_table.c.name,
+            suites_table.c.revision,
+        ).limit(page_limit + 1)
+        try:
+            with self._engine.connect() as connection:
+                rows = connection.execute(statement).mappings().all()
+        except SQLAlchemyError as error:
+            raise ControlPlaneRepositoryError(
+                "Could not list evaluation suite revisions"
+            ) from error
+        records = tuple(self._suite_list_record(row) for row in rows[:page_limit])
+        next_cursor = None
+        if len(rows) > page_limit:
+            last = records[-1]
+            next_cursor = _encode_cursor(
+                stream="suites",
+                filters=filters,
+                key=[
+                    _cursor_time(last.created_at),
                     last.name,
                     last.revision,
                 ],
@@ -2530,6 +2742,70 @@ class SqlAlchemyControlPlaneRepository:
         except (KeyError, TypeError, ValidationError, ValueError) as error:
             raise CorruptRecordError(
                 "Stored control-plane dataset projection is invalid"
+            ) from error
+
+    def _suite_record(self, row: RowMapping) -> SuiteRecord:
+        suite = _validated_model(
+            row["document"],
+            EvaluationSuiteVersion,
+            max_document_bytes=self._max_document_bytes,
+        )
+        metric_count = sum(len(evaluator.metrics) for evaluator in suite.evaluators)
+        if (
+            row["name"],
+            row["revision"],
+            row["digest"],
+            row["dataset_name"],
+            row["dataset_revision"],
+            row["evaluator_count"],
+            row["metric_count"],
+            row["slice_count"],
+            row["gate_count"],
+            row["execution_mode"],
+        ) != (
+            suite.name,
+            suite.revision,
+            suite.digest,
+            suite.dataset.name,
+            suite.dataset.revision,
+            len(suite.evaluators),
+            metric_count,
+            len(suite.slices),
+            len(suite.gates),
+            suite.execution.execution_mode.value,
+        ):
+            raise CorruptRecordError(
+                "Stored evaluation suite indexes do not match canonical evidence"
+            )
+        try:
+            return SuiteRecord(
+                suite=suite,
+                created_at=_aware(row["created_at"]),
+            )
+        except (KeyError, TypeError, ValidationError, ValueError) as error:
+            raise CorruptRecordError(
+                "Stored control-plane evaluation suite is invalid"
+            ) from error
+
+    @staticmethod
+    def _suite_list_record(row: RowMapping) -> SuiteListRecord:
+        try:
+            return SuiteListRecord(
+                name=row["name"],
+                revision=row["revision"],
+                digest=row["digest"],
+                dataset_name=row["dataset_name"],
+                dataset_revision=row["dataset_revision"],
+                evaluator_count=row["evaluator_count"],
+                metric_count=row["metric_count"],
+                slice_count=row["slice_count"],
+                gate_count=row["gate_count"],
+                execution_mode=row["execution_mode"],
+                created_at=_aware(row["created_at"]),
+            )
+        except (KeyError, TypeError, ValidationError, ValueError) as error:
+            raise CorruptRecordError(
+                "Stored control-plane evaluation suite projection is invalid"
             ) from error
 
     @staticmethod

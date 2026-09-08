@@ -4,9 +4,11 @@ FROM ghcr.io/astral-sh/uv:0.12.9@sha256:8b940d3a9d65bed080436972241af2e21c84b5e8
 
 FROM python:3.14-alpine3.23@sha256:8caa2adfeb414dfe68d8b257f7aea9e205a400521c2b13b2d2e5e731fb8e70e5 AS builder
 
-RUN apk add --no-cache --upgrade \
+RUN apk upgrade --no-cache \
+    && apk add --no-cache --upgrade \
         'libcrypto3>=3.5.8-r0' \
         'libssl3>=3.5.8-r0' \
+        'libuuid>=2.41.6-r1' \
         'sqlite-libs>=3.53.4-r0'
 
 COPY --from=uv /uv /usr/local/bin/uv
@@ -28,9 +30,11 @@ ENV PATH="/opt/venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-RUN apk add --no-cache --upgrade \
+RUN apk upgrade --no-cache \
+    && apk add --no-cache --upgrade \
         'libcrypto3>=3.5.8-r0' \
         'libssl3>=3.5.8-r0' \
+        'libuuid>=2.41.6-r1' \
         'sqlite-libs>=3.53.4-r0' \
     && addgroup --system --gid 10001 controlplane \
     && adduser \

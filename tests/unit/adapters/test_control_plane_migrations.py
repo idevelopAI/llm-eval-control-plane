@@ -29,7 +29,8 @@ from llm_eval_control_plane.domain.results import RunResult
 _REVISION_ONE = "20260820_0001"
 _REVISION_TWO = "20260823_0002"
 _REVISION_THREE = "20260825_0003"
-_HEAD = "20260825_0004"
+_REVISION_FOUR = "20260825_0004"
+_HEAD = "20260903_0005"
 _CREATED_AT = datetime(2020, 1, 2, 3, tzinfo=UTC)
 _FUTURE_CREATED_AT = datetime(2099, 1, 2, 3, tzinfo=UTC)
 _FUTURE_UPDATED_AT = _FUTURE_CREATED_AT + timedelta(minutes=1)
@@ -469,6 +470,188 @@ def test_operational_metrics_migration_fails_closed_before_mutating_bad_evidence
             )
     finally:
         unchanged.dispose()
+
+
+def test_evaluation_suite_migration_preserves_datasets_and_round_trips_schema(
+    database_url: str,
+) -> None:
+    config = Config("alembic.ini")
+    command.upgrade(config, _REVISION_FOUR)
+    dataset, _ = _pre_metrics_evidence()
+    dataset_document = canonical_json_bytes(dataset.model_dump(mode="json")).decode()
+    previous = create_engine(database_url)
+    with previous.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO control_plane_datasets "
+                "(name, revision, digest, case_count, document, created_at) VALUES "
+                "(:name, :revision, :digest, :case_count, :document, :created_at)"
+            ),
+            {
+                "name": dataset.name,
+                "revision": dataset.revision,
+                "digest": dataset.digest,
+                "case_count": len(dataset.cases),
+                "document": dataset_document,
+                "created_at": _CREATED_AT,
+            },
+        )
+    previous.dispose()
+
+    command.upgrade(config, _HEAD)
+    upgraded = create_engine(database_url)
+    try:
+        inspector = inspect(upgraded)
+        columns = {
+            column["name"]: column
+            for column in inspector.get_columns("control_plane_suites")
+        }
+        assert set(columns) == {
+            "name",
+            "revision",
+            "digest",
+            "dataset_name",
+            "dataset_revision",
+            "evaluator_count",
+            "metric_count",
+            "slice_count",
+            "gate_count",
+            "execution_mode",
+            "document",
+            "created_at",
+        }
+        assert all(column["nullable"] is False for column in columns.values())
+        assert inspector.get_pk_constraint("control_plane_suites")[
+            "constrained_columns"
+        ] == ["name", "revision"]
+
+        assert {
+            constraint["name"]
+            for constraint in inspector.get_check_constraints("control_plane_suites")
+        } == {
+            "ck_control_plane_suites_dataset_revision",
+            "ck_control_plane_suites_digest_length",
+            "ck_control_plane_suites_evaluator_count",
+            "ck_control_plane_suites_gate_count",
+            "ck_control_plane_suites_execution_mode",
+            "ck_control_plane_suites_metric_count",
+            "ck_control_plane_suites_revision",
+            "ck_control_plane_suites_slice_count",
+        }
+        assert {
+            index["name"]: index["column_names"]
+            for index in inspector.get_indexes("control_plane_suites")
+        } == {
+            "ix_control_plane_suites_created_name_revision": [
+                "created_at",
+                "name",
+                "revision",
+            ],
+            "ix_control_plane_suites_dataset_name_revision": [
+                "dataset_name",
+                "dataset_revision",
+            ],
+            "ix_control_plane_suites_digest": ["digest"],
+            "ix_control_plane_suites_name_created_revision": [
+                "name",
+                "created_at",
+                "revision",
+            ],
+        }
+        foreign_keys = inspector.get_foreign_keys("control_plane_suites")
+        assert len(foreign_keys) == 1
+        assert foreign_keys[0]["name"] == "fk_control_plane_suites_dataset"
+        assert foreign_keys[0]["constrained_columns"] == [
+            "dataset_name",
+            "dataset_revision",
+        ]
+        assert foreign_keys[0]["referred_table"] == "control_plane_datasets"
+        assert foreign_keys[0]["referred_columns"] == ["name", "revision"]
+        assert foreign_keys[0]["options"] == {"ondelete": "RESTRICT"}
+
+        with upgraded.begin() as connection:
+            connection.execute(text("PRAGMA foreign_keys=ON"))
+            connection.execute(
+                text(
+                    "INSERT INTO control_plane_suites "
+                    "(name, revision, digest, dataset_name, dataset_revision, "
+                    "evaluator_count, metric_count, slice_count, gate_count, "
+                    "execution_mode, document, created_at) VALUES "
+                    "('migration-suite', 1, :digest, :dataset_name, "
+                    ":dataset_revision, 1, 1, 0, 1, 'offline_mock', '{}', "
+                    ":created_at)"
+                ),
+                {
+                    "digest": sha256_digest({"suite": "migration"}),
+                    "dataset_name": dataset.name,
+                    "dataset_revision": dataset.revision,
+                    "created_at": _CREATED_AT,
+                },
+            )
+
+        with raises(IntegrityError), upgraded.begin() as connection:
+            connection.execute(text("PRAGMA foreign_keys=ON"))
+            connection.execute(
+                text(
+                    "DELETE FROM control_plane_datasets "
+                    "WHERE name = :name AND revision = :revision"
+                ),
+                {"name": dataset.name, "revision": dataset.revision},
+            )
+
+        with upgraded.connect() as connection:
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT document FROM control_plane_datasets "
+                        "WHERE name = :name AND revision = :revision"
+                    ),
+                    {"name": dataset.name, "revision": dataset.revision},
+                ).scalar_one()
+                == dataset_document
+            )
+            context = MigrationContext.configure(connection)
+            assert compare_metadata(context, CONTROL_PLANE_METADATA) == []
+    finally:
+        upgraded.dispose()
+
+    command.downgrade(config, _REVISION_FOUR)
+    downgraded = create_engine(database_url)
+    try:
+        inspector = inspect(downgraded)
+        assert "control_plane_suites" not in inspector.get_table_names()
+        with downgraded.connect() as connection:
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT document FROM control_plane_datasets "
+                        "WHERE name = :name AND revision = :revision"
+                    ),
+                    {"name": dataset.name, "revision": dataset.revision},
+                ).scalar_one()
+                == dataset_document
+            )
+    finally:
+        downgraded.dispose()
+
+    command.upgrade(config, _HEAD)
+    final_engine = create_engine(database_url)
+    try:
+        with final_engine.connect() as connection:
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT document FROM control_plane_datasets "
+                        "WHERE name = :name AND revision = :revision"
+                    ),
+                    {"name": dataset.name, "revision": dataset.revision},
+                ).scalar_one()
+                == dataset_document
+            )
+            context = MigrationContext.configure(connection)
+            assert compare_metadata(context, CONTROL_PLANE_METADATA) == []
+    finally:
+        final_engine.dispose()
 
 
 def test_payload_and_attempt_tables_allow_only_one_active_lease(
