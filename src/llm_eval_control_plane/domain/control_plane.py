@@ -29,6 +29,11 @@ from llm_eval_control_plane.domain.evaluation import EvaluationSpec
 from llm_eval_control_plane.domain.execution import RunId, SafeCode
 from llm_eval_control_plane.domain.models import FrozenModel
 from llm_eval_control_plane.domain.results import ExecutionMode, RunResult, RunStatus
+from llm_eval_control_plane.domain.suites import (
+    EvaluationSuiteVersion,
+    SuiteEvaluator,
+    SuiteExecutionSettings,
+)
 
 StableId = Annotated[
     str,
@@ -138,6 +143,33 @@ class DatasetListRecord(FrozenModel):
     revision: PositiveInt
     digest: Sha256Digest
     case_count: PositiveInt
+    created_at: datetime
+
+    _normalize_created_at = field_validator("created_at")(_utc)
+
+
+class SuiteRecord(FrozenModel):
+    """One immutable evaluation suite revision and its registration time."""
+
+    suite: EvaluationSuiteVersion = Field(repr=False)
+    created_at: datetime
+
+    _normalize_created_at = field_validator("created_at")(_utc)
+
+
+class SuiteListRecord(FrozenModel):
+    """Bounded metadata projection for an evaluation suite collection item."""
+
+    name: ArtifactName
+    revision: PositiveInt
+    digest: Sha256Digest
+    dataset_name: ArtifactName
+    dataset_revision: PositiveInt
+    evaluator_count: Annotated[int, Field(ge=1, le=32)]
+    metric_count: Annotated[int, Field(ge=1, le=32)]
+    slice_count: Annotated[int, Field(ge=0, le=128)]
+    gate_count: Annotated[int, Field(ge=1, le=64)]
+    execution_mode: ExecutionMode
     created_at: datetime
 
     _normalize_created_at = field_validator("created_at")(_utc)
@@ -324,6 +356,37 @@ class ExecutionContract(FrozenModel):
         if evaluator_keys != sorted(evaluator_keys):
             raise ValueError("execution contract evaluators must be ordered")
         return self
+
+
+class SuiteExecutionContract(FrozenModel):
+    """Target-independent evaluator behavior resolved by an execution adapter."""
+
+    execution: SuiteExecutionSettings
+    evaluators: Annotated[
+        tuple[SuiteEvaluator, ...], Field(min_length=1, max_length=32)
+    ]
+
+    @model_validator(mode="after")
+    def validate_contract(self) -> Self:
+        executor_names = [item.executor_name for item in self.evaluators]
+        if len(executor_names) != len(set(executor_names)):
+            raise ValueError("suite execution contract names must be unique")
+        evaluator_keys = [item.artifact.logical_key for item in self.evaluators]
+        if len(evaluator_keys) != len(set(evaluator_keys)):
+            raise ValueError("suite execution contract evaluators must be unique")
+        if evaluator_keys != sorted(evaluator_keys):
+            raise ValueError("suite execution contract evaluators must be ordered")
+        metrics = [metric for item in self.evaluators for metric in item.metrics]
+        if len(metrics) != len(set(metrics)):
+            raise ValueError("suite execution contract metrics must be unique")
+        if len(metrics) > 32:
+            raise ValueError("suite execution contract has too many metrics")
+        return self
+
+    @property
+    def evaluator_names(self) -> tuple[str, ...]:
+        """Return resolved runtime selectors in evaluator artifact order."""
+        return tuple(item.executor_name for item in self.evaluators)
 
 
 class ScenarioOverride(FrozenModel):

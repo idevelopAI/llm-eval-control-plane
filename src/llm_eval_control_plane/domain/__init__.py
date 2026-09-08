@@ -33,6 +33,7 @@ from llm_eval_control_plane.domain.control_plane import (
     JobStatus,
     RunJobPayload,
     ScenarioOverride,
+    SuiteExecutionContract,
 )
 from llm_eval_control_plane.domain.datasets import (
     DatasetVersion,
@@ -135,6 +136,7 @@ __all__ = [
     "SqlTargetOutput",
     "SuiteCaseOrder",
     "SuiteEvaluator",
+    "SuiteExecutionContract",
     "SuiteExecutionSettings",
     "TargetObservation",
     "TargetOutcome",
