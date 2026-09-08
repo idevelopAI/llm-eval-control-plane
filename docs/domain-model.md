@@ -41,6 +41,8 @@
 | `SuiteEvaluator` | Executor binding, resolved evaluator identity, and exact metric inventory | Implemented |
 | `SuiteExecutionSettings` | Adapter, execution mode, canonical order, single invocation, and serial concurrency | Implemented |
 | `EvaluationSuiteVersion` | Target-independent, content-addressed evaluation protocol and release policy | Implemented |
+| `SuiteRecord` | Immutable suite revision plus its durable registration time | Implemented |
+| `SuiteListRecord` | Bounded indexed suite metadata projection for stable pagination | Implemented |
 | Experiment history | Derived suite-pinned runs and release decisions, not a separate mutable entity | Proposed |
 
 The deterministic fake target and built-in scorers are adapter implementations,
@@ -61,7 +63,7 @@ behavior revisions inside a run.
 - Every resolved artifact digest uses canonical
   `sha256:<64 lowercase hexadecimal characters>` form.
 
-## Proposed suite-version invariants
+## Suite-version invariants
 
 - An `EvaluationSuiteVersion` has an author-facing name and positive revision,
   but its `evaluation-suite/v1` content digest excludes both values. Publishing
@@ -87,23 +89,32 @@ behavior revisions inside a run.
   defaults materialized. It excludes name, revision, registration time, source
   formatting, credentials, secrets, database configuration, and operational
   coordination settings.
-- Once suite registration is implemented, an identical put at one
-  `(name, revision)` will be idempotent and different content will conflict.
-  Workers will consume the exact resolved suite snapshot pinned at submission;
-  comparisons will reject different suite revisions or digests rather than
-  treating them as a failed release.
+- Suite registration is create-once. An identical put at one `(name, revision)`
+  is idempotent without re-resolving current dependencies; different content at
+  the same identity conflicts.
+- A new registration must resolve the exact stored dataset revision, verify its
+  digest and declared slices, and match its execution settings, evaluator
+  identities, and metric inventories to the selected executor contract.
+- The PostgreSQL suite record retains the canonical document and indexed dataset,
+  count, execution-mode, digest, and creation metadata. Detail reads validate the
+  indexes against the canonical document; list reads return only the bounded
+  indexed projection and support stable keyset pagination with an exact-name
+  filter.
+- Suite-backed workers will consume the exact resolved suite snapshot pinned at
+  submission. Comparisons will reject different suite revisions or digests
+  rather than treating them as a failed release.
 - Experiment history is derived from immutable suite-pinned runs and the
   release decisions that connect exact baseline and candidate evidence. No
   separate experiment definition, table, mutable status, or current-result
   pointer is part of the proposed domain.
 
-These contracts are proposed in
+These contracts are accepted in
 [ADR 0012](adr/0012-versioned-evaluation-suites.md). The frozen suite models,
-canonical normalization, and digest calculation are implemented. Registration,
-persistence, API and CLI surfaces, worker payload pinning, derived experiment
-history, and run/decision digest integration are not implemented yet. Existing
-evidence is legacy suite-unpinned evidence and is not assigned an inferred
-suite.
+canonical normalization, digest calculation, application registration service,
+and PostgreSQL persistence are implemented. Suite API and CLI surfaces,
+suite-backed execution and worker payload pinning, derived experiment history,
+and run/decision digest integration are not implemented yet. Existing evidence
+is legacy suite-unpinned evidence and is not assigned an inferred suite.
 
 ## Execution invariants
 
