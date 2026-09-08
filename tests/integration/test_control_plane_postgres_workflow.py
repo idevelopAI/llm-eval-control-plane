@@ -30,6 +30,7 @@ from llm_eval_control_plane.adapters.control_plane_db import (
     jobs_table,
     release_decisions_table,
     runs_table,
+    suites_table,
 )
 from llm_eval_control_plane.api import runtime
 from llm_eval_control_plane.api.contracts import DatasetCreateRequest
@@ -43,6 +44,7 @@ from llm_eval_control_plane.api.security import (
 from llm_eval_control_plane.application.control_plane import (
     ClaimedJob,
     ControlPlaneRepository,
+    StoreConflictError,
     StoreLeaseLostError,
     StoreTransitionError,
 )
@@ -50,6 +52,11 @@ from llm_eval_control_plane.application.worker import (
     WorkerResult,
     WorkerResultStatus,
     WorkerService,
+)
+from llm_eval_control_plane.domain import (
+    EvaluationSuiteVersion,
+    MetricDirection,
+    MetricGate,
 )
 from llm_eval_control_plane.domain.canonical import sha256_digest
 from llm_eval_control_plane.domain.control_plane import (
@@ -61,11 +68,13 @@ from llm_eval_control_plane.domain.control_plane import (
     JobStatus,
     RunJobPayload,
     RunRecord,
+    SuiteRecord,
 )
 from llm_eval_control_plane.domain.datasets import DatasetVersion
 from llm_eval_control_plane.domain.results import RunResult
 
 _DATASET_NAME = "phase5-integration/restart"
+_SUITE_NAME = "phase10-integration/release-core"
 _KEY_PREFIX = "phase5-it-"
 _API_KEY = f"{_KEY_PREFIX}api-restart"
 _LEASE_SECONDS = 30
@@ -153,6 +162,9 @@ def _clear_test_records(engine: Engine) -> None:
     decision_ids = _test_decision_ids()
     with engine.begin() as connection:
         connection.execute(
+            delete(suites_table).where(suites_table.c.name == _SUITE_NAME)
+        )
+        connection.execute(
             delete(release_decisions_table).where(
                 release_decisions_table.c.decision_id.in_(decision_ids)
             )
@@ -228,6 +240,31 @@ def _ensure_dataset(repository: ControlPlaneRepository) -> DatasetRecord:
     dataset = DatasetCreateRequest.model_validate(_dataset_body()).to_domain()
     return repository.put_dataset(
         DatasetRecord(dataset=dataset, created_at=datetime.now(UTC))
+    )
+
+
+def _suite(
+    dataset: DatasetVersion, *, threshold: float = 1.0
+) -> EvaluationSuiteVersion:
+    contract = DeterministicEvaluationExecutor().validate_suite(
+        adapter="deterministic_fake",
+        evaluator_names=("exact_match",),
+    )
+    return EvaluationSuiteVersion.create(
+        name=_SUITE_NAME,
+        revision=1,
+        dataset=dataset.artifact_ref,
+        evaluators=contract.evaluators,
+        slices=("integration",),
+        execution=contract.execution,
+        gates=(
+            MetricGate(
+                metric="quality.exact_match",
+                direction=MetricDirection.HIGHER_IS_BETTER,
+                threshold=threshold,
+                slice="integration",
+            ),
+        ),
     )
 
 
@@ -368,6 +405,37 @@ def _run_count(engine: Engine, run_id: str) -> int:
                 select(runs_table.c.run_id).where(runs_table.c.run_id == run_id)
             ).all()
         )
+
+
+def test_suite_registry_round_trips_immutable_evidence_in_postgres(
+    postgres_engine: Engine,
+) -> None:
+    repository = _repository(postgres_engine)
+    dataset = _ensure_dataset(repository).dataset
+    suite = _suite(dataset)
+    record = SuiteRecord(suite=suite, created_at=datetime.now(UTC))
+
+    stored = repository.put_suite(record)
+    replay = repository.put_suite(record)
+
+    assert stored == record
+    assert replay == stored
+    assert repository.get_suite(suite.name, suite.revision) == stored
+    page = repository.list_suites(limit=10, name=suite.name)
+    assert len(page.items) == 1
+    assert page.next_cursor is None
+    assert page.items[0].digest == suite.digest
+    assert page.items[0].dataset_name == dataset.name
+    assert page.items[0].slice_count == 1
+    assert page.items[0].gate_count == 1
+
+    changed = SuiteRecord(
+        suite=_suite(dataset, threshold=0.9),
+        created_at=datetime.now(UTC),
+    )
+    with pytest.raises(StoreConflictError):
+        repository.put_suite(changed)
+    assert repository.get_suite(suite.name, suite.revision) == stored
 
 
 def test_api_enqueue_survives_restart_and_terminal_replay_is_redacted(

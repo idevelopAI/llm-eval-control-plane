@@ -48,6 +48,7 @@ from llm_eval_control_plane.adapters.control_plane_db import (
     jobs_table,
     release_decisions_table,
     runs_table,
+    suites_table,
 )
 from llm_eval_control_plane.adapters.fake_target import DeterministicFakeTarget
 from llm_eval_control_plane.adapters.scorers import (
@@ -62,6 +63,8 @@ from llm_eval_control_plane.domain import (
     DatasetVersion,
     EvaluationCase,
     EvaluationSpec,
+    EvaluationSuiteVersion,
+    ExecutionMode,
     MetricDirection,
     MetricGate,
 )
@@ -83,6 +86,7 @@ from llm_eval_control_plane.domain.control_plane import (
     ReleaseDecisionRecord,
     RunJobPayload,
     RunRecord,
+    SuiteRecord,
 )
 from llm_eval_control_plane.domain.results import RunResult
 
@@ -112,6 +116,34 @@ def dataset(
                 case_id="case-001",
                 input=CanonicalJson.from_value({"scenario": "echo", "value": expected}),
                 expected=CanonicalJson.from_value(expected),
+            ),
+        ),
+    )
+
+
+def evaluation_suite(
+    dataset_version: DatasetVersion,
+    *,
+    name: str = "release-suite",
+    revision: int = 1,
+    threshold: float = 1.0,
+) -> EvaluationSuiteVersion:
+    contract = DeterministicEvaluationExecutor().validate_suite(
+        adapter="deterministic_fake",
+        evaluator_names=("exact_match", "usage"),
+    )
+    return EvaluationSuiteVersion.create(
+        name=name,
+        revision=revision,
+        dataset=dataset_version.artifact_ref,
+        evaluators=contract.evaluators,
+        slices=(),
+        execution=contract.execution,
+        gates=(
+            MetricGate(
+                metric="quality.exact_match",
+                direction=MetricDirection.HIGHER_IS_BETTER,
+                threshold=threshold,
             ),
         ),
     )
@@ -470,6 +502,216 @@ def test_document_size_is_bounded_before_insert(engine: Engine) -> None:
         repository.put_dataset(DatasetRecord(dataset=dataset(), created_at=NOW))
 
     assert not engine.connect().execute(select(datasets_table)).first()
+
+
+def test_suite_is_append_only_idempotent_and_digest_is_not_unique(
+    repository: SqlAlchemyControlPlaneRepository,
+) -> None:
+    data = dataset()
+    repository.put_dataset(DatasetRecord(dataset=data, created_at=NOW))
+    suite = evaluation_suite(data)
+    first = SuiteRecord(suite=suite, created_at=NOW)
+    replay = SuiteRecord(suite=suite, created_at=NOW + timedelta(minutes=1))
+    same_digest_other_identity = SuiteRecord(
+        suite=evaluation_suite(data, name="release-suite-copy", revision=2),
+        created_at=NOW + timedelta(seconds=1),
+    )
+
+    assert repository.put_suite(first) == first
+    assert repository.put_suite(replay) == first
+    assert (
+        repository.put_suite(same_digest_other_identity) == same_digest_other_identity
+    )
+    assert same_digest_other_identity.suite.digest == first.suite.digest
+
+    different = SuiteRecord(
+        suite=evaluation_suite(data, threshold=0.9),
+        created_at=NOW,
+    )
+    with raises(ImmutableRecordConflictError, match="different evidence"):
+        repository.put_suite(different)
+    assert repository.get_suite("release-suite", 1) == first
+
+
+def test_suite_requires_a_registered_dataset(
+    repository: SqlAlchemyControlPlaneRepository,
+) -> None:
+    unregistered = dataset(name="unregistered")
+
+    with raises(ImmutableRecordConflictError, match="metadata"):
+        repository.put_suite(
+            SuiteRecord(
+                suite=evaluation_suite(unregistered),
+                created_at=NOW,
+            )
+        )
+
+    assert repository.list_suites(limit=10).items == ()
+
+
+def test_suite_document_size_is_bounded_before_insert(engine: Engine) -> None:
+    data = dataset()
+    SqlAlchemyControlPlaneRepository(engine).put_dataset(
+        DatasetRecord(dataset=data, created_at=NOW)
+    )
+    bounded = SqlAlchemyControlPlaneRepository(engine, max_document_bytes=16)
+
+    with raises(PayloadTooLargeError, match="size limit"):
+        bounded.put_suite(
+            SuiteRecord(
+                suite=evaluation_suite(data),
+                created_at=NOW,
+            )
+        )
+
+    assert not engine.connect().execute(select(suites_table)).first()
+
+
+def test_suite_list_uses_filter_bound_keyset_pagination(
+    repository: SqlAlchemyControlPlaneRepository,
+) -> None:
+    data = dataset()
+    repository.put_dataset(DatasetRecord(dataset=data, created_at=NOW))
+    for revision in range(1, 4):
+        repository.put_suite(
+            SuiteRecord(
+                suite=evaluation_suite(data, revision=revision),
+                created_at=NOW,
+            )
+        )
+
+    first = repository.list_suites(limit=2, name="release-suite")
+    assert [record.revision for record in first.items] == [1, 2]
+    assert first.next_cursor is not None
+    assert all(record.evaluator_count == 2 for record in first.items)
+    assert all(record.metric_count == 4 for record in first.items)
+    assert all(record.slice_count == 0 for record in first.items)
+    assert all(record.gate_count == 1 for record in first.items)
+    assert all(
+        record.execution_mode is ExecutionMode.OFFLINE_MOCK for record in first.items
+    )
+    second = repository.list_suites(
+        limit=2,
+        cursor=first.next_cursor,
+        name="release-suite",
+    )
+    assert [record.revision for record in second.items] == [3]
+    assert second.next_cursor is None
+
+    with raises(InvalidCursorError, match="invalid"):
+        repository.list_suites(limit=2, cursor=first.next_cursor, name=None)
+    with raises(InvalidCursorError, match="invalid"):
+        repository.list_suites(
+            limit=2,
+            cursor=f"{first.next_cursor[:-1]}A",
+            name="release-suite",
+        )
+    with raises(ValueError, match="between 1 and 100"):
+        repository.list_suites(limit=0)
+    with raises(RecordNotFoundError, match="not found") as captured:
+        repository.get_suite("private-suite", 1)
+    assert "private-suite" not in str(captured.value)
+
+
+def test_suite_document_must_remain_canonical_and_valid(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+) -> None:
+    data = dataset()
+    repository.put_dataset(DatasetRecord(dataset=data, created_at=NOW))
+    repository.put_suite(SuiteRecord(suite=evaluation_suite(data), created_at=NOW))
+    with engine.connect() as connection:
+        document = connection.execute(select(suites_table.c.document)).scalar_one()
+
+    with engine.begin() as connection:
+        connection.execute(update(suites_table).values(document=f" {document}"))
+    with raises(CorruptRecordError, match="invalid"):
+        repository.get_suite("release-suite", 1)
+
+    with engine.begin() as connection:
+        connection.execute(update(suites_table).values(document='{"revision":1}'))
+    with raises(CorruptRecordError, match="invalid"):
+        repository.get_suite("release-suite", 1)
+
+
+@mark.parametrize(
+    ("column", "tampered", "lookup_name", "lookup_revision"),
+    (
+        ("name", "tampered-suite", "tampered-suite", 1),
+        ("revision", 9, "release-suite", 9),
+        ("digest", f"sha256:{'0' * 64}", "release-suite", 1),
+        ("dataset_name", "fixture-other", "release-suite", 1),
+        ("dataset_revision", 2, "release-suite", 1),
+        ("evaluator_count", 3, "release-suite", 1),
+        ("metric_count", 5, "release-suite", 1),
+        ("slice_count", 1, "release-suite", 1),
+        ("gate_count", 2, "release-suite", 1),
+        ("execution_mode", "live", "release-suite", 1),
+    ),
+)
+def test_suite_row_indexes_must_match_canonical_document(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+    column: str,
+    tampered: object,
+    lookup_name: str,
+    lookup_revision: int,
+) -> None:
+    data = dataset()
+    repository.put_dataset(DatasetRecord(dataset=data, created_at=NOW))
+    repository.put_dataset(DatasetRecord(dataset=dataset(revision=2), created_at=NOW))
+    repository.put_dataset(
+        DatasetRecord(dataset=dataset(name="fixture-other"), created_at=NOW)
+    )
+    repository.put_suite(SuiteRecord(suite=evaluation_suite(data), created_at=NOW))
+    with engine.begin() as connection:
+        connection.execute(
+            update(suites_table)
+            .where(suites_table.c.name == "release-suite")
+            .values(**{column: tampered})
+        )
+
+    with raises(CorruptRecordError, match="indexes"):
+        repository.get_suite(lookup_name, lookup_revision)
+
+
+def test_suite_collection_projection_does_not_load_canonical_document(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+) -> None:
+    data = dataset()
+    repository.put_dataset(DatasetRecord(dataset=data, created_at=NOW))
+    repository.put_suite(SuiteRecord(suite=evaluation_suite(data), created_at=NOW))
+    with engine.begin() as connection:
+        connection.execute(
+            update(suites_table).values(document="not-canonical-json-" * 65_536)
+        )
+
+    statements: list[str] = []
+
+    def capture_selects(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: object,
+    ) -> None:
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", capture_selects)
+    try:
+        records = repository.list_suites(limit=10).items
+    finally:
+        event.remove(engine, "before_cursor_execute", capture_selects)
+
+    assert len(records) == 1
+    assert records[0].name == "release-suite"
+    assert len(statements) == 1
+    assert "document" not in statements[0].lower()
+    with raises(CorruptRecordError, match="invalid"):
+        repository.get_suite("release-suite", 1)
 
 
 def test_begin_job_identifies_only_one_winner_and_detects_conflicts(
