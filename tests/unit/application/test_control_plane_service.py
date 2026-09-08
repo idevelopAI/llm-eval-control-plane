@@ -34,8 +34,10 @@ from llm_eval_control_plane.domain import (
     DatasetVersion,
     EvaluationCase,
     EvaluationSpec,
+    EvaluationSuiteVersion,
     MetricDirection,
     MetricGate,
+    SuiteExecutionContract,
     sha256_digest,
 )
 from llm_eval_control_plane.domain.comparison import (
@@ -59,6 +61,8 @@ from llm_eval_control_plane.domain.control_plane import (
     RunJobPayload,
     RunListRecord,
     RunRecord,
+    SuiteListRecord,
+    SuiteRecord,
 )
 from llm_eval_control_plane.domain.execution import (
     ExecutionFailure,
@@ -148,11 +152,64 @@ class RejectingValidationExecutor(DeterministicEvaluationExecutor):
         raise ValueError("private current executor validation failure")
 
 
+class RejectingSuiteValidationExecutor(DeterministicEvaluationExecutor):
+    """Represent a removed suite resolver that exact durable replay bypasses."""
+
+    def __init__(self) -> None:
+        self.validate_suite_calls = 0
+
+    def validate_suite(
+        self,
+        *,
+        adapter: str,
+        evaluator_names: tuple[str, ...],
+    ) -> SuiteExecutionContract:
+        del adapter, evaluator_names
+        self.validate_suite_calls += 1
+        raise ValueError("private current suite validation failure")
+
+
+class DriftingSuiteValidationExecutor(DeterministicEvaluationExecutor):
+    """Return one well-shaped contract whose resolved semantics have drifted."""
+
+    def __init__(self, drift: str) -> None:
+        super().__init__()
+        self._drift = drift
+
+    def validate_suite(
+        self,
+        *,
+        adapter: str,
+        evaluator_names: tuple[str, ...],
+    ) -> SuiteExecutionContract:
+        contract = super().validate_suite(
+            adapter=adapter,
+            evaluator_names=evaluator_names,
+        )
+        evaluator = contract.evaluators[0]
+        if self._drift == "execution":
+            execution = contract.execution.model_copy(
+                update={"adapter": "private_drifted_adapter"}
+            )
+            return contract.model_copy(update={"execution": execution})
+        if self._drift == "evaluator":
+            artifact = evaluator.artifact.model_copy(
+                update={"digest": sha256_digest("private evaluator drift")}
+            )
+            changed = evaluator.model_copy(update={"artifact": artifact})
+            return contract.model_copy(update={"evaluators": (changed,)})
+        if self._drift == "metrics":
+            changed = evaluator.model_copy(update={"metrics": ("quality.private",)})
+            return contract.model_copy(update={"evaluators": (changed,)})
+        raise AssertionError("unknown drift")
+
+
 class MemoryRepository:
     """Application test double for immutable records and atomic job/payload claims."""
 
     def __init__(self) -> None:
         self.datasets: dict[tuple[str, int], DatasetRecord] = {}
+        self.suites: dict[tuple[str, int], SuiteRecord] = {}
         self.jobs: dict[str, JobRecord] = {}
         self.payloads: dict[str, JobPayload] = {}
         self.runs: dict[str, RunRecord] = {}
@@ -160,6 +217,7 @@ class MemoryRepository:
         self.attempts: dict[str, tuple[JobAttemptRecord, ...]] = {}
         self.begin_error: Exception | None = None
         self.cancel_error: Exception | None = None
+        self.suite_put_error: Exception | None = None
         self.healthy = True
         self.schema_current = True
 
@@ -196,6 +254,52 @@ class MemoryRepository:
             )
             for record in self.datasets.values()
             if name is None or record.dataset.name == name
+        )
+        return CursorPage(items=items[:limit])
+
+    def put_suite(self, record: SuiteRecord) -> SuiteRecord:
+        if self.suite_put_error is not None:
+            raise self.suite_put_error
+        key = (record.suite.name, record.suite.revision)
+        existing = self.suites.get(key)
+        if existing is not None and existing.suite != record.suite:
+            raise StoreConflictError("private suite details")
+        self.suites[key] = existing or record
+        return self.suites[key]
+
+    def get_suite(self, name: str, revision: int) -> SuiteRecord:
+        try:
+            return self.suites[(name, revision)]
+        except KeyError:
+            raise StoreNotFoundError("private suite details") from None
+
+    def list_suites(
+        self,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        name: str | None = None,
+    ) -> CursorPage[SuiteListRecord]:
+        if cursor is not None:
+            raise StoreInvalidCursorError("private suite cursor details")
+        items = tuple(
+            SuiteListRecord(
+                name=record.suite.name,
+                revision=record.suite.revision,
+                digest=record.suite.digest,
+                dataset_name=record.suite.dataset.name,
+                dataset_revision=record.suite.dataset.revision,
+                evaluator_count=len(record.suite.evaluators),
+                metric_count=sum(
+                    len(evaluator.metrics) for evaluator in record.suite.evaluators
+                ),
+                slice_count=len(record.suite.slices),
+                gate_count=len(record.suite.gates),
+                execution_mode=record.suite.execution.execution_mode,
+                created_at=record.created_at,
+            )
+            for record in self.suites.values()
+            if name is None or record.suite.name == name
         )
         return CursorPage(items=items[:limit])
 
@@ -342,7 +446,7 @@ class MemoryRepository:
         return self.schema_current
 
 
-def _dataset() -> DatasetVersion:
+def _dataset(*, slices: tuple[str, ...] = ()) -> DatasetVersion:
     return DatasetVersion.create(
         name="fixture",
         revision=1,
@@ -351,6 +455,36 @@ def _dataset() -> DatasetVersion:
                 case_id="case-001",
                 input=CanonicalJson.from_value({"scenario": "echo", "value": "answer"}),
                 expected=CanonicalJson.from_value("answer"),
+                slices=slices,
+            ),
+        ),
+    )
+
+
+def _suite(
+    dataset: DatasetVersion,
+    *,
+    name: str = "release/core",
+    revision: int = 1,
+    slices: tuple[str, ...] = (),
+    threshold: float = 1.0,
+) -> EvaluationSuiteVersion:
+    contract = DeterministicEvaluationExecutor().validate_suite(
+        adapter="deterministic_fake",
+        evaluator_names=("exact_match",),
+    )
+    return EvaluationSuiteVersion.create(
+        name=name,
+        revision=revision,
+        dataset=dataset.artifact_ref,
+        evaluators=contract.evaluators,
+        slices=slices,
+        execution=contract.execution,
+        gates=(
+            MetricGate(
+                metric="quality.exact_match",
+                direction=MetricDirection.HIGHER_IS_BETTER,
+                threshold=threshold,
             ),
         ),
     )
@@ -394,6 +528,128 @@ def _service(
         clock=lambda: NOW,
         identifier_factory=identifier_factory or next_identifier,
     )
+
+
+def test_suite_registration_is_append_only_queryable_and_idempotent() -> None:
+    repository = MemoryRepository()
+    service = _service(repository)
+    dataset = _dataset(slices=("priority",))
+    service.register_dataset(dataset)
+    suite = _suite(dataset, slices=("priority",))
+
+    first = service.register_suite(suite)
+    replay = service.register_suite(suite)
+
+    assert replay is first
+    assert first.suite == suite
+    assert first.created_at == NOW
+    assert service.get_suite(suite.name, suite.revision) is first
+    assert len(repository.suites) == 1
+
+    page = service.list_suites(limit=10, name=suite.name)
+    assert page.next_cursor is None
+    assert len(page.items) == 1
+    projection = page.items[0]
+    assert projection.name == suite.name
+    assert projection.revision == suite.revision
+    assert projection.digest == suite.digest
+    assert projection.dataset_name == dataset.name
+    assert projection.dataset_revision == dataset.revision
+    assert projection.evaluator_count == 1
+    assert projection.metric_count == 1
+    assert projection.slice_count == 1
+    assert projection.gate_count == 1
+    assert projection.execution_mode is ExecutionMode.OFFLINE_MOCK
+
+
+def test_exact_suite_replay_bypasses_removed_dependencies_and_resolver() -> None:
+    repository = MemoryRepository()
+    initial_service = _service(repository)
+    dataset = _dataset()
+    initial_service.register_dataset(dataset)
+    suite = _suite(dataset)
+    first = initial_service.register_suite(suite)
+    repository.datasets.clear()
+    rejecting_executor = RejectingSuiteValidationExecutor()
+    replay_service = _service(repository, executor=rejecting_executor)
+
+    replay = replay_service.register_suite(suite)
+
+    assert replay is first
+    assert rejecting_executor.validate_suite_calls == 0
+    with raises(ResourceConflictError):
+        replay_service.register_suite(_suite(dataset, threshold=0.9))
+    assert rejecting_executor.validate_suite_calls == 0
+
+
+def test_suite_registration_rejects_missing_or_mismatched_dataset_safely() -> None:
+    repository = MemoryRepository()
+    service = _service(repository)
+    dataset = _dataset()
+
+    with raises(ResourceNotFoundError) as missing:
+        service.register_suite(_suite(dataset))
+    assert "private" not in str(missing.value)
+
+    service.register_dataset(dataset)
+    different_dataset = DatasetVersion.create(
+        name=dataset.name,
+        revision=dataset.revision,
+        cases=(
+            EvaluationCase(
+                case_id="case-001",
+                input=CanonicalJson.from_value("different private content"),
+            ),
+        ),
+    )
+    with raises(InvalidSubmissionError) as mismatched:
+        service.register_suite(_suite(different_dataset))
+    assert "private" not in str(mismatched.value)
+    assert repository.suites == {}
+
+
+def test_suite_registration_rejects_absent_slice_and_resolver_drift_safely() -> None:
+    dataset = _dataset()
+    repository = MemoryRepository()
+    service = _service(repository)
+    service.register_dataset(dataset)
+
+    with raises(InvalidSubmissionError) as missing_slice:
+        service.register_suite(_suite(dataset, slices=("private-slice",)))
+    assert "private-slice" not in str(missing_slice.value)
+    assert repository.suites == {}
+
+    for drift in ("execution", "evaluator", "metrics"):
+        drifting_repository = MemoryRepository()
+        drifting_service = _service(
+            drifting_repository,
+            executor=DriftingSuiteValidationExecutor(drift),
+        )
+        drifting_service.register_dataset(dataset)
+        with raises(InvalidSubmissionError) as invalid:
+            drifting_service.register_suite(_suite(dataset))
+        assert "private" not in str(invalid.value)
+        assert drifting_repository.suites == {}
+
+
+def test_suite_repository_errors_are_translated_without_content_leaks() -> None:
+    repository = MemoryRepository()
+    service = _service(repository)
+    dataset = _dataset()
+    service.register_dataset(dataset)
+    repository.suite_put_error = StoreConflictError("private suite details")
+
+    with raises(ResourceConflictError) as conflict:
+        service.register_suite(_suite(dataset))
+    assert "private" not in str(conflict.value)
+    assert repository.suites == {}
+
+    with raises(ResourceNotFoundError) as missing:
+        service.get_suite("private-suite", 1)
+    assert "private-suite" not in str(missing.value)
+    with raises(InvalidCursorError) as invalid_cursor:
+        service.list_suites(limit=1, cursor="private-cursor")
+    assert "private-cursor" not in str(invalid_cursor.value)
 
 
 def test_run_submission_enqueues_pinned_payload_without_execution() -> None:

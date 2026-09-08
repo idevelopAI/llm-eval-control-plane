@@ -37,6 +37,9 @@ from llm_eval_control_plane.domain.control_plane import (
     RunListRecord,
     RunRecord,
     ScenarioOverride,
+    SuiteExecutionContract,
+    SuiteListRecord,
+    SuiteRecord,
     TraceParent,
     WorkerId,
     validate_traceparent,
@@ -44,6 +47,7 @@ from llm_eval_control_plane.domain.control_plane import (
 from llm_eval_control_plane.domain.datasets import DatasetVersion
 from llm_eval_control_plane.domain.evaluation import EvaluationSpec
 from llm_eval_control_plane.domain.results import RunResult
+from llm_eval_control_plane.domain.suites import EvaluationSuiteVersion
 
 
 class ControlPlaneStoreError(RuntimeError):
@@ -102,6 +106,18 @@ class ControlPlaneRepository(Protocol):
         cursor: str | None = None,
         name: str | None = None,
     ) -> CursorPage[DatasetListRecord]: ...
+
+    def put_suite(self, record: SuiteRecord) -> SuiteRecord: ...
+
+    def get_suite(self, name: str, revision: int) -> SuiteRecord: ...
+
+    def list_suites(
+        self,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        name: str | None = None,
+    ) -> CursorPage[SuiteListRecord]: ...
 
     def begin_job(
         self,
@@ -314,6 +330,13 @@ class EvaluationExecutor(Protocol):
         scenario_overrides: Mapping[str, str],
     ) -> ExecutionContract: ...
 
+    def validate_suite(
+        self,
+        *,
+        adapter: str,
+        evaluator_names: tuple[str, ...],
+    ) -> SuiteExecutionContract: ...
+
     async def execute(
         self,
         *,
@@ -435,6 +458,75 @@ class ControlPlaneService:
     ) -> CursorPage[DatasetListRecord]:
         try:
             return self._repository.list_datasets(
+                limit=limit,
+                cursor=cursor,
+                name=name,
+            )
+        except StoreInvalidCursorError as error:
+            raise InvalidCursorError("Pagination cursor is invalid") from error
+
+    def register_suite(self, suite: EvaluationSuiteVersion) -> SuiteRecord:
+        """Append one verified suite revision, allowing exact durable retries."""
+        try:
+            existing = self._repository.get_suite(suite.name, suite.revision)
+        except StoreNotFoundError:
+            existing = None
+        if existing is not None:
+            if existing.suite != suite:
+                raise ResourceConflictError(
+                    "Evaluation suite revision already contains different content"
+                )
+            return existing
+
+        try:
+            dataset = self._repository.get_dataset(
+                suite.dataset.name,
+                suite.dataset.revision,
+            )
+        except StoreNotFoundError as error:
+            raise ResourceNotFoundError(
+                "Suite dataset revision was not found"
+            ) from error
+        try:
+            contract = self._executor.validate_suite(
+                adapter=suite.execution.adapter,
+                evaluator_names=suite.evaluator_names,
+            )
+            validate_suite_registration(
+                suite=suite,
+                dataset=dataset,
+                contract=contract,
+            )
+        except ValueError as error:
+            raise InvalidSubmissionError(
+                "Evaluation suite revision is invalid"
+            ) from error
+
+        record = SuiteRecord(suite=suite, created_at=self._clock())
+        try:
+            return self._repository.put_suite(record)
+        except StoreConflictError as error:
+            raise ResourceConflictError(
+                "Evaluation suite revision already contains different content"
+            ) from error
+
+    def get_suite(self, name: str, revision: int) -> SuiteRecord:
+        try:
+            return self._repository.get_suite(name, revision)
+        except StoreNotFoundError as error:
+            raise ResourceNotFoundError(
+                "Evaluation suite revision was not found"
+            ) from error
+
+    def list_suites(
+        self,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        name: str | None = None,
+    ) -> CursorPage[SuiteListRecord]:
+        try:
+            return self._repository.list_suites(
                 limit=limit,
                 cursor=cursor,
                 name=name,
@@ -794,6 +886,25 @@ def validate_execution_contract(
         raise ValueError("executor resolved a different target")
 
 
+def validate_suite_registration(
+    *,
+    suite: EvaluationSuiteVersion,
+    dataset: DatasetRecord,
+    contract: SuiteExecutionContract,
+) -> None:
+    """Reject a suite whose resolved dependencies or semantics have drifted."""
+    ControlPlaneService._validate_dataset_bounds(dataset.dataset)
+    if suite.dataset != dataset.dataset.artifact_ref:
+        raise ValueError("suite references different dataset content")
+    dataset_slices = {label for case in dataset.dataset.cases for label in case.slices}
+    if not set(suite.slices) <= dataset_slices:
+        raise ValueError("suite declares a slice absent from its dataset")
+    if contract.execution != suite.execution:
+        raise ValueError("executor resolved different suite execution settings")
+    if contract.evaluators != suite.evaluators:
+        raise ValueError("executor resolved different suite evaluators")
+
+
 def validate_run_result(
     result: RunResult,
     *,
@@ -902,7 +1013,9 @@ __all__ = [
     "StoreNotFoundError",
     "StoreTransitionError",
     "SubmissionResult",
+    "SuiteExecutionContract",
     "validate_comparison_inputs",
     "validate_execution_contract",
     "validate_run_result",
+    "validate_suite_registration",
 ]

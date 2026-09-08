@@ -15,12 +15,17 @@ from llm_eval_control_plane.adapters.scorers import (
     BuiltInEvaluatorKind,
     build_evaluators,
 )
-from llm_eval_control_plane.application.control_plane import ExecutionContract
+from llm_eval_control_plane.application.control_plane import (
+    ExecutionContract,
+    SuiteExecutionContract,
+)
 from llm_eval_control_plane.application.ports import EvaluatorPort, TargetPort
 from llm_eval_control_plane.application.runner import InProcessRunner
 from llm_eval_control_plane.domain import (
     ArtifactRef,
     EvaluationCase,
+    SuiteEvaluator,
+    SuiteExecutionSettings,
     TargetObservation,
     TargetRequest,
 )
@@ -64,6 +69,36 @@ class DeterministicEvaluationExecutor:
             target=target.ref,
             evaluators=tuple(evaluator.ref for evaluator in evaluators),
             execution_mode=ExecutionMode.OFFLINE_MOCK,
+        )
+
+    def validate_suite(
+        self,
+        *,
+        adapter: str,
+        evaluator_names: tuple[str, ...],
+    ) -> SuiteExecutionContract:
+        """Resolve the target-independent semantics supported by this adapter."""
+        if adapter != self._ADAPTER:
+            raise ValueError("unsupported target adapter")
+        kinds = self._evaluator_kinds(evaluator_names)
+        evaluators = build_evaluators(kinds)
+        return SuiteExecutionContract(
+            execution=SuiteExecutionSettings(
+                adapter=self._ADAPTER,
+                execution_mode=ExecutionMode.OFFLINE_MOCK,
+            ),
+            evaluators=tuple(
+                SuiteEvaluator(
+                    executor_name=name,
+                    artifact=evaluator.ref,
+                    metrics=evaluator.metric_names,
+                )
+                for name, evaluator in zip(
+                    evaluator_names,
+                    evaluators,
+                    strict=True,
+                )
+            ),
         )
 
     async def execute(
