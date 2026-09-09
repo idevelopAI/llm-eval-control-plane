@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from threading import Event
 from typing import cast
 
-from pytest import MonkeyPatch, raises
+from pytest import MonkeyPatch, mark, raises
 
 from llm_eval_control_plane.api.execution import DeterministicEvaluationExecutor
 from llm_eval_control_plane.application.comparison import (
@@ -35,6 +35,8 @@ from llm_eval_control_plane.domain import (
     DatasetVersion,
     EvaluationCase,
     EvaluationSpec,
+    EvaluationSuiteVersion,
+    ExecutionMode,
     MetricDirection,
     MetricGate,
     ReleaseDecision,
@@ -54,6 +56,8 @@ from llm_eval_control_plane.domain.control_plane import (
     ReleaseDecisionRecord,
     RunJobPayload,
     RunRecord,
+    SuiteExecutionContract,
+    SuiteRecord,
 )
 
 NOW = datetime(2026, 8, 23, 12, tzinfo=UTC)
@@ -104,6 +108,27 @@ class CountingExecutor(DeterministicEvaluationExecutor):
     def __init__(self) -> None:
         super().__init__()
         self.calls = 0
+        self.suite_calls = 0
+
+    async def execute_suite(
+        self,
+        *,
+        run_id: str,
+        dataset: DatasetVersion,
+        target_name: str,
+        target_revision: int,
+        scenario_overrides: Mapping[str, str],
+        suite: EvaluationSuiteVersion,
+    ) -> RunResult:
+        self.suite_calls += 1
+        return await super().execute_suite(
+            run_id=run_id,
+            dataset=dataset,
+            target_name=target_name,
+            target_revision=target_revision,
+            scenario_overrides=scenario_overrides,
+            suite=suite,
+        )
 
     async def execute(
         self,
@@ -308,6 +333,10 @@ class FakeRepository:
         except KeyError:
             raise StoreNotFoundError("private missing run") from None
 
+    def get_suite(self, name: str, revision: int) -> SuiteRecord:
+        del name, revision
+        raise ControlPlaneStoreError("private suite registry unavailable")
+
     def retry_job(
         self,
         _job_id: str,
@@ -414,6 +443,8 @@ class FakeRepository:
 def _run_payload(
     dataset: DatasetVersion,
     executor: DeterministicEvaluationExecutor,
+    *,
+    suite: EvaluationSuiteVersion | None = None,
 ) -> RunJobPayload:
     contract = executor.validate(
         target_name="fake/worker",
@@ -423,12 +454,35 @@ def _run_payload(
         scenario_overrides={},
     )
     return RunJobPayload(
+        schema_version="run-job/v2" if suite is not None else "run-job/v1",
         dataset=dataset.artifact_ref,
         target_name="fake/worker",
         target_revision=1,
         adapter="deterministic_fake",
         evaluator_names=("exact_match",),
         execution_contract=contract,
+        suite=suite,
+    )
+
+
+def _suite(dataset: DatasetVersion) -> EvaluationSuiteVersion:
+    contract = DeterministicEvaluationExecutor().validate_suite(
+        adapter="deterministic_fake", evaluator_names=("exact_match",)
+    )
+    return EvaluationSuiteVersion.create(
+        name="worker/release-protocol",
+        revision=1,
+        dataset=dataset.artifact_ref,
+        evaluators=contract.evaluators,
+        slices=(),
+        execution=contract.execution,
+        gates=(
+            MetricGate(
+                metric="quality.exact_match",
+                direction=MetricDirection.HIGHER_IS_BETTER,
+                threshold=1.0,
+            ),
+        ),
     )
 
 
@@ -540,6 +594,163 @@ def test_run_attempt_claims_with_private_fence_and_publishes_once() -> None:
     assert "private-payload-sentinel" not in repr(result)
 
 
+def test_suite_run_survives_payload_reload_without_access_to_suite_registry() -> None:
+    dataset = _dataset()
+    suite = _suite(dataset)
+    submitted = _run_payload(dataset, CountingExecutor(), suite=suite)
+    reloaded = RunJobPayload.model_validate_json(submitted.model_dump_json())
+    repository = FakeRepository(job=_job(), payload=reloaded, dataset=dataset)
+    restarted_executor = CountingExecutor()
+
+    result = asyncio.run(_service(repository, restarted_executor).run_once())
+
+    assert result.status is WorkerResultStatus.SUCCEEDED
+    assert restarted_executor.calls == 0
+    assert restarted_executor.suite_calls == 1
+    assert repository.completed_run is not None
+    assert repository.completed_run.result.suite == suite.artifact_ref
+    assert repository.completed_run.result.evaluators == suite.evaluator_refs
+    assert repository.fail_code is None
+
+
+@mark.parametrize("drift", ["metrics", "settings"])
+def test_suite_contract_drift_fails_before_execution(drift: str) -> None:
+    class DriftExecutor(CountingExecutor):
+        def validate_suite(
+            self, *, adapter: str, evaluator_names: tuple[str, ...]
+        ) -> SuiteExecutionContract:
+            resolved = super().validate_suite(
+                adapter=adapter, evaluator_names=evaluator_names
+            )
+            if drift == "settings":
+                return resolved.model_copy(
+                    update={
+                        "execution": resolved.execution.model_copy(
+                            update={"execution_mode": ExecutionMode.LIVE}
+                        )
+                    }
+                )
+            return resolved.model_copy(
+                update={
+                    "evaluators": (
+                        resolved.evaluators[0].model_copy(
+                            update={"metrics": ("quality.changed",)}
+                        ),
+                    )
+                }
+            )
+
+    dataset = _dataset()
+    executor = DriftExecutor()
+    repository = FakeRepository(
+        job=_job(),
+        payload=_run_payload(dataset, executor, suite=_suite(dataset)),
+        dataset=dataset,
+    )
+
+    result = asyncio.run(_service(repository, executor).run_once())
+
+    assert result.status is WorkerResultStatus.FAILED
+    assert repository.fail_code == "invalid_job_payload"
+    assert executor.calls == executor.suite_calls == 0
+    assert repository.completed_run is None
+
+
+@mark.parametrize("failure", ["exception", "provenance"])
+def test_suite_execution_failures_never_publish_unpinned_or_private_evidence(
+    failure: str,
+) -> None:
+    class InvalidSuiteExecutor(CountingExecutor):
+        async def execute_suite(
+            self,
+            *,
+            run_id: str,
+            dataset: DatasetVersion,
+            target_name: str,
+            target_revision: int,
+            scenario_overrides: Mapping[str, str],
+            suite: EvaluationSuiteVersion,
+        ) -> RunResult:
+            if failure == "exception":
+                raise RuntimeError("private-suite-execution-token")
+            result = await super().execute_suite(
+                run_id=run_id,
+                dataset=dataset,
+                target_name=target_name,
+                target_revision=target_revision,
+                scenario_overrides=scenario_overrides,
+                suite=suite,
+            )
+            return result.model_copy(update={"suite": None})
+
+    dataset = _dataset()
+    executor = InvalidSuiteExecutor()
+    repository = FakeRepository(
+        job=_job(),
+        payload=_run_payload(dataset, executor, suite=_suite(dataset)),
+        dataset=dataset,
+    )
+
+    result = asyncio.run(_service(repository, executor).run_once())
+
+    assert result.status is WorkerResultStatus.FAILED
+    assert repository.fail_code == (
+        "execution_failed" if failure == "exception" else "invalid_job_payload"
+    )
+    assert repository.completed_run is None
+    assert "private-suite-execution-token" not in repr(result)
+
+
+def test_suite_comparison_uses_snapshot_after_reload_and_keeps_provenance() -> None:
+    executor = CountingExecutor()
+    dataset = _dataset()
+    suite = _suite(dataset)
+    baseline, candidate = (
+        asyncio.run(
+            executor.execute_suite(
+                run_id=f"suite-worker-{label}",
+                dataset=dataset,
+                target_name=f"fake/{label}",
+                target_revision=1,
+                scenario_overrides={},
+                suite=suite,
+            )
+        )
+        for label in ("baseline", "candidate")
+    )
+    payload = ComparisonJobPayload(
+        schema_version="comparison-job/v2",
+        dataset=dataset.artifact_ref,
+        baseline_run_id=baseline.run_id,
+        baseline_result_digest=baseline.result_digest,
+        candidate_run_id=candidate.run_id,
+        candidate_result_digest=candidate.result_digest,
+        spec=suite.to_evaluation_spec(
+            baseline=baseline.target, candidate=candidate.target
+        ),
+        suite=suite,
+    )
+    repository = FakeRepository(
+        job=_job(kind=JobKind.COMPARISON, resource_id="decision-suite-worker"),
+        payload=ComparisonJobPayload.model_validate_json(payload.model_dump_json()),
+        dataset=dataset,
+    )
+    repository.runs = {
+        baseline.run_id: RunRecord(result=baseline, created_at=NOW),
+        candidate.run_id: RunRecord(result=candidate, created_at=NOW),
+    }
+    restarted_executor = CountingExecutor()
+
+    result = asyncio.run(_service(repository, restarted_executor).run_once())
+
+    assert result.status is WorkerResultStatus.SUCCEEDED
+    assert restarted_executor.calls == restarted_executor.suite_calls == 0
+    assert repository.completed_decision is not None
+    decision = repository.completed_decision.decision
+    assert decision.status.value == "passed"
+    assert decision.suite == suite.artifact_ref
+
+
 def test_claim_repr_never_exposes_private_worker_state() -> None:
     repository, _executor, _service_instance = _run_context()
     claim = repository.claim_next_job(
@@ -589,6 +800,7 @@ def test_blocked_comparison_keeps_event_loop_available_for_heartbeat(
         dataset: DatasetVersion,
         baseline: RunResult,
         candidate: RunResult,
+        suite: EvaluationSuiteVersion | None = None,
     ) -> ReleaseDecision:
         started.set()
         if not release.wait(timeout=10):
@@ -598,6 +810,7 @@ def test_blocked_comparison_keeps_event_loop_available_for_heartbeat(
             dataset=dataset,
             baseline=baseline,
             candidate=candidate,
+            suite=suite,
         )
 
     monkeypatch.setattr(

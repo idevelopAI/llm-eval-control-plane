@@ -11,7 +11,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 from opentelemetry.trace import SpanKind, StatusCode, Tracer
-from pytest import MonkeyPatch, raises
+from pytest import MonkeyPatch, mark, raises
 
 from llm_eval_control_plane.adapters.scorers import (
     BuiltInEvaluatorKind,
@@ -25,7 +25,10 @@ from llm_eval_control_plane.domain import (
     CanonicalJson,
     DatasetVersion,
     EvaluationCase,
+    EvaluationSuiteVersion,
     ExecutionMode,
+    MetricDirection,
+    MetricGate,
     RunResult,
     TargetObservation,
 )
@@ -47,6 +50,133 @@ def _dataset() -> DatasetVersion:
             ),
         ),
     )
+
+
+def _suite() -> EvaluationSuiteVersion:
+    contract = DeterministicEvaluationExecutor().validate_suite(
+        adapter="deterministic_fake",
+        evaluator_names=("exact_match",),
+    )
+    return EvaluationSuiteVersion.create(
+        name="execution/protocol",
+        revision=1,
+        dataset=_dataset().artifact_ref,
+        evaluators=contract.evaluators,
+        slices=(),
+        execution=contract.execution,
+        gates=(
+            MetricGate(
+                metric="quality.exact_match",
+                direction=MetricDirection.HIGHER_IS_BETTER,
+                threshold=1.0,
+            ),
+        ),
+    )
+
+
+def test_suite_execution_pins_provenance_and_keeps_trace_content_private() -> None:
+    provider, exporter = _tracing()
+    executor = DeterministicEvaluationExecutor(tracer=provider.get_tracer("suite-test"))
+    suite = _suite()
+
+    result = asyncio.run(
+        executor.execute_suite(
+            run_id="private-suite-run-sentinel",
+            dataset=_dataset(),
+            target_name="private-suite-target-sentinel",
+            target_revision=2,
+            scenario_overrides={},
+            suite=suite,
+        )
+    )
+
+    assert result.suite == suite.artifact_ref
+    assert result.dataset == suite.dataset
+    assert result.evaluators == suite.evaluator_refs
+    assert result.execution_mode is suite.execution.execution_mode
+    spans = tuple(exporter.get_finished_spans())
+    assert [span.name for span in spans] == [
+        "evaluation.target.invoke",
+        "evaluation.evaluator.evaluate",
+        "evaluation.run",
+    ]
+    _assert_content_free_internal_spans(spans)
+    captured = _span_capture(spans)
+    for private_value in (
+        suite.name,
+        suite.digest,
+        "private-suite-run-sentinel",
+        "private-suite-target-sentinel",
+        "private-execution-sentinel",
+    ):
+        assert private_value not in captured
+    provider.shutdown()
+
+
+@mark.parametrize("dependency", ["dataset", "settings", "evaluator"])
+def test_suite_execution_rejects_dependency_drift_before_invoking_target(
+    dependency: str,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    suite = _suite()
+    dataset = _dataset()
+    if dependency == "dataset":
+        dataset = DatasetVersion.create(
+            name=dataset.name, revision=2, cases=dataset.cases
+        )
+    elif dependency == "settings":
+        suite = EvaluationSuiteVersion.create(
+            name=suite.name,
+            revision=2,
+            dataset=suite.dataset,
+            evaluators=suite.evaluators,
+            slices=suite.slices,
+            execution=suite.execution.model_copy(
+                update={"execution_mode": ExecutionMode.LIVE}
+            ),
+            gates=suite.gates,
+        )
+    else:
+        evaluator = suite.evaluators[0]
+        suite = EvaluationSuiteVersion.create(
+            name=suite.name,
+            revision=2,
+            dataset=suite.dataset,
+            evaluators=(
+                evaluator.model_copy(
+                    update={
+                        "artifact": evaluator.artifact.model_copy(
+                            update={"revision": 2}
+                        )
+                    }
+                ),
+            ),
+            slices=suite.slices,
+            execution=suite.execution,
+            gates=suite.gates,
+        )
+    calls = 0
+
+    def reject_execution(**_kwargs: object) -> RunResult:
+        nonlocal calls
+        calls += 1
+        raise AssertionError("preflight validation must prevent target execution")
+
+    monkeypatch.setattr(execution, "_run_evaluation", reject_execution)
+
+    with raises(ValueError, match="suite execution dependencies do not match"):
+        asyncio.run(
+            DeterministicEvaluationExecutor().execute_suite(
+                run_id="suite-invalid",
+                dataset=dataset,
+                target_name="fake/suite-invalid",
+                target_revision=1,
+                scenario_overrides={},
+                suite=suite,
+            )
+        )
+
+    assert calls == 0
 
 
 def test_suite_validation_resolves_exact_execution_and_evaluator_behavior() -> None:
@@ -84,8 +214,10 @@ def test_suite_validation_resolves_exact_execution_and_evaluator_behavior() -> N
         )
 
 
+@mark.parametrize("suite_backed", [False, True])
 def test_deterministic_execution_keeps_the_calling_event_loop_responsive(
     monkeypatch: MonkeyPatch,
+    suite_backed: bool,
 ) -> None:
     original = execution._run_evaluation
     started = Event()
@@ -101,6 +233,7 @@ def test_deterministic_execution_keeps_the_calling_event_loop_responsive(
         evaluator_kinds: tuple[BuiltInEvaluatorKind, ...],
         scenario_overrides: Mapping[str, str],
         tracer: Tracer,
+        suite: EvaluationSuiteVersion | None = None,
     ) -> RunResult:
         nonlocal execution_thread
         execution_thread = get_ident()
@@ -115,14 +248,25 @@ def test_deterministic_execution_keeps_the_calling_event_loop_responsive(
             evaluator_kinds=evaluator_kinds,
             scenario_overrides=scenario_overrides,
             tracer=tracer,
+            suite=suite,
         )
 
     monkeypatch.setattr(execution, "_run_evaluation", blocking_run_evaluation)
 
     async def exercise() -> tuple[int, RunResult]:
         calling_thread = get_ident()
-        task = asyncio.create_task(
-            DeterministicEvaluationExecutor().execute(
+        executor = DeterministicEvaluationExecutor()
+        operation = (
+            executor.execute_suite(
+                run_id="run-offload-001",
+                dataset=_dataset(),
+                target_name="fake/offload",
+                target_revision=1,
+                scenario_overrides={},
+                suite=_suite(),
+            )
+            if suite_backed
+            else executor.execute(
                 run_id="run-offload-001",
                 dataset=_dataset(),
                 target_name="fake/offload",
@@ -132,6 +276,7 @@ def test_deterministic_execution_keeps_the_calling_event_loop_responsive(
                 scenario_overrides={},
             )
         )
+        task = asyncio.create_task(operation)
         progressed = asyncio.Event()
         try:
             assert await asyncio.to_thread(started.wait, 10)
