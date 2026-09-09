@@ -6,20 +6,21 @@
 
 ## Context
 
-Run submissions currently select a dataset, target adapter, evaluator set, and
+Legacy run submissions select a dataset, target adapter, evaluator set, and
 target behavior directly. Comparison submissions separately provide the release
-gates. The durable job payload resolves the inputs available at submission, but
-there is no single artifact proving that repeated runs used the same evaluation
-protocol or that a later comparison applied the policy originally reviewed for
-that protocol.
+gates. Their durable job payload resolves the inputs available at submission,
+but does not identify a single artifact proving that repeated runs used the same
+evaluation protocol or that a later comparison applied the policy originally
+reviewed for that protocol.
 
 `ArtifactKind.SUITE` was originally reserved without a suite domain contract.
 The frozen contract and its canonical identity now exist, together with an
-application registration service and PostgreSQL record. Suite API and CLI
-surfaces and links from run and release evidence do not yet exist. A suite must
-be reusable across candidate and baseline targets, preserve every semantic
-choice needed to interpret a run, and remain compatible with the existing
-immutable artifact and canonical-digest rules.
+application registration service, PostgreSQL record, snapshot-pinned worker
+execution, and digest-bound links from run and release evidence. Suite API and
+CLI surfaces do not yet exist. A suite must be reusable across candidate and
+baseline targets, preserve every semantic choice needed to interpret a run, and
+remain compatible with the existing immutable artifact and canonical-digest
+rules.
 
 Experiment history also needs a clear boundary. A separate mutable experiment
 record would duplicate lifecycle already represented by jobs, runs, and release
@@ -103,8 +104,8 @@ requires a new digest-schema label and an explicit compatibility path.
 ### Experiment history is derived from immutable evidence
 
 The control plane will not add a separate `ExperimentDefinition`, experiment
-table, or mutable experiment lifecycle. Once suite pinning is implemented, the
-experiment history is the append-only relationship among:
+table, or mutable experiment lifecycle. Experiment history is defined as the
+append-only relationship among:
 
 - a resolved suite revision;
 - runs that pin that exact suite digest and their resolved target artifacts;
@@ -122,8 +123,10 @@ This design preserves the existing sources of truth: jobs describe execution
 lifecycle, runs describe evaluated evidence, and release decisions connect two
 exact runs through a policy. It avoids a second state machine and prevents a
 mutable experiment pointer from changing the meaning of historical evidence.
+The suite-pinned evidence is implemented; dedicated history queries and
+presentation surfaces are not implemented yet.
 
-### Registration is create-once; evidence pinning follows this contract
+### Registration is create-once; jobs pin complete snapshots
 
 The application service and PostgreSQL repository implement create-once suite
 registration. Before a new record is written, registration loads the exact
@@ -145,17 +148,42 @@ re-resolving current dataset or executor dependencies. Different content at that
 identity conflicts. Different revisions may intentionally share one semantic
 digest because suite name and revision do not enter content identity.
 
-The remaining integration must add bounded and redacted API and CLI contracts,
-resolved suite-backed job payloads, and suite references covered by new
-run-result and release-decision digest schemas. A worker must execute the exact
-suite snapshot pinned at submission rather than resolving a mutable alias when
-it claims a job. Comparisons must reject runs with different suite references or
-digests as configuration errors and must apply the gates from the pinned suite
-rather than accepting a replacement policy.
+The application service provides `submit_suite_run` and
+`submit_suite_comparison`. Each resolves an exact registered suite name and
+revision for a new submission. The run path verifies the dataset and executor
+contract and pins the complete suite plus the resolved target contract in a
+`run-job/v2` payload. The comparison path derives the policy from the suite and
+pins the complete suite, compiled specification, and exact baseline and
+candidate result digests in a `comparison-job/v2` payload. Both paths use the
+existing atomic enqueue and semantic idempotency boundary. An exact replay
+returns the original job before resolving dependencies again.
 
-Existing run and release-decision digest contracts remain valid. Historical
-evidence without a suite reference is legacy unpinned evidence and must not be
-retroactively assigned an inferred suite.
+A worker executes the pinned snapshot without reloading the suite registry or
+resolving a mutable alias. Run execution rejects drift in the available executor
+settings, evaluator identities, or metric inventories before target invocation.
+Comparisons require both runs to match the complete suite reference and the
+policy compiled from its snapshot. Different suite names, revisions, or digests,
+mixed pinned/unpinned evidence, and replacement policies are configuration
+errors, not failed release gates.
+
+### Evidence pinning preserves legacy digest contracts
+
+`RunResult.suite` and `ReleaseDecision.suite` are optional resolved artifact
+references. When present, `run-result/v3` and `release-decision/v3` digest
+envelopes cover the complete suite reference, including name, revision, and
+digest, plus the explicit execution mode. The reference binds evidence to the
+reviewed protocol even when otherwise-identical suite content is registered
+under another revision.
+
+Without a suite reference, deterministic fixture evidence retains its v1 digest
+envelope and other execution modes retain v2. Serializers omit the absent suite
+field, preserving historical canonical document bytes as well as digests.
+Legacy v1 job payloads likewise omit a suite snapshot; v2 payloads require one.
+Historical evidence remains unpinned and is not assigned an inferred suite.
+
+Suite HTTP and CLI contracts and suite-aware dashboard projections remain
+outside the implemented surface. Existing HTTP and CLI submissions keep their
+unpinned contract and cannot supply replacement policy for suite-pinned runs.
 
 ### Privacy and hosting boundaries do not expand
 
@@ -168,8 +196,8 @@ metric inventories, slices, and gate values remain sensitive metadata available
 only through the existing project-bound authorization boundary. Caller-controlled
 suite fields must not become metric labels or unreviewed telemetry attributes.
 
-The public Site remains a synthetic, request-free fixture. This registry
-implementation adds no hosted API route, bearer flow, model invocation, runtime
+The public Site remains a synthetic, request-free fixture. Suite registration
+and execution add no hosted API route, bearer flow, model invocation, runtime
 binding, or application secret. Any synthetic suite presentation added to that
 artifact remains subject to ADR 0011 and its build and runtime acceptance gates.
 
@@ -186,8 +214,11 @@ artifact remains subject to ADR 0011 and its build and runtime acceptance gates.
 - Create-once application registration, PostgreSQL persistence, migration, and
   bounded repository projections are implemented without exposing a new public
   route.
-- Suite-backed job payloads, execution, result and decision digests, API and CLI
-  contracts, and dashboard projections require later bounded integration.
+- Suite-backed payloads, application submissions, worker execution, and new
+  evidence digest envelopes are implemented without changing legacy evidence
+  bytes or exposing canonical suite documents through an HTTP route.
+- Suite API and CLI contracts, history queries, and dashboard projections still
+  require bounded integration.
 - Initial execution remains deliberately serial and single-invocation. A future
   sampling or concurrency model requires a new reviewed semantic contract.
 
@@ -225,8 +256,8 @@ and content-addressed.
 ### Resolve a `latest` suite when a worker claims work
 
 Queue delay, retry, or recovery could select different content from the content
-validated at submission. Durable payloads must eventually pin one resolved
-revision and digest before enqueueing.
+validated at submission. Durable payloads instead pin the complete resolved
+suite snapshot before enqueueing.
 
 ### Store a mutable experiment registry
 

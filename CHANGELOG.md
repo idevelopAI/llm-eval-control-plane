@@ -17,6 +17,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - A create-once evaluation-suite registry with exact dataset and executor
   validation, canonical PostgreSQL records, integrity-checked detail reads, and
   bounded keyset-paged metadata projections.
+- Application-level suite-backed run and comparison submissions with semantic
+  idempotency, full immutable snapshots in `run-job/v2` and
+  `comparison-job/v2`, and worker execution independent of suite-registry lookup.
+- Suite-pinned run and release evidence using `run-result/v3` and
+  `release-decision/v3` digests, exact evaluator-contract validation, and
+  comparisons that reject mixed suite identities or replacement policies.
+  Historical unpinned evidence retains its canonical serialization and v1/v2
+  digest contracts. Suite HTTP, CLI, and dashboard surfaces are not included.
 - Deterministic metric gates with direction, threshold, and regression budget.
 - RFC 8785 canonical JSON, strict JSONL datasets, and content-derived dataset
   identities.
