@@ -17,6 +17,7 @@ from llm_eval_control_plane.domain import (
     ErrorObservation,
     EvaluationCase,
     EvaluationSpec,
+    EvaluationSuiteVersion,
     GateCaseComparison,
     GateFailureCode,
     GateResult,
@@ -42,6 +43,7 @@ def compare_runs(
     dataset: DatasetVersion,
     baseline: RunResult,
     candidate: RunResult,
+    suite: EvaluationSuiteVersion | None = None,
 ) -> ReleaseDecision:
     """Compare two resolved runs and apply every absolute and regression gate."""
     _validate_inputs(
@@ -49,6 +51,7 @@ def compare_runs(
         dataset=dataset,
         baseline=baseline,
         candidate=candidate,
+        suite=suite,
     )
     baseline_cases = {case.case_id: case for case in baseline.cases}
     candidate_cases = {case.case_id: case for case in candidate.cases}
@@ -180,6 +183,7 @@ def compare_runs(
         gates=tuple(gate_results),
         cases=tuple(case_comparisons),
         execution_mode=baseline.execution_mode,
+        suite=suite.artifact_ref if suite is not None else None,
     )
 
 
@@ -189,7 +193,15 @@ def _validate_inputs(
     dataset: DatasetVersion,
     baseline: RunResult,
     candidate: RunResult,
+    suite: EvaluationSuiteVersion | None,
 ) -> None:
+    _validate_suite_inputs(
+        suite=suite,
+        spec=spec,
+        dataset=dataset,
+        baseline=baseline,
+        candidate=candidate,
+    )
     if spec.baseline is None:
         raise ComparisonConfigurationError(
             "baseline comparison requires a baseline target reference"
@@ -222,6 +234,73 @@ def _validate_inputs(
     if set(baseline_metrics) != set(candidate_metrics):
         raise ComparisonConfigurationError(
             "candidate and baseline metric sets must match"
+        )
+
+
+def _validate_suite_inputs(
+    *,
+    suite: EvaluationSuiteVersion | None,
+    spec: EvaluationSpec,
+    dataset: DatasetVersion,
+    baseline: RunResult,
+    candidate: RunResult,
+) -> None:
+    if suite is None:
+        if baseline.suite is not None or candidate.suite is not None:
+            raise ComparisonConfigurationError(
+                "suite-pinned runs require the evaluation suite snapshot"
+            )
+        return
+    if baseline.suite != suite.artifact_ref or candidate.suite != suite.artifact_ref:
+        raise ComparisonConfigurationError(
+            "candidate and baseline must pin the supplied evaluation suite"
+        )
+    if suite.dataset != dataset.artifact_ref:
+        raise ComparisonConfigurationError("dataset does not match evaluation suite")
+    expected_metrics = {
+        metric: evaluator.artifact
+        for evaluator in suite.evaluators
+        for metric in evaluator.metrics
+    }
+    for run in (baseline, candidate):
+        if run.evaluators != suite.evaluator_refs:
+            raise ComparisonConfigurationError(
+                "run evaluators do not match evaluation suite"
+            )
+        if _metric_references(run) != expected_metrics:
+            raise ComparisonConfigurationError(
+                "run evaluator metrics do not match evaluation suite"
+            )
+        if any(
+            expected_metrics.get(observation.metric) != observation.evaluator
+            for case in run.cases
+            for observation in case.observations
+        ):
+            raise ComparisonConfigurationError(
+                "run observations do not match evaluation suite"
+            )
+        if any(
+            failure.evaluator not in suite.evaluator_refs
+            for case in run.cases
+            for failure in case.evaluator_failures
+        ):
+            raise ComparisonConfigurationError(
+                "run evaluator failures do not match evaluation suite"
+            )
+        if run.execution_mode is not suite.execution.execution_mode:
+            raise ComparisonConfigurationError(
+                "run execution mode does not match evaluation suite"
+            )
+    available_slices = {label for case in dataset.cases for label in case.slices}
+    if not set(suite.slices).issubset(available_slices):
+        raise ComparisonConfigurationError(
+            "suite slices are absent from the supplied dataset"
+        )
+    if spec != suite.to_evaluation_spec(
+        baseline=baseline.target, candidate=candidate.target
+    ):
+        raise ComparisonConfigurationError(
+            "comparison policy must exactly match evaluation suite"
         )
 
 

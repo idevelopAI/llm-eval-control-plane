@@ -19,6 +19,7 @@ from llm_eval_control_plane.domain import (
     CaseResultStatus,
     DatasetVersion,
     ErrorObservation,
+    EvaluationSuiteVersion,
     ExecutionFailure,
     ExecutionMode,
     FailureCode,
@@ -60,9 +61,17 @@ class InProcessRunner:
         target: TargetPort,
         evaluators: tuple[EvaluatorPort, ...],
         execution_mode: ExecutionMode = ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE,
+        suite: EvaluationSuiteVersion | None = None,
     ) -> RunResult:
         """Execute every case and return a complete immutable result."""
         ordered_evaluators = self._validate_plan(target, evaluators)
+        if suite is not None:
+            self._validate_suite(
+                suite=suite,
+                dataset=dataset,
+                evaluators=ordered_evaluators,
+                execution_mode=execution_mode,
+            )
         case_results: list[CaseResult] = []
         for case in dataset.cases:
             request = TargetRequest(case_id=case.case_id, input=case.input)
@@ -189,7 +198,37 @@ class InProcessRunner:
             cases=cases,
             metrics=summaries,
             execution_mode=execution_mode,
+            suite=suite.artifact_ref if suite is not None else None,
         )
+
+    @staticmethod
+    def _validate_suite(
+        *,
+        suite: EvaluationSuiteVersion,
+        dataset: DatasetVersion,
+        evaluators: tuple[EvaluatorPort, ...],
+        execution_mode: ExecutionMode,
+    ) -> None:
+        if suite.dataset != dataset.artifact_ref:
+            raise RunnerConfigurationError("dataset does not match evaluation suite")
+        if suite.execution.execution_mode is not execution_mode:
+            raise RunnerConfigurationError(
+                "execution mode does not match evaluation suite"
+            )
+        if tuple(evaluator.ref for evaluator in evaluators) != suite.evaluator_refs:
+            raise RunnerConfigurationError("evaluators do not match evaluation suite")
+        if any(
+            tuple(sorted(evaluator.metric_names)) != binding.metrics
+            for evaluator, binding in zip(evaluators, suite.evaluators, strict=True)
+        ):
+            raise RunnerConfigurationError(
+                "evaluator metrics do not match evaluation suite"
+            )
+        available_slices = {label for case in dataset.cases for label in case.slices}
+        if not set(suite.slices).issubset(available_slices):
+            raise RunnerConfigurationError(
+                "suite slices are absent from the supplied dataset"
+            )
 
     @staticmethod
     def _target_failure_message(code: FailureCode) -> str:

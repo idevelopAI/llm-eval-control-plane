@@ -20,12 +20,17 @@ from llm_eval_control_plane.domain import (
     CaseResultStatus,
     DatasetVersion,
     EvaluationCase,
+    EvaluationSuiteVersion,
     ExecutionFailure,
     ExecutionMode,
     FailureCode,
+    MetricDirection,
+    MetricGate,
     RunResult,
     RunStatus,
     ScoredObservation,
+    SuiteEvaluator,
+    SuiteExecutionSettings,
     TargetObservation,
     sha256_digest,
 )
@@ -62,6 +67,7 @@ def execute(
     clock: SequenceClock | None = None,
     run_id: str = "test-run",
     execution_mode: ExecutionMode = ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE,
+    suite: EvaluationSuiteVersion | None = None,
 ) -> RunResult:
     selected_target = DeterministicFakeTarget() if target is None else target
     selected_evaluators = (
@@ -82,6 +88,7 @@ def execute(
             target=selected_target,  # type: ignore[arg-type]
             evaluators=selected_evaluators,  # type: ignore[arg-type]
             execution_mode=execution_mode,
+            suite=suite,
         )
     )
 
@@ -105,6 +112,93 @@ def test_runner_executes_sorted_cases_once_and_aggregates_metrics() -> None:
     assert summaries["quality.exact_match"].scored == 2
     assert summaries["performance.latency_ms"].mean == 7.5
     assert result.result_digest.startswith("sha256:")
+    assert result.suite is None
+
+
+def runner_suite(
+    dataset_version: DatasetVersion, *, drift: str | None = None
+) -> EvaluationSuiteVersion:
+    evaluator = build_evaluators((BuiltInEvaluatorKind.EXACT_MATCH,))[0]
+    evaluator_ref = evaluator.ref
+    if drift == "evaluator":
+        evaluator_ref = evaluator_ref.model_copy(
+            update={"digest": sha256_digest({"changed": True})}
+        )
+    return EvaluationSuiteVersion.create(
+        name="runner-suite",
+        revision=1,
+        dataset=(
+            dataset_version.artifact_ref.model_copy(update={"revision": 2})
+            if drift == "dataset"
+            else dataset_version.artifact_ref
+        ),
+        evaluators=(
+            SuiteEvaluator(
+                executor_name="exact_match",
+                artifact=evaluator_ref,
+                metrics=(
+                    (*evaluator.metric_names, "quality.extra")
+                    if drift == "metrics"
+                    else evaluator.metric_names
+                ),
+            ),
+        ),
+        slices=("language/missing",) if drift == "slices" else (),
+        execution=SuiteExecutionSettings(
+            adapter="deterministic_fake",
+            execution_mode=(
+                ExecutionMode.OFFLINE_MOCK
+                if drift == "mode"
+                else ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE
+            ),
+        ),
+        gates=(
+            MetricGate(
+                metric="quality.exact_match",
+                direction=MetricDirection.HIGHER_IS_BETTER,
+                threshold=1.0,
+                allowed_regression=0.0,
+            ),
+        ),
+    )
+
+
+def test_runner_pins_suite_to_complete_evidence() -> None:
+    dataset_version = dataset(case("case-a", "echo", value="answer"))
+    suite = runner_suite(dataset_version)
+    target = DeterministicFakeTarget()
+    result = execute(
+        dataset_version=dataset_version,
+        target=target,
+        evaluators=build_evaluators((BuiltInEvaluatorKind.EXACT_MATCH,)),
+        suite=suite,
+    )
+
+    assert target.invocations == ("case-a",)
+    assert result.suite == suite.artifact_ref
+    assert result.evaluators == suite.evaluator_refs
+    legacy = execute(
+        dataset_version=dataset_version,
+        evaluators=build_evaluators((BuiltInEvaluatorKind.EXACT_MATCH,)),
+    )
+    assert result.cases == legacy.cases
+    assert result.result_digest != legacy.result_digest
+
+
+@mark.parametrize("drift", ["dataset", "evaluator", "metrics", "mode", "slices"])
+def test_runner_rejects_suite_drift_before_target_invocation(drift: str) -> None:
+    dataset_version = dataset(case("case-a", "echo", value="answer"))
+    target = DeterministicFakeTarget()
+
+    with raises(RunnerConfigurationError, match="suite"):
+        execute(
+            dataset_version=dataset_version,
+            target=target,
+            evaluators=build_evaluators((BuiltInEvaluatorKind.EXACT_MATCH,)),
+            suite=runner_suite(dataset_version, drift=drift),
+        )
+
+    assert target.invocations == ()
 
 
 @mark.parametrize("scenario", ["malformed", "missing_usage"])
