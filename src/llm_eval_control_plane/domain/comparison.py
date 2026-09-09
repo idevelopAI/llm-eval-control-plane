@@ -5,7 +5,15 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Literal, Self
 
-from pydantic import Field, FiniteFloat, NonNegativeInt, PositiveInt, model_validator
+from pydantic import (
+    Field,
+    FiniteFloat,
+    NonNegativeInt,
+    PositiveInt,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from llm_eval_control_plane.domain.artifacts import (
     ArtifactKind,
@@ -209,6 +217,7 @@ def calculate_decision_digest(
     gates: tuple[GateResult, ...],
     cases: tuple[GateCaseComparison, ...],
     execution_mode: ExecutionMode = ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE,
+    suite: ArtifactRef | None = None,
 ) -> str:
     """Hash complete stable release evidence, excluding run identifiers."""
     record: dict[str, object] = {
@@ -223,7 +232,11 @@ def calculate_decision_digest(
         "gates": [item.model_dump(mode="json") for item in gates],
         "spec_name": spec_name,
     }
-    if execution_mode is not ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE:
+    if suite is not None:
+        record["decision_schema"] = "release-decision/v3"
+        record["execution_mode"] = execution_mode.value
+        record["suite"] = suite.model_dump(mode="json")
+    elif execution_mode is not ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE:
         record["decision_schema"] = "release-decision/v2"
         record["execution_mode"] = execution_mode.value
     return sha256_digest(record)
@@ -235,6 +248,7 @@ class ReleaseDecision(FrozenModel):
     schema_version: Literal["1"] = "1"
     spec_name: ArtifactName
     execution_mode: ExecutionMode = ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE
+    suite: ArtifactRef | None = None
     dataset: ArtifactRef
     baseline: ArtifactRef
     candidate: ArtifactRef
@@ -248,10 +262,25 @@ class ReleaseDecision(FrozenModel):
     status: ReleaseStatus
     decision_digest: Sha256Digest
 
+    # A return annotation would replace the model's serialization JSON Schema.
+    @model_serializer(mode="wrap")
+    def serialize_decision(  # type: ignore[no-untyped-def]
+        self, handler: SerializerFunctionWrapHandler
+    ):
+        """Keep historical decision documents byte-compatible when unpinned."""
+        record: dict[str, object] = handler(self)
+        if self.suite is None:
+            record.pop("suite", None)
+        return record
+
     @model_validator(mode="after")
     def validate_decision(self) -> Self:
         if self.dataset.kind is not ArtifactKind.DATASET or self.dataset.digest is None:
             raise ValueError("decision dataset must be a resolved dataset")
+        if self.suite is not None and (
+            self.suite.kind is not ArtifactKind.SUITE or self.suite.digest is None
+        ):
+            raise ValueError("decision suite must be a resolved suite artifact")
         if any(
             target.kind is not ArtifactKind.TARGET or target.digest is None
             for target in (self.baseline, self.candidate)
@@ -288,6 +317,7 @@ class ReleaseDecision(FrozenModel):
             gates=self.gates,
             cases=self.cases,
             execution_mode=self.execution_mode,
+            suite=self.suite,
         )
         if self.decision_digest != expected_digest:
             raise ValueError("decision digest does not match canonical evidence")
@@ -309,6 +339,7 @@ class ReleaseDecision(FrozenModel):
         gates: tuple[GateResult, ...],
         cases: tuple[GateCaseComparison, ...],
         execution_mode: ExecutionMode = ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE,
+        suite: ArtifactRef | None = None,
     ) -> ReleaseDecision:
         ordered_aggregates = tuple(
             sorted(aggregates, key=lambda item: (item.metric, item.slice or ""))
@@ -337,10 +368,12 @@ class ReleaseDecision(FrozenModel):
             gates=ordered_gates,
             cases=ordered_cases,
             execution_mode=execution_mode,
+            suite=suite,
         )
         return cls(
             spec_name=spec_name,
             execution_mode=execution_mode,
+            suite=suite,
             dataset=dataset,
             baseline=baseline,
             candidate=candidate,

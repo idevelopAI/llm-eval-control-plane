@@ -5,7 +5,15 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Self
 
-from pydantic import Field, FiniteFloat, NonNegativeInt, PositiveInt, model_validator
+from pydantic import (
+    Field,
+    FiniteFloat,
+    NonNegativeInt,
+    PositiveInt,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from llm_eval_control_plane.domain.artifacts import (
     ArtifactKind,
@@ -223,6 +231,7 @@ def calculate_run_digest(
     cases: tuple[CaseResult, ...],
     metrics: tuple[MetricSummary, ...],
     execution_mode: ExecutionMode = ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE,
+    suite: ArtifactRef | None = None,
 ) -> str:
     """Hash the stable run content projection, excluding the caller's run ID."""
     record: dict[str, JsonValue] = {
@@ -233,7 +242,11 @@ def calculate_run_digest(
         "metrics": [_summary_record(summary) for summary in metrics],
         "target": _artifact_record(target),
     }
-    if execution_mode is not ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE:
+    if suite is not None:
+        record["digest_schema"] = "run-result/v3"
+        record["execution_mode"] = execution_mode.value
+        record["suite"] = _artifact_record(suite)
+    elif execution_mode is not ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE:
         record["digest_schema"] = "run-result/v2"
         record["execution_mode"] = execution_mode.value
     return sha256_digest(record)
@@ -245,6 +258,7 @@ class RunResult(FrozenModel):
     run_id: RunId
     status: RunStatus
     execution_mode: ExecutionMode = ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE
+    suite: ArtifactRef | None = None
     dataset: ArtifactRef
     target: ArtifactRef
     evaluators: Annotated[tuple[ArtifactRef, ...], Field(min_length=1)]
@@ -252,12 +266,27 @@ class RunResult(FrozenModel):
     metrics: Annotated[tuple[MetricSummary, ...], Field(min_length=1)]
     result_digest: Sha256Digest
 
+    # A return annotation would replace the model's serialization JSON Schema.
+    @model_serializer(mode="wrap")
+    def serialize_result(  # type: ignore[no-untyped-def]
+        self, handler: SerializerFunctionWrapHandler
+    ):
+        """Preserve the stored representation of evidence without a suite pin."""
+        record: dict[str, object] = handler(self)
+        if self.suite is None:
+            record.pop("suite", None)
+        return record
+
     @model_validator(mode="after")
     def validate_result(self) -> Self:
         if self.dataset.kind is not ArtifactKind.DATASET or self.dataset.digest is None:
             raise ValueError("run dataset must be a resolved dataset artifact")
         if self.target.kind is not ArtifactKind.TARGET or self.target.digest is None:
             raise ValueError("run target must be a resolved target artifact")
+        if self.suite is not None and (
+            self.suite.kind is not ArtifactKind.SUITE or self.suite.digest is None
+        ):
+            raise ValueError("run suite must be a resolved suite artifact")
         if any(
             evaluator.kind is not ArtifactKind.EVALUATOR or evaluator.digest is None
             for evaluator in self.evaluators
@@ -294,6 +323,7 @@ class RunResult(FrozenModel):
             cases=self.cases,
             metrics=self.metrics,
             execution_mode=self.execution_mode,
+            suite=self.suite,
         )
         if self.result_digest != expected_digest:
             raise ValueError("run result digest does not match canonical content")
@@ -310,6 +340,7 @@ class RunResult(FrozenModel):
         cases: tuple[CaseResult, ...],
         metrics: tuple[MetricSummary, ...],
         execution_mode: ExecutionMode = ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE,
+        suite: ArtifactRef | None = None,
     ) -> RunResult:
         """Create a sorted, content-addressed complete result."""
         ordered_evaluators = tuple(
@@ -331,6 +362,7 @@ class RunResult(FrozenModel):
             run_id=run_id,
             status=status,
             execution_mode=execution_mode,
+            suite=suite,
             dataset=dataset,
             target=target,
             evaluators=ordered_evaluators,
@@ -343,5 +375,6 @@ class RunResult(FrozenModel):
                 cases=ordered_cases,
                 metrics=ordered_metrics,
                 execution_mode=execution_mode,
+                suite=suite,
             ),
         )

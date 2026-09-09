@@ -1,5 +1,5 @@
-from pydantic import ValidationError
-from pytest import raises
+from pydantic import TypeAdapter, ValidationError
+from pytest import mark, raises
 
 from llm_eval_control_plane.domain import (
     ArtifactKind,
@@ -19,6 +19,7 @@ from llm_eval_control_plane.domain import (
     TargetResponse,
     TokenUsage,
 )
+from llm_eval_control_plane.domain.canonical import sha256_digest
 
 
 def ref(kind: ArtifactKind, name: str) -> ArtifactRef:
@@ -26,6 +27,7 @@ def ref(kind: ArtifactKind, name: str) -> ArtifactRef:
         ArtifactKind.DATASET: "d",
         ArtifactKind.TARGET: "a",
         ArtifactKind.EVALUATOR: "e",
+        ArtifactKind.SUITE: "f",
     }[kind]
     return ArtifactRef(
         kind=kind,
@@ -39,6 +41,7 @@ DATASET = ref(ArtifactKind.DATASET, "dataset")
 TARGET = ref(ArtifactKind.TARGET, "target")
 EVALUATOR = ref(ArtifactKind.EVALUATOR, "evaluator")
 SECOND_EVALUATOR = ref(ArtifactKind.EVALUATOR, "second-evaluator")
+SUITE = ref(ArtifactKind.SUITE, "release-suite")
 
 
 def target_observation() -> TargetObservation:
@@ -76,6 +79,23 @@ def summary(*, errors: int = 0, scored: int = 1) -> MetricSummary:
         skipped=0,
         errors=errors,
         mean=1.0 if scored else None,
+    )
+
+
+def run_result(
+    *,
+    suite: ArtifactRef | None = None,
+    execution_mode: ExecutionMode = ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE,
+) -> RunResult:
+    return RunResult.create(
+        run_id="run",
+        dataset=DATASET,
+        target=TARGET,
+        evaluators=(EVALUATOR,),
+        cases=(completed_case(),),
+        metrics=(summary(),),
+        execution_mode=execution_mode,
+        suite=suite,
     )
 
 
@@ -278,3 +298,99 @@ def test_run_result_requires_canonical_top_level_ordering() -> None:
     payload["metrics"] = tuple(reversed(payload["metrics"]))
     with raises(ValidationError, match="summaries must be canonically ordered"):
         RunResult.model_validate(payload)
+
+
+@mark.parametrize(
+    ("execution_mode", "result_digest", "document_digest"),
+    (
+        (
+            ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE,
+            "sha256:6656882276c0f5b4c66df5c71ebeb756a50a2de96d94eab57018f80b29739c68",
+            "sha256:c4f8f0df0c41bae93b8d7d46fef2d176759966dbd194a0abc5e4d1b61a8eb3f3",
+        ),
+        (
+            ExecutionMode.OFFLINE_MOCK,
+            "sha256:7ee875690391f3cac99ee8f3bb641b08571c1f4315507c9cdf32e2fa4249e678",
+            "sha256:8ca93a2544007bc9092f5985c2e76dc1dde5cf9ba676aaec9866fb46b1c8c33a",
+        ),
+        (
+            ExecutionMode.LIVE,
+            "sha256:5ee14bd258d2af1e5af4f0126d7fe4fcdb48c825920a9b70e533abce0c692a2e",
+            "sha256:c311f454157cad11ba5e56134d4e3328bf5e9a7b7011d9da54b079a3fdc8feee",
+        ),
+    ),
+)
+def test_unpinned_runs_preserve_historical_digest_and_document_bytes(
+    execution_mode: ExecutionMode, result_digest: str, document_digest: str
+) -> None:
+    # Golden fingerprints were captured from the pre-suite v1/v2 implementation.
+    run = run_result(execution_mode=execution_mode)
+    payload = run.model_dump(mode="json")
+    assert run.result_digest == result_digest
+    assert sha256_digest(payload) == document_digest
+    assert "suite" not in run.model_dump()
+    assert RunResult.model_validate_json(run.model_dump_json()).suite is None
+    assert "suite" not in TypeAdapter(list[RunResult]).dump_python([run])[0]
+    payload["suite"] = None
+    assert RunResult.model_validate(payload).model_dump(mode="json") == run.model_dump(
+        mode="json"
+    )
+
+
+@mark.parametrize(
+    "changed_suite",
+    (
+        SUITE.model_copy(update={"name": "another-suite"}),
+        SUITE.model_copy(update={"revision": 2}),
+        SUITE.model_copy(update={"digest": "sha256:" + "a" * 64}),
+    ),
+)
+def test_run_digest_pins_complete_suite_identity(changed_suite: ArtifactRef) -> None:
+    pinned = run_result(suite=SUITE)
+    changed = run_result(suite=changed_suite)
+    assert pinned.result_digest != changed.result_digest
+    assert pinned.result_digest != run_result().result_digest
+    assert pinned.model_dump(mode="json")["suite"] == SUITE.model_dump(mode="json")
+    assert RunResult.model_validate_json(pinned.model_dump_json()) == pinned
+
+    payload = pinned.model_dump()
+    payload["suite"] = changed_suite.model_dump()
+    with raises(ValidationError, match="digest does not match"):
+        RunResult.model_validate(payload)
+    payload.pop("suite")
+    with raises(ValidationError, match="digest does not match"):
+        RunResult.model_validate(payload)
+
+
+@mark.parametrize("invalid_suite", (DATASET, SUITE.model_copy(update={"digest": None})))
+def test_run_suite_must_be_a_resolved_suite_artifact(
+    invalid_suite: ArtifactRef,
+) -> None:
+    with raises(ValidationError, match="resolved suite artifact"):
+        run_result(suite=invalid_suite)
+
+
+def test_pinned_run_covers_execution_mode_including_fixture_mode() -> None:
+    runs = [run_result(suite=SUITE, execution_mode=mode) for mode in ExecutionMode]
+    # Pin the v3 projection, including the explicit execution mode for fixtures.
+    assert [run.result_digest for run in runs] == [
+        "sha256:bddae07868089c19cb407d8d6e29e4fa3ac963408c3da95b1d502f152a8d730c",
+        "sha256:4ed253ba71ac022f056d820af3b8092e5cc48df69536d0cbe16ac657fdeaf085",
+        "sha256:bb0644761f1431659e79e6039413b69978208a5a06f19cb002f958b531b22e35",
+    ]
+    for run in runs:
+        payload = run.model_dump()
+        payload["execution_mode"] = (
+            ExecutionMode.LIVE
+            if run.execution_mode is ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE
+            else ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE
+        )
+        with raises(ValidationError, match="digest does not match"):
+            RunResult.model_validate(payload)
+
+
+def test_run_serializer_preserves_descriptive_schema_and_field_selection() -> None:
+    properties = RunResult.model_json_schema(mode="serialization")["properties"]
+    assert {"suite", "run_id", "result_digest"} <= properties.keys()
+    assert run_result().model_dump(include={"run_id", "suite"}) == {"run_id": "run"}
+    assert "suite" not in run_result(suite=SUITE).model_dump(exclude={"suite"})
