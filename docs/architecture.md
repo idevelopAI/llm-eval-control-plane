@@ -222,10 +222,20 @@ suite, the historical v1/v2 digest envelopes and canonical document bytes are
 unchanged. Existing evidence remains explicitly unpinned rather than receiving
 an inferred historical suite.
 
-These are application, worker, and persistence capabilities. Suite HTTP and CLI
-contracts and suite-aware dashboard history are not implemented yet. Existing
-HTTP and CLI submissions remain suite-unpinned. Registering or enqueueing a
-suite does not invoke a target or provider; execution remains worker-owned.
+These capabilities are exposed through project-authorized suite HTTP routes:
+registration, bounded metadata listing, slash-safe revision detail, and separate
+suite run/comparison submissions. The API requires resolved artifact identities
+and derives the digest itself; it accepts only the credential-free deterministic
+execution contract. Existing run/comparison endpoints and CLI commands remain
+suite-unpinned. Registering or enqueueing a suite does not invoke a target or
+provider; execution remains worker-owned.
+
+Run and decision detail projections expose an optional resolved `suite`
+reference, omitted for historical unpinned evidence. The generated dashboard
+client validates this bounded metadata while preserving existing fixture and
+live-review behavior. Suite CLI authoring, dedicated experiment-history queries,
+and suite-history dashboard views are not implemented yet. The
+[suite API guide](evaluation-suites.md) documents the request and privacy boundary.
 
 Target expectations are never passed through the target port. Target and
 evaluator exceptions are converted to bounded failure codes; remaining cases

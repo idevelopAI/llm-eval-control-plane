@@ -65,9 +65,13 @@ suite alias. Run and decision digests bind the exact suite identity, and a
 comparison applies only that suite's policy. Historical suite-unpinned evidence
 keeps its original serialization and digests.
 
-Suite management and submission are application-level capabilities, not API v1,
-CLI, or dashboard features yet. Existing HTTP and CLI submissions remain
-suite-unpinned; they cannot replace the policy on suite-pinned evidence.
+The local API exposes authenticated suite registration, revision lookup, and
+suite-backed run/comparison submission. Run and decision detail responses include
+the resolved `suite` reference when pinned; historical unpinned responses remain
+unchanged. See the [evaluation-suite API guide](docs/evaluation-suites.md) for
+the exact inputs, permissions, replay behavior, and compatibility boundary.
+Suite CLI commands and suite-history dashboard views are not implemented yet.
+Legacy run/comparison endpoints remain unpinned and cannot replace suite policy.
 
 ### Local Compose quickstart
 
