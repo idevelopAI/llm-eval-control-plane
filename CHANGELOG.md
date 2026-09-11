@@ -166,6 +166,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Security
 
+- Pin transitive dashboard dependencies to patched `sharp` 0.35.4 and `js-yaml`
+  4.3.2, addressing GHSA-rgj7-g3m4-5g8c and GHSA-2883-xcg3-v3hh without disabling
+  the vulnerability gate or changing the hosted fixture boundary.
 - Local evaluation artifacts are ignored by Git and target output disclosure is
   opt-in for one explicitly selected case.
 - Default release reports omit case inputs, expectations, target outputs, and
