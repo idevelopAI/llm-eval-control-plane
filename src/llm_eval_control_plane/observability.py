@@ -65,6 +65,10 @@ _HTTP_ROUTES = frozenset(
         "/v1/release-decisions/{decision_id}/distributions",
         "/v1/runs",
         "/v1/runs/{run_id}",
+        "/v1/suite-comparisons",
+        "/v1/suite-revisions/{revision}/{name:path}",
+        "/v1/suite-runs",
+        "/v1/suites",
     }
 )
 _ERROR_CODES = frozenset(
