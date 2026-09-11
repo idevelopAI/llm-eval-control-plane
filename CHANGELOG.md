@@ -24,7 +24,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `release-decision/v3` digests, exact evaluator-contract validation, and
   comparisons that reject mixed suite identities or replacement policies.
   Historical unpinned evidence retains its canonical serialization and v1/v2
-  digest contracts. Suite HTTP, CLI, and dashboard surfaces are not included.
+  digest contracts. Suite HTTP and dashboard surfaces are not included.
+- An offline `llm-eval suite` authoring, validation, execution, and comparison
+  workflow with bounded strict documents, resolved dependency checks, create-only
+  canonical suite files, immutable run retries, and suite provenance in JSON,
+  Markdown, JUnit, and safe run summaries. No server or provider key is required.
 - Deterministic metric gates with direction, threshold, and regression budget.
 - RFC 8785 canonical JSON, strict JSONL datasets, and content-derived dataset
   identities.

@@ -16,9 +16,10 @@ reviewed for that protocol.
 `ArtifactKind.SUITE` was originally reserved without a suite domain contract.
 The frozen contract and its canonical identity now exist, together with an
 application registration service, PostgreSQL record, snapshot-pinned worker
-execution, and digest-bound links from run and release evidence. Suite API and
-CLI surfaces do not yet exist. A suite must be reusable across candidate and
-baseline targets, preserve every semantic choice needed to interpret a run, and
+execution, digest-bound links from run and release evidence, and local offline
+suite CLI commands. Suite API surfaces do not yet exist. A suite must be reusable
+across candidate and baseline targets, preserve every semantic choice needed to
+interpret a run, and
 remain compatible with the existing immutable artifact and canonical-digest
 rules.
 
@@ -181,9 +182,12 @@ field, preserving historical canonical document bytes as well as digests.
 Legacy v1 job payloads likewise omit a suite snapshot; v2 payloads require one.
 Historical evidence remains unpinned and is not assigned an inferred suite.
 
-Suite HTTP and CLI contracts and suite-aware dashboard projections remain
-outside the implemented surface. Existing HTTP and CLI submissions keep their
-unpinned contract and cannot supply replacement policy for suite-pinned runs.
+The offline suite CLI builds and validates canonical protocol files, runs pinned
+evaluations, and compares immutable evidence without network calls or a database.
+It does not register suites remotely. Suite HTTP contracts and suite-aware
+dashboard projections remain outside the implemented surface. Legacy HTTP and
+CLI submissions keep their unpinned contract and cannot supply replacement
+policy for suite-pinned runs.
 
 ### Privacy and hosting boundaries do not expand
 
@@ -217,7 +221,7 @@ artifact remains subject to ADR 0011 and its build and runtime acceptance gates.
 - Suite-backed payloads, application submissions, worker execution, and new
   evidence digest envelopes are implemented without changing legacy evidence
   bytes or exposing canonical suite documents through an HTTP route.
-- Suite API and CLI contracts, history queries, and dashboard projections still
+- Suite API contracts, history queries, and dashboard projections still
   require bounded integration.
 - Initial execution remains deliberately serial and single-invocation. A future
   sampling or concurrency model requires a new reviewed semantic contract.

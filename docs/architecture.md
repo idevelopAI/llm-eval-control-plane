@@ -222,10 +222,14 @@ suite, the historical v1/v2 digest envelopes and canonical document bytes are
 unchanged. Existing evidence remains explicitly unpinned rather than receiving
 an inferred historical suite.
 
-These are application, worker, and persistence capabilities. Suite HTTP and CLI
-contracts and suite-aware dashboard history are not implemented yet. Existing
-HTTP and CLI submissions remain suite-unpinned. Registering or enqueueing a
-suite does not invoke a target or provider; execution remains worker-owned.
+The local `llm-eval suite` composition root also builds and validates canonical
+suite files, executes pinned offline runs, and compares their immutable evidence.
+It constructs only deterministic local adapters and uses the existing filesystem
+run store; it does not connect to the API or register records in PostgreSQL.
+Suite HTTP contracts and suite-aware dashboard history are not implemented yet.
+Legacy HTTP and CLI submissions remain suite-unpinned. Registering or enqueueing
+a durable suite job does not invoke a target or provider; queued execution
+remains worker-owned. See the [offline suite workflow](suite-cli.md).
 
 Target expectations are never passed through the target port. Target and
 evaluator exceptions are converted to bounded failure codes; remaining cases

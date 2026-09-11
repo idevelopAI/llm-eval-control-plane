@@ -65,9 +65,12 @@ suite alias. Run and decision digests bind the exact suite identity, and a
 comparison applies only that suite's policy. Historical suite-unpinned evidence
 keeps its original serialization and digests.
 
-Suite management and submission are application-level capabilities, not API v1,
-CLI, or dashboard features yet. Existing HTTP and CLI submissions remain
-suite-unpinned; they cannot replace the policy on suite-pinned evidence.
+The [offline suite CLI](docs/suite-cli.md) builds and validates a resolved
+protocol, runs baseline and candidate targets, and compares their pinned
+evidence without Docker, hosting, or provider API calls. Suite-backed HTTP
+submission and suite-history dashboard views are not implemented yet. Legacy
+run/comparison endpoints and CLI commands remain unpinned and cannot replace
+the policy on suite-pinned evidence.
 
 ### Local Compose quickstart
 
