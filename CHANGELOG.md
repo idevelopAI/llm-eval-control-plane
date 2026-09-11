@@ -17,6 +17,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - A create-once evaluation-suite registry with exact dataset and executor
   validation, canonical PostgreSQL records, integrity-checked detail reads, and
   bounded keyset-paged metadata projections.
+- Application-level suite-backed run and comparison submissions with semantic
+  idempotency, full immutable snapshots in `run-job/v2` and
+  `comparison-job/v2`, and worker execution independent of suite-registry lookup.
+- Suite-pinned run and release evidence using `run-result/v3` and
+  `release-decision/v3` digests, exact evaluator-contract validation, and
+  comparisons that reject mixed suite identities or replacement policies.
+  Historical unpinned evidence retains its canonical serialization and v1/v2
+  digest contracts. Suite HTTP, CLI, and dashboard surfaces are not included.
 - Deterministic metric gates with direction, threshold, and regression budget.
 - RFC 8785 canonical JSON, strict JSONL datasets, and content-derived dataset
   identities.
@@ -158,6 +166,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Security
 
+- Pin transitive dashboard dependencies to patched `sharp` 0.35.4 and `js-yaml`
+  4.3.2, addressing GHSA-rgj7-g3m4-5g8c and GHSA-2883-xcg3-v3hh without disabling
+  the vulnerability gate or changing the hosted fixture boundary.
 - Local evaluation artifacts are ignored by Git and target output disclosure is
   opt-in for one explicitly selected case.
 - Default release reports omit case inputs, expectations, target outputs, and

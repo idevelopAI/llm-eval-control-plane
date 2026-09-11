@@ -1,10 +1,11 @@
 import asyncio
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 from itertools import count
 from typing import cast
 
-from pytest import MonkeyPatch, raises
+from pytest import MonkeyPatch, mark, raises
 
 from llm_eval_control_plane.api.execution import DeterministicEvaluationExecutor
 from llm_eval_control_plane.application.control_plane import (
@@ -23,6 +24,8 @@ from llm_eval_control_plane.application.control_plane import (
     StoreInvalidCursorError,
     StoreNotFoundError,
     StoreTransitionError,
+    SuiteComparisonSubmission,
+    SuiteRunSubmission,
     validate_comparison_inputs,
     validate_execution_contract,
     validate_run_result,
@@ -69,7 +72,7 @@ from llm_eval_control_plane.domain.execution import (
     FailureCode,
     FailureStage,
 )
-from llm_eval_control_plane.domain.results import ExecutionMode, RunResult
+from llm_eval_control_plane.domain.results import CaseResult, ExecutionMode, RunResult
 
 NOW = datetime(2026, 8, 23, 12, tzinfo=UTC)
 TRACEPARENT_A = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
@@ -650,6 +653,339 @@ def test_suite_repository_errors_are_translated_without_content_leaks() -> None:
     with raises(InvalidCursorError) as invalid_cursor:
         service.list_suites(limit=1, cursor="private-cursor")
     assert "private-cursor" not in str(invalid_cursor.value)
+
+
+def _suite_run_submission(key: str = "suite-run") -> SuiteRunSubmission:
+    return SuiteRunSubmission(
+        idempotency_key=key,
+        suite_name="release/core",
+        suite_revision=1,
+        target_name="fake/candidate",
+        target_revision=2,
+        scenario_overrides={"case-001": "uppercase"},
+    )
+
+
+def test_suite_run_submission_pins_snapshot_and_replays_without_dependencies() -> None:
+    repository = MemoryRepository()
+    service = _service(repository)
+    dataset = _dataset()
+    service.register_dataset(dataset)
+    suite = _suite(dataset)
+    service.register_suite(suite)
+    submission = _suite_run_submission()
+
+    first = asyncio.run(service.submit_suite_run(submission))
+    payload = repository.payloads[first.job.job_id]
+    assert first.created
+    assert isinstance(payload, RunJobPayload)
+    assert payload.schema_version == "run-job/v2"
+    assert payload.suite == suite
+    assert payload.dataset == suite.dataset
+    assert payload.execution_contract.evaluators == suite.evaluator_refs
+    assert payload.scenario_overrides[0].scenario == "uppercase"
+    assert first.job.request_digest == sha256_digest(submission.digest_record())
+    assert repository.runs == {}
+
+    repository.suites.clear()
+    repository.datasets.clear()
+    rejecting = RejectingSuiteValidationExecutor()
+    restarted = _service(repository, executor=rejecting)
+    replay = asyncio.run(
+        restarted.submit_suite_run(replace(submission, traceparent=TRACEPARENT_B))
+    )
+    assert not replay.created
+    assert replay.job == first.job
+    assert rejecting.validate_suite_calls == 0
+    with raises(IdempotencyConflictError):
+        asyncio.run(restarted.submit_suite_run(replace(submission, suite_revision=2)))
+
+
+def test_suite_run_preflight_rejects_missing_input_and_drift_before_enqueue() -> None:
+    repository = MemoryRepository()
+    service = _service(repository)
+    with raises(ResourceNotFoundError) as missing:
+        asyncio.run(service.submit_suite_run(_suite_run_submission()))
+    assert "private" not in str(missing.value)
+
+    dataset = _dataset()
+    service.register_dataset(dataset)
+    service.register_suite(_suite(dataset))
+    for drift in ("execution", "evaluator", "metrics"):
+        drifting = _service(repository, executor=DriftingSuiteValidationExecutor(drift))
+        with raises(InvalidSubmissionError) as invalid:
+            asyncio.run(drifting.submit_suite_run(_suite_run_submission()))
+        assert "private" not in str(invalid.value)
+        assert repository.jobs == {}
+
+    for store_error, public_error in (
+        (StoreIdempotencyConflictError, IdempotencyConflictError),
+        (StoreConflictError, ResourceConflictError),
+    ):
+        repository.begin_error = store_error("private details")
+        with raises(public_error) as conflict:
+            asyncio.run(service.submit_suite_run(_suite_run_submission()))
+        assert "private" not in str(conflict.value)
+
+
+def _seed_suite_runs(
+    repository: MemoryRepository,
+) -> tuple[EvaluationSuiteVersion, RunResult, RunResult]:
+    service = _service(repository)
+    dataset = _dataset()
+    service.register_dataset(dataset)
+    suite = _suite(dataset)
+    service.register_suite(suite)
+    results = []
+    for label in ("baseline", "candidate"):
+        result = asyncio.run(
+            DeterministicEvaluationExecutor().execute_suite(
+                run_id=f"suite-{label}",
+                dataset=dataset,
+                target_name=f"fake/{label}",
+                target_revision=1,
+                scenario_overrides={},
+                suite=suite,
+            )
+        )
+        repository.runs[result.run_id] = RunRecord(result=result, created_at=NOW)
+        results.append(result)
+    return suite, results[0], results[1]
+
+
+def test_suite_comparison_pins_policy_and_replays_after_dependency_removal() -> None:
+    repository = MemoryRepository()
+    suite, baseline, candidate = _seed_suite_runs(repository)
+    service = _service(repository)
+    submission = SuiteComparisonSubmission(
+        idempotency_key="suite-comparison",
+        suite_name=suite.name,
+        suite_revision=suite.revision,
+        baseline_run_id=baseline.run_id,
+        candidate_run_id=candidate.run_id,
+        traceparent=TRACEPARENT_A,
+    )
+    first = asyncio.run(service.submit_suite_comparison(submission))
+    payload = repository.payloads[first.job.job_id]
+    assert first.created
+    assert isinstance(payload, ComparisonJobPayload)
+    assert payload.schema_version == "comparison-job/v2"
+    assert payload.suite == suite
+    assert payload.spec.gates == suite.gates
+    assert payload.baseline_result_digest == baseline.result_digest
+    assert payload.candidate_result_digest == candidate.result_digest
+    assert first.job.request_digest == sha256_digest(submission.digest_record())
+
+    repository.suites.clear()
+    repository.datasets.clear()
+    repository.runs.clear()
+    replay = asyncio.run(
+        service.submit_suite_comparison(replace(submission, traceparent=TRACEPARENT_B))
+    )
+    assert not replay.created
+    assert replay.job == first.job
+    with raises(IdempotencyConflictError):
+        asyncio.run(
+            service.submit_suite_comparison(
+                replace(submission, candidate_run_id="other")
+            )
+        )
+    with raises(ResourceNotFoundError):
+        asyncio.run(
+            service.submit_suite_comparison(replace(submission, idempotency_key="new"))
+        )
+
+
+def test_suite_comparison_rejects_legacy_policy_override_and_mixed_evidence() -> None:
+    repository = MemoryRepository()
+    suite, baseline, candidate = _seed_suite_runs(repository)
+    service = _service(repository)
+    spec = suite.to_evaluation_spec(
+        baseline=baseline.target, candidate=candidate.target
+    )
+    with raises(InvalidSubmissionError):
+        asyncio.run(
+            service.submit_comparison(
+                ComparisonSubmission(
+                    idempotency_key="legacy-policy",
+                    dataset_name=suite.dataset.name,
+                    dataset_revision=suite.dataset.revision,
+                    baseline_run_id=baseline.run_id,
+                    candidate_run_id=candidate.run_id,
+                    spec=spec,
+                )
+            )
+        )
+
+    repository.runs[candidate.run_id] = RunRecord(
+        result=asyncio.run(
+            _result(
+                run_id=candidate.run_id,
+                dataset=_dataset(),
+                target_name=candidate.target.name,
+                target_revision=candidate.target.revision,
+            )
+        ),
+        created_at=NOW,
+    )
+    with raises(InvalidSubmissionError):
+        asyncio.run(
+            service.submit_suite_comparison(
+                SuiteComparisonSubmission(
+                    idempotency_key="mixed",
+                    suite_name=suite.name,
+                    suite_revision=suite.revision,
+                    baseline_run_id=baseline.run_id,
+                    candidate_run_id=candidate.run_id,
+                )
+            )
+        )
+    assert repository.jobs == {}
+
+
+def test_suite_submission_trace_context_is_strict_and_excluded_from_semantics() -> None:
+    run = _suite_run_submission()
+    comparison = SuiteComparisonSubmission(
+        idempotency_key="compare",
+        suite_name="release/core",
+        suite_revision=1,
+        baseline_run_id="baseline",
+        candidate_run_id="candidate",
+    )
+    for submission in (run, comparison):
+        with raises(ValueError):
+            replace(submission, traceparent="private-invalid-trace")
+        traced = replace(submission, traceparent=TRACEPARENT_A)
+        assert traced.digest_record() == submission.digest_record()
+        assert TRACEPARENT_A not in repr(traced)
+
+
+def _suite_run_contract(
+    suite: EvaluationSuiteVersion, result: RunResult
+) -> ExecutionContract:
+    return ExecutionContract(
+        adapter=suite.execution.adapter,
+        evaluator_names=suite.evaluator_names,
+        target=result.target,
+        evaluators=suite.evaluator_refs,
+        execution_mode=suite.execution.execution_mode,
+    )
+
+
+@mark.parametrize("drift", ["adapter", "evaluator_names"])
+def test_suite_run_preflight_rejects_contract_selector_drift(drift: str) -> None:
+    repository = MemoryRepository()
+    suite, _, result = _seed_suite_runs(repository)
+    contract = _suite_run_contract(suite, result)
+    changed_contract = ExecutionContract.model_validate(
+        {
+            **contract.model_dump(mode="python"),
+            drift: "other_adapter" if drift == "adapter" else ("other_evaluator",),
+        }
+    )
+
+    with raises(ValueError, match="run behavior does not match pinned suite"):
+        validate_run_result(
+            result,
+            resource_id=result.run_id,
+            dataset=repository.get_dataset(suite.dataset.name, suite.dataset.revision),
+            contract=changed_contract,
+            suite=suite,
+        )
+
+
+@mark.parametrize("drift", ["renamed_metric", "duplicate_metric"])
+def test_suite_run_preflight_rejects_changed_metric_inventory(drift: str) -> None:
+    repository = MemoryRepository()
+    suite, _, result = _seed_suite_runs(repository)
+    metric = result.metrics[0]
+    changed_metrics = (
+        (metric.model_copy(update={"metric": "quality.undeclared"}),)
+        if drift == "renamed_metric"
+        else (metric, metric)
+    )
+    changed = RunResult.create(
+        run_id=result.run_id,
+        dataset=result.dataset,
+        target=result.target,
+        evaluators=result.evaluators,
+        cases=result.cases,
+        metrics=changed_metrics,
+        execution_mode=result.execution_mode,
+        suite=suite.artifact_ref,
+    )
+    assert changed.result_digest != result.result_digest
+
+    with raises(ValueError, match="metric inventory does not match pinned suite"):
+        validate_run_result(
+            changed,
+            resource_id=result.run_id,
+            dataset=repository.get_dataset(suite.dataset.name, suite.dataset.revision),
+            contract=_suite_run_contract(suite, result),
+            suite=suite,
+        )
+
+
+def test_suite_run_preflight_rejects_undeclared_observation_metric() -> None:
+    repository = MemoryRepository()
+    suite, _, result = _seed_suite_runs(repository)
+    case = result.cases[0]
+    extra_observation = case.observations[0].model_copy(
+        update={"metric": "quality.undeclared"}
+    )
+    changed_case = CaseResult.model_validate(
+        {
+            **case.model_dump(mode="python"),
+            "observations": (*case.observations, extra_observation),
+        }
+    )
+    changed = RunResult.create(
+        run_id=result.run_id,
+        dataset=result.dataset,
+        target=result.target,
+        evaluators=result.evaluators,
+        cases=(changed_case, *result.cases[1:]),
+        metrics=result.metrics,
+        execution_mode=result.execution_mode,
+        suite=suite.artifact_ref,
+    )
+    assert changed.result_digest != result.result_digest
+
+    with raises(ValueError, match="run observation is outside pinned suite"):
+        validate_run_result(
+            changed,
+            resource_id=result.run_id,
+            dataset=repository.get_dataset(suite.dataset.name, suite.dataset.revision),
+            contract=_suite_run_contract(suite, result),
+            suite=suite,
+        )
+
+
+def test_suite_comparison_preflight_rejects_replacement_gate_policy() -> None:
+    repository = MemoryRepository()
+    suite, baseline, candidate = _seed_suite_runs(repository)
+    spec = suite.to_evaluation_spec(
+        baseline=baseline.target, candidate=candidate.target
+    )
+    changed_spec = EvaluationSpec.model_validate(
+        {
+            **spec.model_dump(mode="python"),
+            "gates": (spec.gates[0].model_copy(update={"threshold": 0.5}),),
+        }
+    )
+
+    with raises(ValueError, match="comparison policy does not match the pinned suite"):
+        validate_comparison_inputs(
+            dataset_name=suite.dataset.name,
+            dataset_revision=suite.dataset.revision,
+            baseline_run_id=baseline.run_id,
+            candidate_run_id=candidate.run_id,
+            spec=changed_spec,
+            dataset=repository.get_dataset(suite.dataset.name, suite.dataset.revision),
+            baseline=repository.get_run(baseline.run_id),
+            candidate=repository.get_run(candidate.run_id),
+            suite=suite,
+        )
 
 
 def test_run_submission_enqueues_pinned_payload_without_execution() -> None:

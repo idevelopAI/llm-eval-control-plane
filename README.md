@@ -13,10 +13,10 @@ baseline and candidate runs, enforce release policy across critical slices, and
 trace every decision to bounded evidence.
 
 > **Current scope:** Deterministic release evidence, baseline comparison, policy
-> gates, a create-once versioned evaluation-suite registry, durable workers,
-> project authorization, privacy-safe observability, fenced PostgreSQL recovery,
-> and the DataBridge evaluation. The hosted example is a synthetic, request-free
-> build with no API or model calls.
+> gates, immutable evaluation suites with snapshot-pinned execution and evidence,
+> durable workers, project authorization, privacy-safe observability, fenced
+> PostgreSQL recovery, and the DataBridge evaluation. The hosted example is a
+> synthetic, request-free build with no API or model calls.
 
 ## Release evidence dashboard
 
@@ -58,10 +58,16 @@ requests, and stores release decisions. API v1 uses only the credential-free
 deterministic executor: its latency and usage evidence are simulated and must
 not be presented as live-model measurements.
 
-The application core also validates and persists immutable evaluation-suite
-revisions against exact dataset and evaluator identities. Suite management is
-not exposed through API v1 yet, and existing run and release evidence remains
-explicitly suite-unpinned until the suite-backed execution contract is added.
+The application core also registers immutable evaluation suites and submits
+suite-backed runs and comparisons. Each job pins the complete suite snapshot;
+workers verify the executor contract and use that snapshot without reloading a
+suite alias. Run and decision digests bind the exact suite identity, and a
+comparison applies only that suite's policy. Historical suite-unpinned evidence
+keeps its original serialization and digests.
+
+Suite management and submission are application-level capabilities, not API v1,
+CLI, or dashboard features yet. Existing HTTP and CLI submissions remain
+suite-unpinned; they cannot replace the policy on suite-pinned evidence.
 
 ### Local Compose quickstart
 

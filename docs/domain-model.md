@@ -100,9 +100,13 @@ behavior revisions inside a run.
   indexes against the canonical document; list reads return only the bounded
   indexed projection and support stable keyset pagination with an exact-name
   filter.
-- Suite-backed workers will consume the exact resolved suite snapshot pinned at
-  submission. Comparisons will reject different suite revisions or digests
-  rather than treating them as a failed release.
+- Suite-backed submissions pin the complete resolved suite snapshot in a
+  `run-job/v2` or `comparison-job/v2` payload. Workers use that snapshot without
+  looking up a suite alias and reject executor-contract drift before invocation.
+- Suite-backed comparisons require both runs to carry the same complete suite
+  reference and use exactly the policy compiled from its snapshot. Different
+  names, revisions, or digests, mixed pinned/unpinned evidence, and replacement
+  policies are configuration errors rather than failed release gates.
 - Experiment history is derived from immutable suite-pinned runs and the
   release decisions that connect exact baseline and candidate evidence. No
   separate experiment definition, table, mutable status, or current-result
@@ -110,11 +114,11 @@ behavior revisions inside a run.
 
 These contracts are accepted in
 [ADR 0012](adr/0012-versioned-evaluation-suites.md). The frozen suite models,
-canonical normalization, digest calculation, application registration service,
-and PostgreSQL persistence are implemented. Suite API and CLI surfaces,
-suite-backed execution and worker payload pinning, derived experiment history,
-and run/decision digest integration are not implemented yet. Existing evidence
-is legacy suite-unpinned evidence and is not assigned an inferred suite.
+canonical normalization, application registration and submission services,
+PostgreSQL persistence, worker snapshot execution, and run/decision digest
+integration are implemented. Suite API and CLI surfaces, derived experiment
+history queries, and dashboard integration are not implemented yet. Historical
+evidence remains suite-unpinned and is not assigned an inferred suite.
 
 ## Execution invariants
 
@@ -151,8 +155,12 @@ is legacy suite-unpinned evidence and is not assigned an inferred suite.
 - `completed_with_failures` represents technical target/evaluator failures, not
   low metric values. Release policy is applied later by comparison.
 - The result digest covers resolved artifacts, target evidence, observations,
-  failures, aggregates, and non-legacy execution mode. It excludes only the
-  caller-selected run ID.
+  failures, and aggregates. Suite-pinned results use `run-result/v3`, which also
+  covers the complete suite reference and explicit execution mode. Unpinned
+  results retain `run-result/v1` for deterministic fixtures and `run-result/v2`
+  for other execution modes. The caller-selected run ID is not hashed.
+- An absent suite reference is omitted from serialized evidence, preserving
+  historical canonical document bytes as well as their digest contracts.
 - Loading a stored result recalculates and verifies its result digest.
 
 ## DataBridge SQL invariants
@@ -217,6 +225,10 @@ is legacy suite-unpinned evidence and is not assigned an inferred suite.
   job and payload without another enqueue. Reusing the same kind and key with a
   different semantic digest is a conflict. The insert winner's validated trace
   context remains authoritative on an exact replay.
+- Suite submissions use distinct semantic request envelopes, select an exact
+  registered name and revision, and resolve dependencies only for a new job.
+  Suite-backed v2 payloads require a full suite snapshot; legacy v1 payloads
+  omit it and preserve their original canonical bytes and payload digests.
 - Dataset lookup, adapter and evaluator validation, comparison alignment, and
   derived-work bounds are checked before a new job is claimed whenever they can
   be resolved without execution.
@@ -387,8 +399,10 @@ Before gate evaluation, the comparator requires:
 - candidate and baseline runs to use the exact supplied dataset artifact;
 - policy target names/revisions and optional digests to match resolved runs;
 - identical ordered case IDs, metric sets, evaluator revisions, and digests;
-- stored global metric summaries to equal aggregates recomputed from cases.
-- candidate and baseline runs to use the same execution mode.
+- stored global metric summaries to equal aggregates recomputed from cases;
+- candidate and baseline runs to use the same execution mode; and
+- both runs to be unpinned, or to match the complete supplied suite reference,
+  its evaluator metric inventories, and its exact compiled policy.
 
 A gate's coverage check requires both sides to have zero errors, at least one
 scored case, equal scored counts, and equal skipped counts. Coverage, threshold,
@@ -400,9 +414,13 @@ target/evaluator failures are incomparable and force the relevant coverage gate
 to fail.
 
 The release decision is failed if any gate fails. Its digest includes resolved
-dataset/target/evaluator identities, both result digests, execution mode, every
-aggregate, gate result, and gate-scoped case transition. Run IDs are excluded so
-equivalent evidence has the same decision identity.
+dataset/target/evaluator identities, both result digests, every aggregate, gate
+result, and gate-scoped case transition. Suite-pinned decisions use
+`release-decision/v3`, which also covers the complete suite reference and explicit
+execution mode. Unpinned decisions retain `release-decision/v1` for deterministic
+fixtures and `release-decision/v2` for other modes. An absent suite is omitted
+from serialization. Run IDs are excluded so equivalent evidence has the same
+decision identity.
 
 `EvaluationSpec.schema_version` is currently the literal value `"1"`. Breaking
 changes require a new schema version and migration path; optional fields may

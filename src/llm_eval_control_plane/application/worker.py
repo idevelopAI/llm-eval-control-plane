@@ -271,21 +271,32 @@ class WorkerService:
                 payload=payload,
                 scenario_overrides=scenario_overrides,
             )
-            result = await self._executor.execute(
-                run_id=claim.job.resource_id,
-                dataset=dataset.dataset,
-                target_name=payload.target_name,
-                target_revision=payload.target_revision,
-                adapter=payload.adapter,
-                evaluator_names=payload.evaluator_names,
-                scenario_overrides=scenario_overrides,
-            )
+            if payload.suite is None:
+                result = await self._executor.execute(
+                    run_id=claim.job.resource_id,
+                    dataset=dataset.dataset,
+                    target_name=payload.target_name,
+                    target_revision=payload.target_revision,
+                    adapter=payload.adapter,
+                    evaluator_names=payload.evaluator_names,
+                    scenario_overrides=scenario_overrides,
+                )
+            else:
+                result = await self._executor.execute_suite(
+                    run_id=claim.job.resource_id,
+                    dataset=dataset.dataset,
+                    target_name=payload.target_name,
+                    target_revision=payload.target_revision,
+                    scenario_overrides=scenario_overrides,
+                    suite=payload.suite,
+                )
             await asyncio.to_thread(
                 validate_run_result,
                 result,
                 resource_id=claim.job.resource_id,
                 dataset=dataset,
                 contract=contract,
+                suite=payload.suite,
             )
             return RunRecord(result=result, created_at=self._now())
 
@@ -505,6 +516,16 @@ def _resolve_run_contract(
     )
     if contract != payload.execution_contract:
         raise ValueError("executor contract changed after submission")
+    if payload.suite is not None:
+        suite_contract = executor.validate_suite(
+            adapter=payload.adapter,
+            evaluator_names=payload.evaluator_names,
+        )
+        if (
+            suite_contract.execution != payload.suite.execution
+            or suite_contract.evaluators != payload.suite.evaluators
+        ):
+            raise ValueError("executor suite contract changed after submission")
     return contract
 
 
@@ -534,12 +555,14 @@ def _compare_job(
         dataset=dataset,
         baseline=baseline,
         candidate=candidate,
+        suite=payload.suite,
     )
     return compare_runs(
         spec=payload.spec,
         dataset=dataset.dataset,
         baseline=baseline.result,
         candidate=candidate.result,
+        suite=payload.suite,
     )
 
 
