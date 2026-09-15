@@ -628,6 +628,106 @@ def test_suite_execution_snapshots_survive_postgres_worker_restart(
         restarted_engine.dispose()
 
 
+def test_suite_http_api_persists_authenticated_worker_lifecycle(
+    postgres_engine: Engine,
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv(
+        "CONTROL_PLANE_DATABASE_URL",
+        postgres_engine.url.render_as_string(hide_password=False),
+    )
+    auth_file, auth_headers = _runtime_authentication(tmp_path)
+    monkeypatch.setenv("CONTROL_PLANE_AUTH_FILE", str(auth_file))
+    dataset = DatasetCreateRequest.model_validate(_dataset_body()).to_domain()
+    suite = _suite(dataset)
+    suite_body = suite.model_dump(mode="json", exclude={"schema_version", "digest"})
+    submissions = [
+        {
+            "suite_name": suite.name,
+            "suite_revision": suite.revision,
+            "target_name": f"fake/http-suite-{role}",
+            "scenario_overrides": {"postgres-echo-001": "uppercase"}
+            if role == "candidate"
+            else {},
+        }
+        for role in ("baseline", "candidate")
+    ]
+    queued: list[dict[str, Any]] = []
+    with TestClient(runtime.create_runtime_app(), headers=auth_headers) as client:
+        assert client.post("/v1/datasets", json=_dataset_body()).status_code == 201
+        registered = client.post("/v1/suites", json=suite_body)
+        assert registered.status_code == 201
+        assert registered.json()["digest"] == suite.digest
+        for index, submission in enumerate(submissions):
+            response = client.post(
+                "/v1/suite-runs",
+                json=submission,
+                headers={"Idempotency-Key": _key(f"http-suite-run-{index}")},
+            )
+            assert response.status_code == 202
+            queued.append(_json_document(response)["job"])
+
+    # Both the HTTP app and worker are recreated around the durable queue.
+    worker = WorkerService(
+        repository=_repository(postgres_engine),
+        executor=DeterministicEvaluationExecutor(),
+        worker_id="phase10-http-suite-worker",
+        lease_token_factory=lambda: _token("http-suite"),
+    )
+    for _ in submissions:
+        assert (asyncio.run(worker.run_once())).status is WorkerResultStatus.SUCCEEDED
+    comparison = {
+        "suite_name": suite.name,
+        "suite_revision": suite.revision,
+        "baseline_run_id": queued[0]["resource_id"],
+        "candidate_run_id": queued[1]["resource_id"],
+    }
+    comparison_headers = {"Idempotency-Key": _key("http-suite-comparison")}
+    with TestClient(runtime.create_runtime_app(), headers=auth_headers) as client:
+        detail = client.get(f"/v1/suite-revisions/1/{suite.name}")
+        assert detail.json()["digest"] == suite.digest
+        page = client.get("/v1/suites", params={"name": suite.name, "limit": 1})
+        assert page.json()["items"][0]["digest"] == suite.digest
+        for index, submission in enumerate(submissions):
+            replay = client.post(
+                "/v1/suite-runs",
+                json=submission,
+                headers={"Idempotency-Key": _key(f"http-suite-run-{index}")},
+            )
+            assert replay.status_code == 200
+            assert replay.json()["run"]["suite"] == suite.artifact_ref.model_dump(
+                mode="json"
+            )
+            assert "private-phase5-postgres-sentinel" not in replay.text
+        submitted = client.post(
+            "/v1/suite-comparisons",
+            json=comparison,
+            headers=comparison_headers,
+        )
+        assert submitted.status_code == 202
+        comparison_job = _json_document(submitted)["job"]
+
+    assert (asyncio.run(worker.run_once())).status is WorkerResultStatus.SUCCEEDED
+    with TestClient(runtime.create_runtime_app(), headers=auth_headers) as client:
+        replay = client.post(
+            "/v1/suite-comparisons",
+            json=comparison,
+            headers=comparison_headers,
+        )
+        assert replay.status_code == 200
+        document = _json_document(replay)
+        assert document["job"]["job_id"] == comparison_job["job_id"]
+        assert document["decision"]["status"] == "failed"
+        assert document["decision"]["suite"] == suite.artifact_ref.model_dump(
+            mode="json"
+        )
+        detail = client.get(f"/v1/release-decisions/{comparison_job['resource_id']}")
+        assert detail.json() == document["decision"]
+        assert "private-phase5-postgres-sentinel" not in detail.text
+        assert "schema_version" in detail.json()
+
+
 def test_api_enqueue_survives_restart_and_terminal_replay_is_redacted(
     postgres_engine: Engine,
     monkeypatch: MonkeyPatch,

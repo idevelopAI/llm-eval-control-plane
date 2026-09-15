@@ -116,8 +116,9 @@ These contracts are accepted in
 [ADR 0012](adr/0012-versioned-evaluation-suites.md). The frozen suite models,
 canonical normalization, application registration and submission services,
 PostgreSQL persistence, worker snapshot execution, and run/decision digest
-integration are implemented. Suite API and CLI surfaces, derived experiment
-history queries, and dashboard integration are not implemented yet. Historical
+integration and authenticated suite HTTP surfaces are implemented. Suite CLI
+commands, derived experiment-history queries, and dashboard views are not
+implemented yet. Historical
 evidence remains suite-unpinned and is not assigned an inferred suite.
 
 ## Execution invariants
@@ -161,6 +162,9 @@ evidence remains suite-unpinned and is not assigned an inferred suite.
   for other execution modes. The caller-selected run ID is not hashed.
 - An absent suite reference is omitted from serialized evidence, preserving
   historical canonical document bytes as well as their digest contracts.
+- HTTP run and decision detail projections include only the resolved suite
+  artifact reference when present. Unpinned response documents omit it;
+  collection projections remain unchanged.
 - Loading a stored result recalculates and verifies its result digest.
 
 ## DataBridge SQL invariants

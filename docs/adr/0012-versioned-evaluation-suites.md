@@ -16,9 +16,10 @@ reviewed for that protocol.
 `ArtifactKind.SUITE` was originally reserved without a suite domain contract.
 The frozen contract and its canonical identity now exist, together with an
 application registration service, PostgreSQL record, snapshot-pinned worker
-execution, and digest-bound links from run and release evidence. Suite API and
-CLI surfaces do not yet exist. A suite must be reusable across candidate and
-baseline targets, preserve every semantic choice needed to interpret a run, and
+execution, digest-bound links from run and release evidence, and authenticated
+suite HTTP surfaces. Suite CLI commands do not yet exist. A suite must be reusable
+across candidate and baseline targets, preserve every semantic choice needed to
+interpret a run, and
 remain compatible with the existing immutable artifact and canonical-digest
 rules.
 
@@ -181,14 +182,19 @@ field, preserving historical canonical document bytes as well as digests.
 Legacy v1 job payloads likewise omit a suite snapshot; v2 payloads require one.
 Historical evidence remains unpinned and is not assigned an inferred suite.
 
-Suite HTTP and CLI contracts and suite-aware dashboard projections remain
-outside the implemented surface. Existing HTTP and CLI submissions keep their
-unpinned contract and cannot supply replacement policy for suite-pinned runs.
+Suite HTTP registration, bounded metadata collection, revision detail, and
+asynchronous run/comparison routes are implemented under the existing project
+authorization boundary. Run and decision detail projections expose the resolved
+suite reference only when present; legacy unpinned responses omit it. The new
+submission routes require an exact suite name/revision and prohibit replacement
+dataset, evaluator, execution, or gate settings. Existing legacy submission
+endpoints and CLI commands keep their unpinned contract. Dedicated suite CLI
+commands and suite-history dashboard views remain outside the implemented surface.
 
 ### Privacy and hosting boundaries do not expand
 
-Canonical suite documents are sensitive control-plane inputs. Future public API
-responses must remain explicit redacted projections and must not return dataset
+Canonical suite documents are sensitive control-plane inputs. Suite API
+responses use explicit metadata projections and do not return dataset
 cases, expectations, prompts, target configuration, scenario mappings, outputs,
 SQL, rows, credentials, secret references, raw canonical documents, or
 operational coordination data. Suite names, digests, evaluator identities,
@@ -217,8 +223,9 @@ artifact remains subject to ADR 0011 and its build and runtime acceptance gates.
 - Suite-backed payloads, application submissions, worker execution, and new
   evidence digest envelopes are implemented without changing legacy evidence
   bytes or exposing canonical suite documents through an HTTP route.
-- Suite API and CLI contracts, history queries, and dashboard projections still
-  require bounded integration.
+- Suite HTTP contracts and optional detail-response provenance are implemented.
+  CLI commands, history queries, and suite-history dashboard views still require
+  bounded integration.
 - Initial execution remains deliberately serial and single-invocation. A future
   sampling or concurrency model requires a new reviewed semantic contract.
 
