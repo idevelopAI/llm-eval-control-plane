@@ -116,10 +116,10 @@ These contracts are accepted in
 [ADR 0012](adr/0012-versioned-evaluation-suites.md). The frozen suite models,
 canonical normalization, application registration and submission services,
 PostgreSQL persistence, worker snapshot execution, and run/decision digest
-integration and authenticated suite HTTP surfaces are implemented. Suite CLI
-commands, derived experiment-history queries, and dashboard views are not
-implemented yet. Historical
-evidence remains suite-unpinned and is not assigned an inferred suite.
+integration, authenticated suite HTTP surfaces, and local offline suite CLI
+commands are implemented. Derived experiment-history queries and dashboard
+views are not implemented yet. Historical evidence remains suite-unpinned and
+is not assigned an inferred suite.
 
 ## Execution invariants
 

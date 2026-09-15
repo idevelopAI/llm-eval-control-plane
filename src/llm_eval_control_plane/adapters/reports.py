@@ -58,13 +58,25 @@ def _render_markdown(decision: ReleaseDecision) -> str:
         f"- Candidate run: `{decision.candidate_run_id}`",
         f"- Dataset digest: `{decision.dataset.digest}`",
         f"- Decision digest: `{decision.decision_digest}`",
-        "",
-        "## Gates",
-        "",
-        "| Status | Metric | Slice | Baseline | Candidate | Delta | "
-        "Threshold | Regression budget | Failures |",
-        "|---|---|---|---:|---:|---:|---:|---:|---|",
     ]
+    if decision.suite is not None:
+        lines.extend(
+            (
+                f"- Suite: `{decision.suite.name}` "
+                f"revision `{decision.suite.revision}`",
+                f"- Suite digest: `{decision.suite.digest}`",
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Gates",
+            "",
+            "| Status | Metric | Slice | Baseline | Candidate | Delta | "
+            "Threshold | Regression budget | Failures |",
+            "|---|---|---|---:|---:|---:|---:|---:|---|",
+        ]
+    )
     lines.extend(
         (
             "| "
@@ -184,6 +196,16 @@ def _render_junit(decision: ReleaseDecision) -> str:
         ("release_status", decision.status.value),
     ):
         ElementTree.SubElement(properties, "property", {"name": name, "value": value})
+
+    if decision.suite is not None:
+        for name, value in (
+            ("suite_name", decision.suite.name),
+            ("suite_revision", str(decision.suite.revision)),
+            ("suite_digest", decision.suite.digest or ""),
+        ):
+            ElementTree.SubElement(
+                properties, "property", {"name": name, "value": value}
+            )
 
     for gate in decision.gates:
         case = ElementTree.SubElement(

@@ -6,7 +6,6 @@ import asyncio
 import json
 import os
 import re
-from collections import Counter
 from hashlib import sha256
 from pathlib import Path
 from typing import Annotated
@@ -43,8 +42,19 @@ from llm_eval_control_plane.application import (
     RunnerConfigurationError,
     compare_runs,
 )
+from llm_eval_control_plane.cli_support import (
+    create_report as _create_report,
+)
+from llm_eval_control_plane.cli_support import (
+    print_json as _print_json,
+)
+from llm_eval_control_plane.cli_support import (
+    read_scenario_overrides as _read_scenario_overrides,
+)
+from llm_eval_control_plane.cli_support import (
+    run_summary as _run_summary,
+)
 from llm_eval_control_plane.domain import (
-    ArtifactRef,
     CanonicalJsonError,
     CaseResult,
     EvaluationSpec,
@@ -56,6 +66,7 @@ from llm_eval_control_plane.domain import (
     sha256_digest,
 )
 from llm_eval_control_plane.domain.artifacts import Sha256Digest
+from llm_eval_control_plane.suite_cli import app as suite_app
 
 app = typer.Typer(
     add_completion=False,
@@ -68,6 +79,7 @@ databridge_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(databridge_app, name="databridge")
+app.add_typer(suite_app, name="suite")
 
 _ENVIRONMENT_NAME = re.compile(r"^[A-Z_][A-Z0-9_]{0,127}$")
 _MAX_RESPONSE_MANIFEST_BYTES = 4 * 1_024 * 1_024
@@ -633,50 +645,6 @@ def show_run(
     _print_json(_case_evidence(selected_case, include_output=include_output))
 
 
-def _run_summary(result: RunResult) -> dict[str, object]:
-    statuses = Counter(case.status.value for case in result.cases)
-    return {
-        "artifacts": {
-            "dataset": _artifact_summary(result.dataset),
-            "evaluators": [
-                _artifact_summary(evaluator) for evaluator in result.evaluators
-            ],
-            "target": _artifact_summary(result.target),
-        },
-        "case_counts": {
-            "attempted": len(result.cases),
-            "completed": statuses["completed"],
-            "completed_with_errors": statuses["completed_with_errors"],
-            "target_failed": statuses["target_failed"],
-        },
-        "dataset_digest": result.dataset.digest,
-        "execution_mode": result.execution_mode.value,
-        "metrics": [
-            {
-                "attempted": metric.attempted,
-                "errors": metric.errors,
-                "mean": metric.mean,
-                "metric": metric.metric,
-                "scored": metric.scored,
-                "skipped": metric.skipped,
-            }
-            for metric in result.metrics
-        ],
-        "result_digest": result.result_digest,
-        "run_id": result.run_id,
-        "schema_version": "run-summary/v1",
-        "status": result.status.value,
-    }
-
-
-def _artifact_summary(artifact: ArtifactRef) -> dict[str, object]:
-    return {
-        "digest": artifact.digest,
-        "name": artifact.name,
-        "revision": artifact.revision,
-    }
-
-
 def _case_evidence(case: CaseResult, *, include_output: bool) -> dict[str, object]:
     target: dict[str, object] | None = None
     if case.target is not None:
@@ -722,29 +690,6 @@ def _case_evidence(case: CaseResult, *, include_output: bool) -> dict[str, objec
             }
         ),
     }
-
-
-def _print_json(value: object) -> None:
-    typer.echo(json.dumps(value, indent=2, sort_keys=True))
-
-
-def _read_scenario_overrides(path: Path | None) -> dict[str, str]:
-    if path is None:
-        return {}
-    try:
-        document = parse_json(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, CanonicalJsonError) as error:
-        raise ValueError("Scenario overrides could not be read") from error
-    if not isinstance(document, dict) or any(
-        not isinstance(value, str) for value in document.values()
-    ):
-        raise ValueError("Scenario overrides must map case IDs to scenario names")
-    overrides: dict[str, str] = {}
-    for key, value in document.items():
-        # The all-values validation above narrows each mapping value.
-        assert isinstance(value, str)  # noqa: S101
-        overrides[key] = value
-    return overrides
 
 
 def _read_response_manifest(path: Path) -> dict[str, object]:
@@ -820,8 +765,3 @@ def _raw_file_digest(path: Path) -> str:
     except OSError:
         raise ValueError("fixture SQL could not be read") from None
     return f"sha256:{digest.hexdigest()}"
-
-
-def _create_report(path: Path, report: str) -> None:
-    with path.open("x", encoding="utf-8", newline="") as output:
-        output.write(report)

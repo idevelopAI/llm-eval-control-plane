@@ -111,9 +111,10 @@ decision collection items are unchanged. Evidence digest v3 binds the complete
 suite identity and explicit execution mode; old v1/v2 evidence is not rewritten.
 
 The dashboard client accepts and validates the optional suite reference without
-changing its current review workflow. Suite authoring commands, dedicated
-experiment-history queries, and suite-history dashboard views are not yet
-implemented. Legacy `/v1/runs`, `/v1/comparisons`, and CLI submissions remain
+changing its current review workflow. The [offline suite CLI](suite-cli.md)
+authors and executes local suite files without connecting to the API. Dedicated
+experiment-history queries and suite-history dashboard views are not yet
+implemented. Legacy `/v1/runs`, `/v1/comparisons`, and unpinned CLI submissions remain
 suite-unpinned and cannot supply replacement policy for pinned evidence.
 
 Suite identities and gates are sensitive project metadata. They are available

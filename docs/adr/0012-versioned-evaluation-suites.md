@@ -16,12 +16,11 @@ reviewed for that protocol.
 `ArtifactKind.SUITE` was originally reserved without a suite domain contract.
 The frozen contract and its canonical identity now exist, together with an
 application registration service, PostgreSQL record, snapshot-pinned worker
-execution, digest-bound links from run and release evidence, and authenticated
-suite HTTP surfaces. Suite CLI commands do not yet exist. A suite must be reusable
+execution, digest-bound links from run and release evidence, authenticated suite
+HTTP surfaces, and local offline suite CLI commands. A suite must be reusable
 across candidate and baseline targets, preserve every semantic choice needed to
-interpret a run, and
-remain compatible with the existing immutable artifact and canonical-digest
-rules.
+interpret a run, and remain compatible with the existing immutable artifact and
+canonical-digest rules.
 
 Experiment history also needs a clear boundary. A separate mutable experiment
 record would duplicate lifecycle already represented by jobs, runs, and release
@@ -182,14 +181,18 @@ field, preserving historical canonical document bytes as well as digests.
 Legacy v1 job payloads likewise omit a suite snapshot; v2 payloads require one.
 Historical evidence remains unpinned and is not assigned an inferred suite.
 
+The offline suite CLI builds and validates canonical protocol files, runs pinned
+evaluations, and compares immutable evidence without network calls or a database.
+It does not register suites remotely.
+
 Suite HTTP registration, bounded metadata collection, revision detail, and
 asynchronous run/comparison routes are implemented under the existing project
 authorization boundary. Run and decision detail projections expose the resolved
 suite reference only when present; legacy unpinned responses omit it. The new
 submission routes require an exact suite name/revision and prohibit replacement
 dataset, evaluator, execution, or gate settings. Existing legacy submission
-endpoints and CLI commands keep their unpinned contract. Dedicated suite CLI
-commands and suite-history dashboard views remain outside the implemented surface.
+endpoints and CLI commands keep their unpinned contract. Suite-history dashboard
+views remain outside the implemented surface.
 
 ### Privacy and hosting boundaries do not expand
 
@@ -224,8 +227,8 @@ artifact remains subject to ADR 0011 and its build and runtime acceptance gates.
   evidence digest envelopes are implemented without changing legacy evidence
   bytes or exposing canonical suite documents through an HTTP route.
 - Suite HTTP contracts and optional detail-response provenance are implemented.
-  CLI commands, history queries, and suite-history dashboard views still require
-  bounded integration.
+  The offline CLI provides a local file-based workflow. History queries and
+  suite-history dashboard views still require bounded integration.
 - Initial execution remains deliberately serial and single-invocation. A future
   sampling or concurrency model requires a new reviewed semantic contract.
 
