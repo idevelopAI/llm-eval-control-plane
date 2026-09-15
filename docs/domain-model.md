@@ -43,7 +43,7 @@
 | `EvaluationSuiteVersion` | Target-independent, content-addressed evaluation protocol and release policy | Implemented |
 | `SuiteRecord` | Immutable suite revision plus its durable registration time | Implemented |
 | `SuiteListRecord` | Bounded indexed suite metadata projection for stable pagination | Implemented |
-| Experiment history | Derived suite-pinned runs and release decisions, not a separate mutable entity | Proposed |
+| Experiment history | Indexed exact-suite run and release-decision metadata, not a separate mutable entity | Implemented |
 
 The deterministic fake target and built-in scorers are adapter implementations,
 not additional domain entities. Their `ArtifactRef` values identify their exact
@@ -110,16 +110,18 @@ behavior revisions inside a run.
 - Experiment history is derived from immutable suite-pinned runs and the
   release decisions that connect exact baseline and candidate evidence. No
   separate experiment definition, table, mutable status, or current-result
-  pointer is part of the proposed domain.
+  pointer is part of the domain. Metadata pages use the complete suite pin and
+  descending persistence-time/ID ordering; canonical evidence remains the source
+  of truth, and legacy unpinned runs are never inferred into a suite.
 
 These contracts are accepted in
 [ADR 0012](adr/0012-versioned-evaluation-suites.md). The frozen suite models,
 canonical normalization, application registration and submission services,
 PostgreSQL persistence, worker snapshot execution, and run/decision digest
 integration, authenticated suite HTTP surfaces, and local offline suite CLI
-commands are implemented. Derived experiment-history queries and dashboard
-views are not implemented yet. Historical evidence remains suite-unpinned and
-is not assigned an inferred suite.
+commands and bounded experiment-history queries are implemented. Dedicated
+suite-history dashboard views are not implemented yet. Historical unpinned
+evidence remains suite-unpinned and is not assigned an inferred suite.
 
 ## Execution invariants
 

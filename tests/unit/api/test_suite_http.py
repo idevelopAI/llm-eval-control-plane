@@ -281,7 +281,55 @@ def test_suite_http_lifecycle_pins_evidence_and_replays_terminal_jobs(
         created_at=NOW,
     )
     api_harness.repository.transition_job(job["job_id"], JobStatus.SUCCEEDED)
+    history_params = {"suite_name": suite.name, "suite_revision": "1", "limit": "1"}
+    run_history = api_harness.client.get("/v1/suite-runs", params=history_params)
+    assert run_history.status_code == 200
+    assert run_history.json()["schema_version"] == "suite-run-history-page/v1"
+    run_item = run_history.json()["items"][0]
+    assert run_item["schema_version"] == "suite-run-history-item/v1"
+    assert run_item["suite"] == suite.artifact_ref.model_dump(mode="json")
+    assert run_item["target"] == api_harness.repository.get_run(
+        run_item["run_id"]
+    ).result.target.model_dump(mode="json")
+    assert set(run_item) == {
+        "schema_version",
+        "run_id",
+        "status",
+        "execution_mode",
+        "dataset_name",
+        "dataset_revision",
+        "result_digest",
+        "created_at",
+        "suite",
+        "target",
+    }
+    decision_history = api_harness.client.get(
+        "/v1/suite-comparisons", params=history_params
+    )
+    assert decision_history.status_code == 200
+    assert decision_history.json()["schema_version"] == "suite-decision-history-page/v1"
+    decision_item = decision_history.json()["items"][0]
+    assert decision_item["schema_version"] == "suite-decision-history-item/v1"
+    assert decision_item["decision_digest"] == decision.decision_digest
+    assert decision_item["baseline_run_id"] == run_ids[0]
+    assert decision_item["candidate_run_id"] == run_ids[1]
+    assert set(decision_item) == {
+        "schema_version",
+        "decision_id",
+        "status",
+        "baseline_run_id",
+        "candidate_run_id",
+        "decision_digest",
+        "created_at",
+        "suite",
+    }
+    assert "private-sentinel" not in run_history.text + decision_history.text
     api_harness.repository.suites.clear()
+    for history_path in ("/v1/suite-runs", "/v1/suite-comparisons"):
+        assert (
+            api_harness.client.get(history_path, params=history_params).status_code
+            == 404
+        )
     replay = api_harness.client.post(
         "/v1/suite-comparisons", json=comparison, headers=headers
     )
@@ -301,6 +349,60 @@ def test_suite_http_lifecycle_pins_evidence_and_replays_terminal_jobs(
         headers=headers,
     )
     assert conflict.status_code == 409
+
+
+@pytest.mark.parametrize("path", ["/v1/suite-runs", "/v1/suite-comparisons"])
+def test_suite_history_requires_read_scope_and_correct_project_before_validation(
+    api_harness: ApiHarness, path: str
+) -> None:
+    for granted, headers, expected in (
+        (ControlPlaneScope.READ, {}, 401),
+        (ControlPlaneScope.WRITE, AUTH_HEADERS, 403),
+        (
+            ControlPlaneScope.READ,
+            {**AUTH_HEADERS, "X-Project-ID": "wrong-project"},
+            403,
+        ),
+        (ControlPlaneScope.READ, AUTH_HEADERS, 422),
+    ):
+        with TestClient(
+            create_app(
+                service=api_harness.service,
+                authorizer=build_authorizer((granted,)),
+                telemetry=Observability(service="api"),
+            ),
+            headers=headers,
+        ) as client:
+            response = client.get(path, params={"suite_revision": "private-sentinel"})
+        assert response.status_code == expected
+        assert "private-sentinel" not in response.text
+    assert api_harness.repository.jobs == {}
+
+
+@pytest.mark.parametrize("path", ["/v1/suite-runs", "/v1/suite-comparisons"])
+def test_suite_history_rejects_bad_cursors_and_bounds_without_echoing_input(
+    api_harness: ApiHarness, dataset_body: dict[str, object], path: str
+) -> None:
+    body = _suite_body(api_harness, dataset_body)
+    assert api_harness.client.post("/v1/suites", json=body).status_code == 201
+    params = {"suite_name": "release/core", "suite_revision": "1"}
+    response = api_harness.client.get(path, params=params)
+    assert response.status_code == 200
+    assert response.json()["items"] == []
+    assert response.json()["next_cursor"] is None
+    for change, expected in (
+        ({"suite_revision": "2"}, 404),
+        ({"suite_name": "missing"}, 404),
+        ({"cursor": "private-sentinel"}, 400),
+        ({"suite_name": "private-sentinel!"}, 422),
+        ({"limit": "101"}, 422),
+        ({"limit": "0"}, 422),
+        ({"suite_revision": "0"}, 422),
+    ):
+        invalid = api_harness.client.get(path, params={**params, **change})
+        assert invalid.status_code == expected
+        assert "private-sentinel" not in invalid.text
+    assert api_harness.repository.jobs == {}
 
 
 @pytest.mark.parametrize(
@@ -390,6 +492,17 @@ def test_suite_telemetry_uses_templates_not_protocol_content(
             client.get("/v1/suite-revisions/1/private-protocol/suite").status_code
             == 200
         )
+        for path in ("/v1/suite-runs", "/v1/suite-comparisons"):
+            assert (
+                client.get(
+                    path,
+                    params={
+                        "suite_name": "private-protocol/suite",
+                        "suite_revision": 1,
+                    },
+                ).status_code
+                == 200
+            )
     requests = [
         event
         for line in lines
@@ -398,6 +511,8 @@ def test_suite_telemetry_uses_templates_not_protocol_content(
     assert [event["http_route"] for event in requests] == [
         "/v1/suites",
         "/v1/suite-revisions/{revision}/{name:path}",
+        "/v1/suite-runs",
+        "/v1/suite-comparisons",
     ]
     assert "private-protocol" not in "".join(lines)
     assert "private-protocol" not in telemetry.render_metrics().body.decode()

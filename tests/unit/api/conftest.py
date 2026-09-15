@@ -27,6 +27,7 @@ from llm_eval_control_plane.application.control_plane import (
     StoreNotFoundError,
     StoreTransitionError,
 )
+from llm_eval_control_plane.domain.artifacts import ArtifactRef
 from llm_eval_control_plane.domain.comparison import (
     CaseChange,
     GateCaseComparison,
@@ -46,8 +47,10 @@ from llm_eval_control_plane.domain.control_plane import (
     ReleaseDecisionRecord,
     RunListRecord,
     RunRecord,
+    SuiteDecisionHistoryRecord,
     SuiteListRecord,
     SuiteRecord,
+    SuiteRunHistoryRecord,
 )
 from llm_eval_control_plane.domain.datasets import DatasetVersion
 from llm_eval_control_plane.domain.results import RunResult
@@ -288,6 +291,40 @@ class ReadyRepository:
             )
             for record in self.runs.values()
             if dataset_name is None or record.result.dataset.name == dataset_name
+        )
+        return CursorPage(items=items[:limit])
+
+    def list_suite_runs(
+        self, suite: ArtifactRef, *, limit: int, cursor: str | None = None
+    ) -> CursorPage[SuiteRunHistoryRecord]:
+        self._validate_cursor(cursor)
+        items = tuple(
+            SuiteRunHistoryRecord(
+                **item.model_dump(),
+                suite=suite,
+                target=self.runs[item.run_id].result.target,
+            )
+            for item in self.list_runs(limit=100).items
+            if self.runs[item.run_id].result.suite == suite
+        )
+        return CursorPage(
+            items=tuple(
+                sorted(
+                    items, key=lambda item: (item.created_at, item.run_id), reverse=True
+                )
+            )[:limit]
+        )
+
+    def list_suite_decisions(
+        self, suite: ArtifactRef, *, limit: int, cursor: str | None = None
+    ) -> CursorPage[SuiteDecisionHistoryRecord]:
+        self._validate_cursor(cursor)
+        items = tuple(
+            SuiteDecisionHistoryRecord(**item.model_dump(), suite=suite)
+            for item in self.list_release_decisions(
+                limit=100, order=ListOrder.DESCENDING
+            ).items
+            if self.decisions[item.decision_id].decision.suite == suite
         )
         return CursorPage(items=items[:limit])
 

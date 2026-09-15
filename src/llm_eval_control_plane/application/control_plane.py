@@ -12,6 +12,7 @@ from llm_eval_control_plane.application.dashboard import (
     build_release_decision_distributions,
 )
 from llm_eval_control_plane.domain.analytics import ReleaseDecisionDistributions
+from llm_eval_control_plane.domain.artifacts import ArtifactRef
 from llm_eval_control_plane.domain.canonical import JsonValue, sha256_digest
 from llm_eval_control_plane.domain.comparison import (
     CaseChange,
@@ -37,9 +38,11 @@ from llm_eval_control_plane.domain.control_plane import (
     RunListRecord,
     RunRecord,
     ScenarioOverride,
+    SuiteDecisionHistoryRecord,
     SuiteExecutionContract,
     SuiteListRecord,
     SuiteRecord,
+    SuiteRunHistoryRecord,
     TraceParent,
     WorkerId,
     validate_traceparent,
@@ -110,6 +113,14 @@ class ControlPlaneRepository(Protocol):
     def put_suite(self, record: SuiteRecord) -> SuiteRecord: ...
 
     def get_suite(self, name: str, revision: int) -> SuiteRecord: ...
+
+    def list_suite_runs(
+        self, suite: ArtifactRef, *, limit: int, cursor: str | None = None
+    ) -> CursorPage[SuiteRunHistoryRecord]: ...
+
+    def list_suite_decisions(
+        self, suite: ArtifactRef, *, limit: int, cursor: str | None = None
+    ) -> CursorPage[SuiteDecisionHistoryRecord]: ...
 
     def list_suites(
         self,
@@ -590,6 +601,38 @@ class ControlPlaneService:
                 limit=limit,
                 cursor=cursor,
                 name=name,
+            )
+        except StoreInvalidCursorError as error:
+            raise InvalidCursorError("Pagination cursor is invalid") from error
+
+    def list_suite_runs(
+        self,
+        name: str,
+        revision: int,
+        *,
+        limit: int,
+        cursor: str | None = None,
+    ) -> CursorPage[SuiteRunHistoryRecord]:
+        suite = self.get_suite(name, revision).suite
+        try:
+            return self._repository.list_suite_runs(
+                suite.artifact_ref, limit=limit, cursor=cursor
+            )
+        except StoreInvalidCursorError as error:
+            raise InvalidCursorError("Pagination cursor is invalid") from error
+
+    def list_suite_decisions(
+        self,
+        name: str,
+        revision: int,
+        *,
+        limit: int,
+        cursor: str | None = None,
+    ) -> CursorPage[SuiteDecisionHistoryRecord]:
+        suite = self.get_suite(name, revision).suite
+        try:
+            return self._repository.list_suite_decisions(
+                suite.artifact_ref, limit=limit, cursor=cursor
             )
         except StoreInvalidCursorError as error:
             raise InvalidCursorError("Pagination cursor is invalid") from error
