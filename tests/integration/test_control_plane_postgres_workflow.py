@@ -795,6 +795,45 @@ def test_suite_http_api_persists_authenticated_worker_lifecycle(
         assert detail.json() == document["decision"]
         assert "private-phase5-postgres-sentinel" not in detail.text
         assert "schema_version" in detail.json()
+        params: dict[str, str | int] = {
+            "suite_name": suite.name,
+            "suite_revision": 1,
+            "limit": 1,
+        }
+        first = client.get("/v1/suite-runs", params=params)
+        assert first.status_code == 200
+        assert first.json()["items"][0]["run_id"] == queued[1]["resource_id"]
+        assert first.json()["next_cursor"] is not None
+        second = client.get(
+            "/v1/suite-runs",
+            params={
+                **params,
+                "cursor": first.json()["next_cursor"],
+            },
+        )
+        assert second.status_code == 200
+        assert second.json()["items"][0]["run_id"] == queued[0]["resource_id"]
+        assert second.json()["next_cursor"] is None
+        history = client.get("/v1/suite-comparisons", params=params)
+        assert history.status_code == 200
+        assert (
+            history.json()["items"][0]["decision_digest"]
+            == document["decision"]["decision_digest"]
+        )
+        assert (
+            "private-phase5-postgres-sentinel"
+            not in first.text + second.text + history.text
+        )
+        assert (
+            client.get(
+                "/v1/suite-comparisons",
+                params={
+                    **params,
+                    "cursor": first.json()["next_cursor"],
+                },
+            ).status_code
+            == 400
+        )
 
 
 def test_api_enqueue_survives_restart_and_terminal_replay_is_redacted(

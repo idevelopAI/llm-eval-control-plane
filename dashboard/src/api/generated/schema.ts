@@ -280,7 +280,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List Suite Decisions
+         * @description Newest persisted release decisions under the exact registered suite pin. Metadata only.
+         */
+        get: operations["list_suite_decision_history"];
         put?: never;
         /**
          * Submit Suite Comparison
@@ -317,7 +321,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List Suite Runs
+         * @description Newest persisted runs under the exact registered suite pin. Metadata only.
+         */
+        get: operations["list_suite_run_history"];
         put?: never;
         /**
          * Submit Suite Run
@@ -1210,6 +1218,43 @@ export interface components {
              */
             slices: string[];
         };
+        /** SuiteDecisionHistoryItemResponse */
+        SuiteDecisionHistoryItemResponse: {
+            /** Baseline Run Id */
+            baseline_run_id: string;
+            /** Candidate Run Id */
+            candidate_run_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Decision Digest */
+            decision_digest: string;
+            /** Decision Id */
+            decision_id: string;
+            /**
+             * Schema Version
+             * @default suite-decision-history-item/v1
+             * @constant
+             */
+            schema_version: "suite-decision-history-item/v1";
+            status: components["schemas"]["ReleaseStatus"];
+            suite: components["schemas"]["ArtifactRef"];
+        };
+        /** SuiteDecisionHistoryPage */
+        SuiteDecisionHistoryPage: {
+            /** Items */
+            items: components["schemas"]["SuiteDecisionHistoryItemResponse"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /**
+             * Schema Version
+             * @default suite-decision-history-page/v1
+             * @constant
+             */
+            schema_version: "suite-decision-history-page/v1";
+        };
         /** SuiteEvaluatorInput */
         SuiteEvaluatorInput: {
             artifact: components["schemas"]["ResolvedArtifactRefInput"];
@@ -1397,6 +1442,45 @@ export interface components {
              * @default 1
              */
             target_revision: number;
+        };
+        /** SuiteRunHistoryItemResponse */
+        SuiteRunHistoryItemResponse: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Dataset Name */
+            dataset_name: string;
+            /** Dataset Revision */
+            dataset_revision: number;
+            execution_mode: components["schemas"]["ExecutionMode"];
+            /** Result Digest */
+            result_digest: string;
+            /** Run Id */
+            run_id: string;
+            /**
+             * Schema Version
+             * @default suite-run-history-item/v1
+             * @constant
+             */
+            schema_version: "suite-run-history-item/v1";
+            status: components["schemas"]["RunStatus"];
+            suite: components["schemas"]["ArtifactRef"];
+            target: components["schemas"]["ArtifactRef"];
+        };
+        /** SuiteRunHistoryPage */
+        SuiteRunHistoryPage: {
+            /** Items */
+            items: components["schemas"]["SuiteRunHistoryItemResponse"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /**
+             * Schema Version
+             * @default suite-run-history-page/v1
+             * @constant
+             */
+            schema_version: "suite-run-history-page/v1";
         };
     };
     responses: never;
@@ -3243,6 +3327,124 @@ export interface operations {
             };
         };
     };
+    list_suite_decision_history: {
+        parameters: {
+            query: {
+                cursor?: string | null;
+                limit?: number;
+                suite_name: string;
+                suite_revision: number;
+            };
+            header: {
+                /** @description Configured single-deployment project boundary */
+                "X-Project-ID": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SuiteDecisionHistoryPage"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Immutable conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Request body too large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Unsupported media type */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Contract validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Internal service error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+        };
+    };
     submit_suite_release_comparison: {
         parameters: {
             query?: never;
@@ -3396,6 +3598,124 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SuiteResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Immutable conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Request body too large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Unsupported media type */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Contract validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Internal service error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+        };
+    };
+    list_suite_run_history: {
+        parameters: {
+            query: {
+                cursor?: string | null;
+                limit?: number;
+                suite_name: string;
+                suite_revision: number;
+            };
+            header: {
+                /** @description Configured single-deployment project boundary */
+                "X-Project-ID": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SuiteRunHistoryPage"];
                 };
             };
             /** @description Invalid request */

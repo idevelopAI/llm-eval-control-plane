@@ -23,7 +23,7 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.engine import Engine, RowMapping
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from llm_eval_control_plane.adapters import control_plane_db
 from llm_eval_control_plane.adapters.control_plane_db import (
@@ -69,7 +69,11 @@ from llm_eval_control_plane.domain import (
     MetricGate,
 )
 from llm_eval_control_plane.domain.artifacts import ArtifactKind, ArtifactRef
-from llm_eval_control_plane.domain.canonical import canonical_json_bytes, sha256_digest
+from llm_eval_control_plane.domain.canonical import (
+    JsonValue,
+    canonical_json_bytes,
+    sha256_digest,
+)
 from llm_eval_control_plane.domain.comparison import (
     CaseChange,
     ReleaseDecision,
@@ -338,6 +342,48 @@ def test_suite_history_queries_never_read_document_columns(
         assert {"cases", "input", "output", "document", "credentials"}.isdisjoint(
             item.model_dump()
         )
+
+
+@mark.parametrize("stream", ["suite-runs", "suite-decisions"])
+@mark.parametrize("key", [[], ["not-a-time", "id"], [NOW.isoformat(), 12]])
+def test_suite_history_rejects_malformed_key_shapes(
+    repository: SqlAlchemyControlPlaneRepository,
+    stream: str,
+    key: list[JsonValue],
+) -> None:
+    suite = evaluation_suite(dataset()).artifact_ref
+    cursor = _encode_cursor(
+        stream=stream,
+        filters={
+            "suite_name": suite.name,
+            "suite_revision": suite.revision,
+            "suite_digest": suite.digest,
+            "order": "desc",
+        },
+        key=key,
+    )
+    query = (
+        repository.list_suite_runs
+        if stream == "suite-runs"
+        else repository.list_suite_decisions
+    )
+    with raises(InvalidCursorError, match="Pagination cursor is invalid"):
+        query(suite, limit=1, cursor=cursor)
+
+
+def test_suite_history_sanitizes_database_failures(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    def unavailable() -> None:
+        raise SQLAlchemyError("private-database-sentinel")
+
+    monkeypatch.setattr(engine, "connect", unavailable)
+    for query in (repository.list_suite_runs, repository.list_suite_decisions):
+        with raises(ControlPlaneRepositoryError) as error:
+            query(evaluation_suite(dataset()).artifact_ref, limit=1)
+        assert str(error.value) == "Could not list suite history"
 
 
 def test_suite_history_constraints_and_canonical_integrity(

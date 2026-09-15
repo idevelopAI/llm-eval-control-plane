@@ -54,8 +54,10 @@ from llm_eval_control_plane.domain.control_plane import (
     ReleaseDecisionRecord,
     RunListRecord,
     RunRecord,
+    SuiteDecisionHistoryRecord,
     SuiteListRecord,
     SuiteRecord,
+    SuiteRunHistoryRecord,
 )
 from llm_eval_control_plane.domain.datasets import DatasetVersion, EvaluationCase
 from llm_eval_control_plane.domain.evaluation import (
@@ -578,6 +580,54 @@ class SuitePage(ApiModel):
     next_cursor: str | None = None
 
 
+class SuiteRunHistoryItemResponse(ApiModel):
+    schema_version: Literal["suite-run-history-item/v1"] = "suite-run-history-item/v1"
+    run_id: str
+    status: RunStatus
+    execution_mode: ExecutionMode
+    dataset_name: str
+    dataset_revision: int
+    result_digest: str
+    created_at: datetime
+    suite: ArtifactRef
+    target: ArtifactRef
+
+    @classmethod
+    def from_record(cls, record: SuiteRunHistoryRecord) -> Self:
+        return cls(**record.model_dump())
+
+
+class SuiteRunHistoryPage(ApiModel):
+    schema_version: Literal["suite-run-history-page/v1"] = "suite-run-history-page/v1"
+    items: tuple[SuiteRunHistoryItemResponse, ...]
+    next_cursor: str | None = None
+
+
+class SuiteDecisionHistoryItemResponse(ApiModel):
+    schema_version: Literal["suite-decision-history-item/v1"] = (
+        "suite-decision-history-item/v1"
+    )
+    decision_id: str
+    status: ReleaseStatus
+    baseline_run_id: str
+    candidate_run_id: str
+    decision_digest: str
+    created_at: datetime
+    suite: ArtifactRef
+
+    @classmethod
+    def from_record(cls, record: SuiteDecisionHistoryRecord) -> Self:
+        return cls(**record.model_dump())
+
+
+class SuiteDecisionHistoryPage(ApiModel):
+    schema_version: Literal["suite-decision-history-page/v1"] = (
+        "suite-decision-history-page/v1"
+    )
+    items: tuple[SuiteDecisionHistoryItemResponse, ...]
+    next_cursor: str | None = None
+
+
 class EvaluationSpecInput(ApiModel):
     """Public comparison policy over fully resolved immutable evidence."""
 
@@ -960,8 +1010,12 @@ __all__ = [
     "RunSubmissionResponse",
     "SuiteComparisonCreateRequest",
     "SuiteCreateRequest",
+    "SuiteDecisionHistoryItemResponse",
+    "SuiteDecisionHistoryPage",
     "SuiteListItemResponse",
     "SuitePage",
     "SuiteResponse",
     "SuiteRunCreateRequest",
+    "SuiteRunHistoryItemResponse",
+    "SuiteRunHistoryPage",
 ]
