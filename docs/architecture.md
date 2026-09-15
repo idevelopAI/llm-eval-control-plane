@@ -21,9 +21,10 @@ target-independent `EvaluationSuiteVersion` that binds one resolved dataset,
 resolved evaluator identities and metric inventories, declared slices, fixed
 semantic execution settings, and release gates under one canonical digest. It
 also defines create-once suite registration, snapshot-pinned execution, and
-digest-bound run and release evidence. Experiment history is designed as a
-derived view over that evidence rather than a separate mutable registry; its
-query and presentation surfaces are not implemented yet.
+digest-bound run and release evidence. Experiment history is an indexed,
+metadata-only view over that evidence rather than a separate mutable registry.
+Exact-suite run and decision queries are implemented; dedicated dashboard
+presentation remains outside the current surface.
 
 ## Architectural style
 
@@ -239,8 +240,10 @@ provider; execution remains worker-owned.
 Run and decision detail projections expose an optional resolved `suite`
 reference, omitted for historical unpinned evidence. The generated dashboard
 client validates this bounded metadata while preserving existing fixture and
-live-review behavior. Dedicated experiment-history queries and suite-history
-dashboard views are not implemented yet. The
+live-review behavior. Authenticated experiment-history reads use exact suite
+pins and descending time/ID keysets over bounded relational projections; they
+never select canonical run or decision documents. Suite-history dashboard
+views are not implemented yet. The
 [suite API guide](evaluation-suites.md) documents the request and privacy boundary.
 
 Target expectations are never passed through the target port. Target and
