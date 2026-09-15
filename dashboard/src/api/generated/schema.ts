@@ -273,6 +273,84 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/suite-comparisons": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit Suite Comparison
+         * @description Compare two runs pinned to the selected suite, using only its immutable policy.
+         */
+        post: operations["submit_suite_release_comparison"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/suite-revisions/{revision}/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Suite */
+        get: operations["get_suite_revision"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/suite-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit Suite Run
+         * @description Pin one complete suite snapshot and target contract for asynchronous worker execution.
+         */
+        post: operations["submit_suite_evaluation_run"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/suites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Suites */
+        get: operations["list_suite_revisions"];
+        put?: never;
+        /**
+         * Create Suite
+         * @description Register an immutable protocol with exact resolved dependencies. No target is invoked.
+         */
+        post: operations["create_suite_revision"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -925,6 +1003,7 @@ export interface components {
             /** Spec Name */
             spec_name: string;
             status: components["schemas"]["ReleaseStatus"];
+            suite?: components["schemas"]["ArtifactRef"] | null;
         };
         /**
          * ReleaseStatus
@@ -1052,6 +1131,7 @@ export interface components {
              */
             schema_version: "run-summary/v1";
             status: components["schemas"]["RunStatus"];
+            suite?: components["schemas"]["ArtifactRef"] | null;
             target: components["schemas"]["ArtifactRef"];
         };
         /**
@@ -1091,6 +1171,232 @@ export interface components {
             /** Skipped */
             skipped: number;
             statistics: components["schemas"]["QuantileSummaryResponse"];
+        };
+        /**
+         * SuiteCaseOrder
+         * @description Case ordering modes supported by an evaluation suite version.
+         * @enum {string}
+         */
+        SuiteCaseOrder: "case_id_ascending";
+        /** SuiteComparisonCreateRequest */
+        SuiteComparisonCreateRequest: {
+            /** Baseline Run Id */
+            baseline_run_id: string;
+            /** Candidate Run Id */
+            candidate_run_id: string;
+            /** Suite Name */
+            suite_name: string;
+            /** Suite Revision */
+            suite_revision: number;
+        };
+        /**
+         * SuiteCreateRequest
+         * @description Explicit resolved dependencies; the server computes the canonical digest.
+         */
+        SuiteCreateRequest: {
+            dataset: components["schemas"]["ResolvedArtifactRefInput"];
+            /** Evaluators */
+            evaluators: components["schemas"]["SuiteEvaluatorInput"][];
+            execution?: components["schemas"]["SuiteExecutionInput"];
+            /** Gates */
+            gates: components["schemas"]["SuiteGateInput"][];
+            /** Name */
+            name: string;
+            /** Revision */
+            revision: number;
+            /**
+             * Slices
+             * @default []
+             */
+            slices: string[];
+        };
+        /** SuiteEvaluatorInput */
+        SuiteEvaluatorInput: {
+            artifact: components["schemas"]["ResolvedArtifactRefInput"];
+            executor_name: components["schemas"]["BuiltInEvaluatorKind"];
+            /** Metrics */
+            metrics: string[];
+        };
+        /** SuiteEvaluatorResponse */
+        SuiteEvaluatorResponse: {
+            artifact: components["schemas"]["ArtifactRef"];
+            /** Executor Name */
+            executor_name: string;
+            /** Metrics */
+            metrics: string[];
+        };
+        /**
+         * SuiteExecutionInput
+         * @description Only the credential-free serial executor is exposed over HTTP.
+         */
+        SuiteExecutionInput: {
+            /**
+             * Adapter
+             * @default deterministic_fake
+             * @constant
+             */
+            adapter: "deterministic_fake";
+            /**
+             * Case Order
+             * @default case_id_ascending
+             * @constant
+             */
+            case_order: "case_id_ascending";
+            /**
+             * Execution Mode
+             * @default offline_mock
+             * @constant
+             */
+            execution_mode: "offline_mock";
+            /**
+             * Invocations Per Case
+             * @default 1
+             */
+            invocations_per_case: number;
+            /**
+             * Max Concurrency
+             * @default 1
+             */
+            max_concurrency: number;
+        };
+        /**
+         * SuiteExecutionSettings
+         * @description Semantic execution behavior shared by every run of one suite.
+         */
+        SuiteExecutionSettings: {
+            /** Adapter */
+            adapter: string;
+            /** @default case_id_ascending */
+            case_order: components["schemas"]["SuiteCaseOrder"];
+            execution_mode: components["schemas"]["ExecutionMode"];
+            /**
+             * Invocations Per Case
+             * @default 1
+             * @constant
+             */
+            invocations_per_case: 1;
+            /**
+             * Max Concurrency
+             * @default 1
+             * @constant
+             */
+            max_concurrency: 1;
+        };
+        /** SuiteGateInput */
+        SuiteGateInput: {
+            /**
+             * Allowed Regression
+             * @default 0
+             */
+            allowed_regression: number;
+            direction: components["schemas"]["MetricDirection"];
+            /** Metric */
+            metric: string;
+            /** Slice */
+            slice?: string | null;
+            /** Threshold */
+            threshold: number;
+        };
+        /** SuiteListItemResponse */
+        SuiteListItemResponse: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Dataset Name */
+            dataset_name: string;
+            /** Dataset Revision */
+            dataset_revision: number;
+            /** Digest */
+            digest: string;
+            /** Evaluator Count */
+            evaluator_count: number;
+            execution_mode: components["schemas"]["ExecutionMode"];
+            /** Gate Count */
+            gate_count: number;
+            /** Metric Count */
+            metric_count: number;
+            /** Name */
+            name: string;
+            /** Revision */
+            revision: number;
+            /**
+             * Schema Version
+             * @default suite-list-item/v1
+             * @constant
+             */
+            schema_version: "suite-list-item/v1";
+            /** Slice Count */
+            slice_count: number;
+        };
+        /** SuitePage */
+        SuitePage: {
+            /** Items */
+            items: components["schemas"]["SuiteListItemResponse"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /**
+             * Schema Version
+             * @default suite-page/v1
+             * @constant
+             */
+            schema_version: "suite-page/v1";
+        };
+        /**
+         * SuiteResponse
+         * @description Allowlisted protocol metadata, never a raw canonical document or payload.
+         */
+        SuiteResponse: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            dataset: components["schemas"]["ArtifactRef"];
+            /** Digest */
+            digest: string;
+            /** Evaluators */
+            evaluators: components["schemas"]["SuiteEvaluatorResponse"][];
+            execution: components["schemas"]["SuiteExecutionSettings"];
+            /** Gates */
+            gates: components["schemas"]["MetricGate"][];
+            /** Name */
+            name: string;
+            /** Revision */
+            revision: number;
+            /**
+             * Schema Version
+             * @default suite-summary/v1
+             * @constant
+             */
+            schema_version: "suite-summary/v1";
+            /** Slices */
+            slices: string[];
+        };
+        /**
+         * SuiteRunCreateRequest
+         * @description Select a suite revision without permitting replacement evaluation policy.
+         */
+        SuiteRunCreateRequest: {
+            /** Scenario Overrides */
+            scenario_overrides?: {
+                [key: string]: "echo" | "malformed" | "mismatch" | "missing_usage" | "offset" | "raise" | "refuse" | "uppercase";
+            };
+            /** Suite Name */
+            suite_name: string;
+            /** Suite Revision */
+            suite_revision: number;
+            /**
+             * Target Name
+             * @default fake/deterministic
+             */
+            target_name: string;
+            /**
+             * Target Revision
+             * @default 1
+             */
+            target_revision: number;
         };
     };
     responses: never;
@@ -2843,6 +3149,618 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Immutable conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Request body too large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Unsupported media type */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Contract validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Internal service error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+        };
+    };
+    submit_suite_release_comparison: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                /** @description Configured single-deployment project boundary */
+                "X-Project-ID": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SuiteComparisonCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Terminal replay */
+            200: {
+                headers: {
+                    /** @description Canonical path of the durable submission job */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComparisonSubmissionResponse"];
+                };
+            };
+            /** @description Accepted new or nonterminal job */
+            202: {
+                headers: {
+                    /** @description Canonical path of the durable submission job */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComparisonSubmissionResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Immutable conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Request body too large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Unsupported media type */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Contract validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Internal service error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+        };
+    };
+    get_suite_revision: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Configured single-deployment project boundary */
+                "X-Project-ID": string;
+            };
+            path: {
+                name: string;
+                revision: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SuiteResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Immutable conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Request body too large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Unsupported media type */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Contract validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Internal service error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+        };
+    };
+    submit_suite_evaluation_run: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                /** @description Configured single-deployment project boundary */
+                "X-Project-ID": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SuiteRunCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Terminal replay */
+            200: {
+                headers: {
+                    /** @description Canonical path of the durable submission job */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunSubmissionResponse"];
+                };
+            };
+            /** @description Accepted new or nonterminal job */
+            202: {
+                headers: {
+                    /** @description Canonical path of the durable submission job */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunSubmissionResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Immutable conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Request body too large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Unsupported media type */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Contract validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Internal service error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+        };
+    };
+    list_suite_revisions: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+                name?: string | null;
+            };
+            header: {
+                /** @description Configured single-deployment project boundary */
+                "X-Project-ID": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SuitePage"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Immutable conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Request body too large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Unsupported media type */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Contract validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Internal service error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+            /** @description Service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorDocument"];
+                };
+            };
+        };
+    };
+    create_suite_revision: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Configured single-deployment project boundary */
+                "X-Project-ID": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SuiteCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SuiteResponse"];
                 };
             };
             /** @description Invalid request */

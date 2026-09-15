@@ -226,10 +226,22 @@ The local `llm-eval suite` composition root also builds and validates canonical
 suite files, executes pinned offline runs, and compares their immutable evidence.
 It constructs only deterministic local adapters and uses the existing filesystem
 run store; it does not connect to the API or register records in PostgreSQL.
-Suite HTTP contracts and suite-aware dashboard history are not implemented yet.
-Legacy HTTP and CLI submissions remain suite-unpinned. Registering or enqueueing
-a durable suite job does not invoke a target or provider; queued execution
-remains worker-owned. See the [offline suite workflow](suite-cli.md).
+See the [offline suite workflow](suite-cli.md).
+
+Durable capabilities are exposed through project-authorized suite HTTP routes:
+registration, bounded metadata listing, slash-safe revision detail, and separate
+suite run/comparison submissions. The API requires resolved artifact identities
+and derives the digest itself; it accepts only the credential-free deterministic
+execution contract. Legacy run/comparison endpoints and CLI commands remain
+suite-unpinned. Registering or enqueueing a suite does not invoke a target or
+provider; execution remains worker-owned.
+
+Run and decision detail projections expose an optional resolved `suite`
+reference, omitted for historical unpinned evidence. The generated dashboard
+client validates this bounded metadata while preserving existing fixture and
+live-review behavior. Dedicated experiment-history queries and suite-history
+dashboard views are not implemented yet. The
+[suite API guide](evaluation-suites.md) documents the request and privacy boundary.
 
 Target expectations are never passed through the target port. Target and
 evaluator exceptions are converted to bounded failure codes; remaining cases

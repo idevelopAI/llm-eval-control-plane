@@ -46,6 +46,8 @@ from llm_eval_control_plane.domain.control_plane import (
     ReleaseDecisionRecord,
     RunListRecord,
     RunRecord,
+    SuiteListRecord,
+    SuiteRecord,
 )
 from llm_eval_control_plane.domain.datasets import DatasetVersion
 from llm_eval_control_plane.domain.results import RunResult
@@ -92,6 +94,7 @@ class ReadyRepository:
 
     def __init__(self) -> None:
         self.datasets: dict[tuple[str, int], DatasetRecord] = {}
+        self.suites: dict[tuple[str, int], SuiteRecord] = {}
         self.jobs: dict[str, JobRecord] = {}
         self.payloads: dict[str, JobPayload] = {}
         self.runs: dict[str, RunRecord] = {}
@@ -131,6 +134,47 @@ class ReadyRepository:
             )
             for record in self.datasets.values()
             if name is None or record.dataset.name == name
+        )
+        return CursorPage(items=items[:limit])
+
+    def put_suite(self, record: SuiteRecord) -> SuiteRecord:
+        key = (record.suite.name, record.suite.revision)
+        existing = self.suites.get(key)
+        if existing is not None and existing.suite != record.suite:
+            raise StoreConflictError("private suite conflict")
+        self.suites[key] = existing or record
+        return self.suites[key]
+
+    def get_suite(self, name: str, revision: int) -> SuiteRecord:
+        try:
+            return self.suites[(name, revision)]
+        except KeyError:
+            raise StoreNotFoundError("private suite missing") from None
+
+    def list_suites(
+        self,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        name: str | None = None,
+    ) -> CursorPage[SuiteListRecord]:
+        self._validate_cursor(cursor)
+        items = tuple(
+            SuiteListRecord(
+                name=record.suite.name,
+                revision=record.suite.revision,
+                digest=record.suite.digest,
+                dataset_name=record.suite.dataset.name,
+                dataset_revision=record.suite.dataset.revision,
+                evaluator_count=len(record.suite.evaluators),
+                metric_count=sum(len(item.metrics) for item in record.suite.evaluators),
+                slice_count=len(record.suite.slices),
+                gate_count=len(record.suite.gates),
+                execution_mode=record.suite.execution.execution_mode,
+                created_at=record.created_at,
+            )
+            for record in self.suites.values()
+            if name is None or record.suite.name == name
         )
         return CursorPage(items=items[:limit])
 

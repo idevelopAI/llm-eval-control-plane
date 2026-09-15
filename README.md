@@ -67,10 +67,15 @@ keeps its original serialization and digests.
 
 The [offline suite CLI](docs/suite-cli.md) builds and validates a resolved
 protocol, runs baseline and candidate targets, and compares their pinned
-evidence without Docker, hosting, or provider API calls. Suite-backed HTTP
-submission and suite-history dashboard views are not implemented yet. Legacy
-run/comparison endpoints and CLI commands remain unpinned and cannot replace
-the policy on suite-pinned evidence.
+evidence without Docker, hosting, or provider API calls.
+
+The local API exposes authenticated suite registration, revision lookup, and
+suite-backed run/comparison submission. Run and decision detail responses include
+the resolved `suite` reference when pinned; historical unpinned responses remain
+unchanged. See the [evaluation-suite API guide](docs/evaluation-suites.md) for
+the exact inputs, permissions, replay behavior, and compatibility boundary.
+Suite-history dashboard views are not implemented yet. Legacy run/comparison
+endpoints and CLI commands remain unpinned and cannot replace suite policy.
 
 ### Local Compose quickstart
 
