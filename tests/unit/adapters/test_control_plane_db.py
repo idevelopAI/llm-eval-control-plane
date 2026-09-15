@@ -68,6 +68,7 @@ from llm_eval_control_plane.domain import (
     MetricDirection,
     MetricGate,
 )
+from llm_eval_control_plane.domain.artifacts import ArtifactKind, ArtifactRef
 from llm_eval_control_plane.domain.canonical import canonical_json_bytes, sha256_digest
 from llm_eval_control_plane.domain.comparison import (
     CaseChange,
@@ -162,6 +163,274 @@ def execute(
             target=DeterministicFakeTarget(revision=target_revision),
             evaluators=build_evaluators((BuiltInEvaluatorKind.EXACT_MATCH,)),
         )
+    )
+
+
+def execute_suite(
+    data: DatasetVersion,
+    suite: EvaluationSuiteVersion,
+    *,
+    run_id: str,
+    target_revision: int = 1,
+) -> RunResult:
+    return asyncio.run(
+        InProcessRunner(clock=SequenceClock((0.0, 0.005))).run(
+            run_id=run_id,
+            dataset=data,
+            target=DeterministicFakeTarget(revision=target_revision),
+            evaluators=build_evaluators(
+                (BuiltInEvaluatorKind.EXACT_MATCH, BuiltInEvaluatorKind.USAGE)
+            ),
+            execution_mode=suite.execution.execution_mode,
+            suite=suite,
+        )
+    )
+
+
+@fixture
+def history_records(
+    repository: SqlAlchemyControlPlaneRepository,
+) -> tuple[EvaluationSuiteVersion, tuple[RunResult, ...]]:
+    data = dataset()
+    repository.put_dataset(DatasetRecord(dataset=data, created_at=NOW))
+    suite = evaluation_suite(data)
+    results = tuple(
+        execute_suite(data, suite, run_id=f"history-{letter}", target_revision=revision)
+        for revision, letter in enumerate("abcd", start=1)
+    )
+    for result in results:
+        repository.put_run(RunRecord(result=result, created_at=NOW))
+    for letter, candidate in zip("ab", results[1:3], strict=True):
+        decision = compare_runs(
+            dataset=data,
+            spec=suite.to_evaluation_spec(
+                baseline=results[0].target, candidate=candidate.target
+            ),
+            baseline=results[0],
+            candidate=candidate,
+            suite=suite,
+        )
+        repository.put_release_decision(
+            ReleaseDecisionRecord(
+                decision_id=f"history-decision-{letter}",
+                decision=decision,
+                created_at=NOW,
+            )
+        )
+    return suite, results
+
+
+def test_suite_history_is_newest_first_with_stable_ties_and_exact_pins(
+    repository: SqlAlchemyControlPlaneRepository,
+    history_records: tuple[EvaluationSuiteVersion, tuple[RunResult, ...]],
+) -> None:
+    suite, results = history_records
+    first = repository.list_suite_runs(suite.artifact_ref, limit=2)
+    assert [item.run_id for item in first.items] == ["history-d", "history-c"]
+    assert first.items[0].target == results[-1].target
+    assert all(item.suite == suite.artifact_ref for item in first.items)
+    assert first.next_cursor is not None
+    second = repository.list_suite_runs(
+        suite.artifact_ref, limit=2, cursor=first.next_cursor
+    )
+    assert [item.run_id for item in second.items] == ["history-b", "history-a"]
+    assert second.next_cursor is None
+
+    # Matching dataset/content does not imply suite membership.
+    data = dataset()
+    legacy = execute(data, run_id="unpinned")
+    repository.put_run(RunRecord(result=legacy, created_at=NOW))
+    for revision, other in enumerate(
+        (
+            evaluation_suite(data, name="other-suite"),
+            evaluation_suite(data, revision=2),
+            evaluation_suite(data, threshold=0.9),
+        ),
+        start=1,
+    ):
+        result = execute_suite(data, other, run_id=f"other-{revision}")
+        repository.put_run(RunRecord(result=result, created_at=NOW))
+        page = repository.list_suite_runs(other.artifact_ref, limit=100)
+        assert [item.run_id for item in page.items] == [result.run_id]
+        assert (
+            repository.list_suite_decisions(other.artifact_ref, limit=100).items == ()
+        )
+        with raises(InvalidCursorError):
+            repository.list_suite_runs(
+                other.artifact_ref, limit=2, cursor=first.next_cursor
+            )
+    assert len(repository.list_suite_runs(suite.artifact_ref, limit=100).items) == 4
+
+
+def test_suite_decision_history_links_runs_and_separates_cursors(
+    repository: SqlAlchemyControlPlaneRepository,
+    history_records: tuple[EvaluationSuiteVersion, tuple[RunResult, ...]],
+) -> None:
+    suite, results = history_records
+    first = repository.list_suite_decisions(suite.artifact_ref, limit=1)
+    assert first.items[0].decision_id == "history-decision-b"
+    assert first.items[0].baseline_run_id == results[0].run_id
+    assert first.items[0].candidate_run_id == results[2].run_id
+    assert first.items[0].suite == suite.artifact_ref
+    assert first.next_cursor is not None
+    second = repository.list_suite_decisions(
+        suite.artifact_ref, limit=1, cursor=first.next_cursor
+    )
+    assert second.items[0].decision_id == "history-decision-a"
+    assert second.next_cursor is None
+    with raises(InvalidCursorError):
+        repository.list_suite_runs(
+            suite.artifact_ref, limit=1, cursor=first.next_cursor
+        )
+
+
+@mark.parametrize("limit", [0, 101, True, 1.0])
+def test_suite_history_rejects_invalid_limits(
+    repository: SqlAlchemyControlPlaneRepository, limit: int
+) -> None:
+    suite = evaluation_suite(dataset()).artifact_ref
+    for query in (repository.list_suite_runs, repository.list_suite_decisions):
+        with raises(ValueError, match="page limit"):
+            query(suite, limit=limit)
+
+
+@mark.parametrize(
+    "kind,digest",
+    [(ArtifactKind.SUITE, None), (ArtifactKind.TARGET, "sha256:" + "a" * 64)],
+)
+def test_suite_history_requires_resolved_suite(
+    repository: SqlAlchemyControlPlaneRepository, kind: ArtifactKind, digest: str | None
+) -> None:
+    ref = ArtifactRef(kind=kind, name="test", revision=1, digest=digest)
+    for query in (repository.list_suite_runs, repository.list_suite_decisions):
+        with raises(ValueError, match="resolved suite"):
+            query(ref, limit=1)
+
+
+def test_suite_history_queries_never_read_document_columns(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+    history_records: tuple[EvaluationSuiteVersion, tuple[RunResult, ...]],
+) -> None:
+    suite, _ = history_records
+    statements: list[str] = []
+
+    def record_query(
+        _conn: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _many: bool,
+    ) -> None:
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record_query)
+    try:
+        runs = repository.list_suite_runs(suite.artifact_ref, limit=1)
+        decisions = repository.list_suite_decisions(suite.artifact_ref, limit=1)
+    finally:
+        event.remove(engine, "before_cursor_execute", record_query)
+    assert len(statements) == 2
+    assert all("document" not in statement for statement in statements)
+    assert all("LIMIT" in statement for statement in statements)
+    for item in (*runs.items, *decisions.items):
+        assert {"cases", "input", "output", "document", "credentials"}.isdisjoint(
+            item.model_dump()
+        )
+
+
+def test_suite_history_constraints_and_canonical_integrity(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+    history_records: tuple[EvaluationSuiteVersion, tuple[RunResult, ...]],
+) -> None:
+    suite, _ = history_records
+    for table, key, identity, load in (
+        (runs_table, runs_table.c.run_id, "history-a", repository.get_run),
+        (
+            release_decisions_table,
+            release_decisions_table.c.decision_id,
+            "history-decision-a",
+            repository.get_release_decision,
+        ),
+    ):
+        with raises(IntegrityError), engine.begin() as connection:
+            connection.execute(
+                update(table).where(key == identity).values(suite_digest=None)
+            )
+        with engine.begin() as connection:
+            connection.execute(
+                update(table).where(key == identity).values(suite_name="changed")
+            )
+        with raises(CorruptRecordError, match="history does not match"):
+            load(identity)
+        with engine.begin() as connection:
+            connection.execute(
+                update(table)
+                .where(key == identity)
+                .values(suite_name=suite.name, suite_digest="x" * 71)
+            )
+        corrupt_ref = suite.artifact_ref.model_copy(update={"digest": "x" * 71})
+        query = (
+            repository.list_suite_runs
+            if table is runs_table
+            else repository.list_suite_decisions
+        )
+        with raises(CorruptRecordError, match="history is invalid"):
+            query(corrupt_ref, limit=100)
+
+
+def test_suite_history_migration_round_trip_preserves_evidence_and_unpinned_rows(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+    history_records: tuple[EvaluationSuiteVersion, tuple[RunResult, ...]],
+) -> None:
+    suite, results = history_records
+    repository.put_run(
+        RunRecord(result=execute(dataset(), run_id="legacy"), created_at=NOW)
+    )
+    with engine.connect() as connection:
+        original_runs = connection.execute(
+            select(runs_table.c.run_id, runs_table.c.document)
+        ).all()
+        original_decisions = connection.execute(
+            select(
+                release_decisions_table.c.decision_id,
+                release_decisions_table.c.document,
+            )
+        ).all()
+    command.downgrade(Config("alembic.ini"), "20260903_0005")
+    assert repository.schema_is_current() is False
+    command.upgrade(Config("alembic.ini"), "head")
+    assert repository.schema_is_current() is True
+    with engine.connect() as connection:
+        assert (
+            connection.execute(select(runs_table.c.run_id, runs_table.c.document)).all()
+            == original_runs
+        )
+        assert (
+            connection.execute(
+                select(
+                    release_decisions_table.c.decision_id,
+                    release_decisions_table.c.document,
+                )
+            ).all()
+            == original_decisions
+        )
+        assert connection.execute(
+            select(runs_table.c.suite_name, runs_table.c.target_name).where(
+                runs_table.c.run_id == "legacy"
+            )
+        ).one() == (None, None)
+    assert repository.get_run("history-a").result == results[0]
+    assert (
+        repository.get_release_decision("history-decision-a").decision.suite
+        == suite.artifact_ref
+    )
+    assert len(repository.list_suite_runs(suite.artifact_ref, limit=100).items) == 4
+    assert (
+        len(repository.list_suite_decisions(suite.artifact_ref, limit=100).items) == 2
     )
 
 

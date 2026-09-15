@@ -612,6 +612,33 @@ class ReleaseDecisionListRecord(FrozenModel):
     _normalize_created_at = field_validator("created_at")(_utc)
 
 
+class SuiteRunHistoryRecord(RunListRecord):
+    """Metadata-only history of one run under an exact immutable suite pin."""
+
+    suite: ArtifactRef
+    target: ArtifactRef
+
+    @model_validator(mode="after")
+    def validate_history_refs(self) -> Self:
+        if self.suite.kind is not ArtifactKind.SUITE or self.suite.digest is None:
+            raise ValueError("history requires a resolved suite")
+        if self.target.kind is not ArtifactKind.TARGET or self.target.digest is None:
+            raise ValueError("history requires a resolved target")
+        return self
+
+
+class SuiteDecisionHistoryRecord(ReleaseDecisionListRecord):
+    """Metadata-only release history; run IDs link to the detailed evidence."""
+
+    suite: ArtifactRef
+
+    @model_validator(mode="after")
+    def validate_history_ref(self) -> Self:
+        if self.suite.kind is not ArtifactKind.SUITE or self.suite.digest is None:
+            raise ValueError("history requires a resolved suite")
+        return self
+
+
 PageItem = TypeVar("PageItem")
 
 

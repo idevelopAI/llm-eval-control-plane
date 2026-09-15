@@ -15,6 +15,8 @@ from threading import Event as ThreadEvent
 from typing import Any, cast
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from fastapi.testclient import TestClient
 from httpx import Response
 from opentelemetry.trace import Tracer
@@ -448,6 +450,7 @@ def test_suite_registry_round_trips_immutable_evidence_in_postgres(
 
 def test_suite_execution_snapshots_survive_postgres_worker_restart(
     postgres_engine: Engine,
+    monkeypatch: MonkeyPatch,
 ) -> None:
     repository = _repository(postgres_engine)
     dataset = _ensure_dataset(repository).dataset
@@ -601,6 +604,72 @@ def test_suite_execution_snapshots_survive_postgres_worker_restart(
         assert decision.candidate_result_digest == candidate.result_digest
         assert decision.status is ReleaseStatus.FAILED
         assert decision.gates[0].threshold == suite.gates[0].threshold
+        history_repository = SqlAlchemyControlPlaneRepository(postgres_engine)
+        run_history = history_repository.list_suite_runs(suite.artifact_ref, limit=1)
+        assert run_history.items[0].target == candidate.target
+        assert run_history.next_cursor is not None
+        assert (
+            history_repository.list_suite_runs(
+                suite.artifact_ref, limit=1, cursor=run_history.next_cursor
+            )
+            .items[0]
+            .run_id
+            == baseline.run_id
+        )
+        decision_history = history_repository.list_suite_decisions(
+            suite.artifact_ref, limit=1
+        )
+        assert decision_history.items[0].decision_digest == decision.decision_digest
+        assert decision_history.items[0].suite == suite.artifact_ref
+
+        # This fixture requires a disposable test database. Exercise the PostgreSQL
+        # JSON backfill with real worker evidence and a missing suite registry row.
+        monkeypatch.setenv(
+            "CONTROL_PLANE_DATABASE_URL",
+            postgres_engine.url.render_as_string(hide_password=False),
+        )
+        with postgres_engine.connect() as connection:
+            before_runs = connection.execute(
+                select(runs_table.c.run_id, runs_table.c.document).order_by(
+                    runs_table.c.run_id
+                )
+            ).all()
+            before_decisions = connection.execute(
+                select(
+                    release_decisions_table.c.decision_id,
+                    release_decisions_table.c.document,
+                ).order_by(release_decisions_table.c.decision_id)
+            ).all()
+        command.downgrade(Config("alembic.ini"), "20260903_0005")
+        assert history_repository.schema_is_current() is False
+        command.upgrade(Config("alembic.ini"), "head")
+        assert history_repository.schema_is_current() is True
+        assert (
+            history_repository.list_suite_runs(suite.artifact_ref, limit=1)
+            == run_history
+        )
+        assert (
+            history_repository.list_suite_decisions(suite.artifact_ref, limit=1)
+            == decision_history
+        )
+        with postgres_engine.connect() as connection:
+            assert (
+                connection.execute(
+                    select(runs_table.c.run_id, runs_table.c.document).order_by(
+                        runs_table.c.run_id
+                    )
+                ).all()
+                == before_runs
+            )
+            assert (
+                connection.execute(
+                    select(
+                        release_decisions_table.c.decision_id,
+                        release_decisions_table.c.document,
+                    ).order_by(release_decisions_table.c.decision_id)
+                ).all()
+                == before_decisions
+            )
         assert (
             _repository(postgres_engine)
             .get_release_decision(queued_comparison.job.resource_id)
