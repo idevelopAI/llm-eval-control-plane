@@ -41,7 +41,7 @@ def upgrade() -> None:
             op.add_column(table, sa.Column(f"{prefix}_name", sa.String(128)))
             op.add_column(table, sa.Column(f"{prefix}_revision", sa.Integer()))
             op.add_column(table, sa.Column(f"{prefix}_digest", sa.String(71)))
-        assignments = {}
+        assignments: dict[str, sa.ColumnElement[object]] = {}
         for prefix in prefixes:
             for field in ("name", "revision", "digest"):
                 if dialect == "postgresql":
