@@ -69,8 +69,10 @@ The [offline suite CLI](docs/suite-cli.md) builds and validates a resolved
 protocol, runs baseline and candidate targets, and compares their pinned
 evidence without Docker, hosting, or provider API calls.
 
-The local API exposes authenticated suite registration, revision lookup, and
-suite-backed run/comparison submission. Run and decision detail responses include
+The local API exposes authenticated suite registration, revision lookup,
+suite-backed run/comparison submission, and newest-first experiment history for
+an exact suite pin. History pages use indexed metadata without loading case
+documents. Run and decision detail responses include
 the resolved `suite` reference when pinned; historical unpinned responses remain
 unchanged. See the [evaluation-suite API guide](docs/evaluation-suites.md) for
 the exact inputs, permissions, replay behavior, and compatibility boundary.
@@ -204,7 +206,8 @@ responses also contain gate results. Collection pages use bounded indexed
 discovery projections and do not load the canonical evidence documents.
 Resource collection fields are limited to identifiers, kind or status, safe
 failure codes, digests, timestamps, dataset identity and case count, execution
-mode, and comparison run IDs where applicable. Dashboard analytical routes
+mode, comparison run IDs, and resolved suite/target references where applicable.
+Dashboard analytical routes
 separately expose the score-only case and fixed aggregate fields described
 above. No response returns case inputs, expectations, target outputs, SQL, rows,
 idempotency keys, request digests, database URLs, raw operational samples, or
@@ -217,6 +220,10 @@ exception text.
 | `GET` | `/metrics` | Authenticated API Prometheus metrics |
 | `POST`, `GET` | `/v1/datasets` | Register or page dataset revisions |
 | `GET` | `/v1/dataset-revisions/{revision}/{name:path}` | Read one slash-safe dataset summary |
+| `POST`, `GET` | `/v1/suites` | Register or page immutable evaluation suites |
+| `GET` | `/v1/suite-revisions/{revision}/{name:path}` | Read one suite protocol summary |
+| `POST`, `GET` | `/v1/suite-runs` | Submit a pinned run or page exact-suite run history |
+| `POST`, `GET` | `/v1/suite-comparisons` | Submit a pinned comparison or page exact-suite release history |
 | `POST`, `GET` | `/v1/runs` | Submit or page evaluation runs |
 | `GET` | `/v1/runs/{run_id}` | Read one redacted run summary |
 | `GET` | `/v1/jobs`, `/v1/jobs/{job_id}` | Page or inspect durable job state |

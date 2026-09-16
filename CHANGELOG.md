@@ -35,6 +35,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   changing historical unpinned response documents; generated clients and strict
   dashboard validation accept only the resolved metadata projection.
 - Deterministic metric gates with direction, threshold, and regression budget.
+- Indexed, newest-first suite run and release-decision history with bounded,
+  exact-pin cursor pages and project-authorized read endpoints. The maintenance
+  migration projects only existing explicit suite pins, preserves canonical
+  evidence bytes, and leaves legacy unpinned runs outside suite history.
 - RFC 8785 canonical JSON, strict JSONL datasets, and content-derived dataset
   identities.
 - Provider-neutral target, evaluator, failure, case-result, metric-summary, and

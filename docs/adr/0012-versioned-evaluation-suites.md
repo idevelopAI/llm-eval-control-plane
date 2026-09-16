@@ -123,8 +123,13 @@ This design preserves the existing sources of truth: jobs describe execution
 lifecycle, runs describe evaluated evidence, and release decisions connect two
 exact runs through a policy. It avoids a second state machine and prevents a
 mutable experiment pointer from changing the meaning of historical evidence.
-The suite-pinned evidence is implemented; dedicated history queries and
-presentation surfaces are not implemented yet.
+Suite-pinned evidence and exact-suite history queries are implemented. History
+uses nullable relational projections populated atomically with pinned evidence,
+with all-or-none constraints and suite/time/ID indexes. The maintenance migration
+backfills only explicit existing pins without rewriting canonical documents.
+Collection reads select only metadata, newest first, with cursors bound to the
+complete suite pin and stream. Dedicated dashboard history presentation and
+target-grouping queries are not implemented yet.
 
 ### Registration is create-once; jobs pin complete snapshots
 
@@ -227,8 +232,9 @@ artifact remains subject to ADR 0011 and its build and runtime acceptance gates.
   evidence digest envelopes are implemented without changing legacy evidence
   bytes or exposing canonical suite documents through an HTTP route.
 - Suite HTTP contracts and optional detail-response provenance are implemented.
-  The offline CLI provides a local file-based workflow. History queries and
-  suite-history dashboard views still require bounded integration.
+  The offline CLI provides a local file-based workflow. Exact-suite run and
+  decision history queries are implemented; suite-history dashboard views still
+  require bounded integration.
 - Initial execution remains deliberately serial and single-invocation. A future
   sampling or concurrency model requires a new reviewed semantic contract.
 

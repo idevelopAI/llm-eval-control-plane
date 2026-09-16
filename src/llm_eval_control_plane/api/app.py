@@ -40,10 +40,14 @@ from llm_eval_control_plane.api.contracts import (
     RunSubmissionResponse,
     SuiteComparisonCreateRequest,
     SuiteCreateRequest,
+    SuiteDecisionHistoryItemResponse,
+    SuiteDecisionHistoryPage,
     SuiteListItemResponse,
     SuitePage,
     SuiteResponse,
     SuiteRunCreateRequest,
+    SuiteRunHistoryItemResponse,
+    SuiteRunHistoryPage,
 )
 from llm_eval_control_plane.api.middleware import (
     ApiBoundaryMiddleware,
@@ -144,6 +148,9 @@ NameQuery = Annotated[
     str | None,
     Query(min_length=1, max_length=128, pattern=_NAME_PATTERN),
 ]
+RequiredNameQuery = Annotated[
+    str, Query(min_length=1, max_length=128, pattern=_NAME_PATTERN)
+]
 JobKindQuery = Annotated[JobKind | None, Query()]
 JobStatusQuery = Annotated[JobStatus | None, Query()]
 ReleaseStatusQuery = Annotated[ReleaseStatus | None, Query()]
@@ -206,7 +213,7 @@ def create_app(
     app = FastAPI(
         title="LLM Evaluation Control Plane",
         summary="Durable, content-addressed evaluation and release decisions",
-        version="1.5.0",
+        version="1.6.0",
         openapi_url="/openapi.json",
         docs_url=None,
         redoc_url=None,
@@ -439,6 +446,60 @@ def create_app(
         name: Annotated[str, Path(min_length=1, max_length=128, pattern=_NAME_PATTERN)],
     ) -> SuiteResponse:
         return SuiteResponse.from_record(service.get_suite(name, revision))
+
+    @app.get(
+        "/v1/suite-runs",
+        response_model=SuiteRunHistoryPage,
+        operation_id="list_suite_run_history",
+        responses=_ERROR_RESPONSES,
+        tags=["suites"],
+        description=(
+            "Newest persisted runs under the exact registered suite pin. Metadata only."
+        ),
+    )
+    async def list_suite_runs(
+        suite_name: RequiredNameQuery,
+        suite_revision: Annotated[int, Query(gt=0)],
+        limit: LimitQuery = 50,
+        cursor: CursorQuery = None,
+    ) -> SuiteRunHistoryPage:
+        page = service.list_suite_runs(
+            suite_name, suite_revision, limit=limit, cursor=cursor
+        )
+        return SuiteRunHistoryPage(
+            items=tuple(
+                SuiteRunHistoryItemResponse.from_record(item) for item in page.items
+            ),
+            next_cursor=page.next_cursor,
+        )
+
+    @app.get(
+        "/v1/suite-comparisons",
+        response_model=SuiteDecisionHistoryPage,
+        operation_id="list_suite_decision_history",
+        responses=_ERROR_RESPONSES,
+        tags=["suites"],
+        description=(
+            "Newest persisted release decisions under the exact registered suite pin. "
+            "Metadata only."
+        ),
+    )
+    async def list_suite_decisions(
+        suite_name: RequiredNameQuery,
+        suite_revision: Annotated[int, Query(gt=0)],
+        limit: LimitQuery = 50,
+        cursor: CursorQuery = None,
+    ) -> SuiteDecisionHistoryPage:
+        page = service.list_suite_decisions(
+            suite_name, suite_revision, limit=limit, cursor=cursor
+        )
+        return SuiteDecisionHistoryPage(
+            items=tuple(
+                SuiteDecisionHistoryItemResponse.from_record(item)
+                for item in page.items
+            ),
+            next_cursor=page.next_cursor,
+        )
 
     @app.post(
         "/v1/suite-runs",
