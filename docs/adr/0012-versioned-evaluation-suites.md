@@ -131,8 +131,11 @@ Collection reads select only metadata, newest first, with cursors bound to the
 complete suite pin and stream. The local dashboard presents catalog, run, and
 decision metadata with explicit pagination and at most 100 records retained per
 collection. It validates exact suite pins and cancels superseded reads without
-changing the hosted fixture. Target-grouping queries and navigation from history
-into detailed gate review are not implemented yet.
+changing the hosted fixture. History rows can open detailed gate review after
+matching the complete suite pin and immutable decision metadata. Only the active
+historical selection supplements the bounded recent-decision picker; cases and
+distributions retain their existing redacted projections. Target-grouping queries
+are not implemented yet.
 
 ### Registration is create-once; jobs pin complete snapshots
 

@@ -59,9 +59,23 @@ cursors fail closed; a pagination failure preserves already verified records.
 Changing revisions aborts superseded reads. Any `401`/`403` clears both history
 and the release view and requires a new local connection.
 
-This view is metadata-only: opening a historical decision in the detailed gate
-review is not implemented. The hosted synthetic dashboard has no suite browser
-and makes no suite API requests.
+Select **Review gates** on a release decision to open its detailed review,
+including decisions outside the newest 20. Before requesting case or distribution
+evidence, the client checks the selected row against the decision ID, digest,
+status, timestamp, baseline/candidate run IDs, and complete suite pin. It then
+opens the first failed gate (or first gate when all pass), resets the case filter,
+and focuses the review surface. The detailed view keeps the existing redacted
+case and aggregate-only distribution boundaries.
+
+The recent-decision picker remains bounded to its original collection plus, at
+most, the currently selected historical decision. An older selection is labeled
+**Suite history**; choosing a recent decision removes the extra option. Opening
+another row cancels the prior request. A missing or inconsistent historical
+decision preserves the previous verified review with an explicit error; retry
+through that row. Authorization failure clears both panels immediately.
+
+History rows remain metadata-only until explicitly opened. The hosted synthetic
+dashboard has no suite browser and makes no suite API requests.
 
 ## Credential boundary
 
