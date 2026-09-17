@@ -39,6 +39,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   exact-pin cursor pages and project-authorized read endpoints. The maintenance
   migration projects only existing explicit suite pins, preserves canonical
   evidence bytes, and leaves legacy unpinned runs outside suite history.
+- A local-only suite-history dashboard with exact revision/digest checks,
+  independent catalog/run/decision pagination, strict metadata validation,
+  stale-request cancellation, and session clearing on lost authorization.
+  Each collection retains at most 100 records; the hosted fixture build remains
+  request-free and excludes the history client and interface.
 - RFC 8785 canonical JSON, strict JSONL datasets, and content-derived dataset
   identities.
 - Provider-neutral target, evaluator, failure, case-result, metric-summary, and
