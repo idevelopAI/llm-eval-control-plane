@@ -1,0 +1,159 @@
+.panel {
+  margin: 1rem 1.5rem;
+  padding: 1.5rem;
+  border: 1px solid #d8e2dc;
+  border-radius: 1.25rem;
+  background: #fff;
+  color: #18392d;
+  font-size: 1rem;
+}
+.heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.panel h2 {
+  margin: 0;
+  font-size: 1.5rem;
+  letter-spacing: -0.035em;
+}
+.panel h3 {
+  margin: 0 0 0.75rem;
+  font-size: 1.125rem;
+}
+.eyebrow {
+  margin: 0 0 0.375rem;
+  color: #476657;
+  text-transform: uppercase;
+  letter-spacing: 0.075em;
+  font-size: 0.875rem;
+}
+.panel button,
+.panel select {
+  font: inherit;
+  font-size: 0.875rem;
+  border: 1px solid #adc3b5;
+  padding: 0.625rem 0.875rem;
+  border-radius: 0.625rem;
+  background: #f6f9f7;
+  color: #18392d;
+}
+.panel button {
+  cursor: pointer;
+}
+.panel button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+.panel button:focus-visible,
+.panel select:focus-visible {
+  outline: 3px solid #24754c;
+  outline-offset: 3px;
+}
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 1rem 0;
+}
+.controls label {
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+.controls select {
+  max-width: 100%;
+  min-width: 0;
+}
+.protocol {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1rem;
+  border-radius: 0.75rem;
+  background: #edf4ef;
+  margin: 1rem 0 1.5rem;
+}
+.protocol span,
+.records span,
+.pagination,
+.note {
+  font-size: 0.875rem;
+}
+.panel code {
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+.grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1.5rem;
+}
+.records {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.625rem;
+}
+.records li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1rem;
+  border: 1px solid #e0e7e2;
+  border-radius: 0.75rem;
+  overflow-wrap: anywhere;
+}
+.records li > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.records strong {
+  font-size: 0.9375rem;
+}
+.badge {
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.375rem;
+  background: #edf0ee;
+  color: #344f41;
+}
+.blocked {
+  background: #fff0e7;
+  color: #853918;
+}
+.passed {
+  background: #e5f3e8;
+  color: #246b3b;
+}
+.pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.875rem;
+}
+.note {
+  margin: 1.25rem 0 0;
+  color: #476657;
+}
+.error {
+  color: #853918;
+}
+@media (max-width: 760px) {
+  .panel {
+    margin: 0.75rem;
+    padding: 1rem;
+  }
+  .grid {
+    grid-template-columns: 1fr;
+  }
+  .heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

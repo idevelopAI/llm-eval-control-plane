@@ -10,6 +10,7 @@ import {
   releaseDistributions,
 } from '@/src/test/release-evidence';
 import { demoRelease } from '@/src/features/release-decisions/demo-release';
+import { suitePage } from '@/src/test/suite-history';
 import ReleaseDashboard from './release-dashboard';
 
 const TEST_TOKEN = `cpk_${'A'.repeat(43)}`;
@@ -147,6 +148,55 @@ describe('ReleaseDashboard', () => {
     expect(
       requests.find((request) => request.url.includes('/distributions?')),
     ).toBeTruthy();
+  });
+
+  it('clears the whole live session when a suite history read loses authorization', async () => {
+    const user = userEvent.setup();
+    const releaseFetch = liveFetch();
+    const fetchMock = vi.fn(async (request: Request) => {
+      const path = new URL(request.url).pathname;
+      if (path === '/v1/suites') return jsonResponse(suitePage);
+      if (path === '/v1/suite-runs' || path === '/v1/suite-comparisons') {
+        return jsonResponse(
+          {
+            schema_version: 'api-error/v1',
+            error: {
+              code: 'permission_denied',
+              details: [],
+              message: 'private-suite-auth-sentinel',
+              request_id: 'request_live_001',
+            },
+          },
+          403,
+        );
+      }
+      return releaseFetch(request);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<ReleaseDashboard />);
+    await enterLiveMode(user);
+    await submitCredential(user);
+    await screen.findByRole('heading', { name: 'Release blocked' });
+    expect(
+      fetchMock.mock.calls.some(
+        ([request]) => new URL(request.url).pathname === '/v1/suites',
+      ),
+    ).toBe(false);
+    await user.click(
+      screen.getByRole('button', { name: 'Browse suite history' }),
+    );
+    await screen.findByRole('heading', {
+      name: 'Connect to live release evidence',
+    });
+    expect(
+      screen.queryByRole('heading', { name: 'Release blocked' }),
+    ).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Suite history' })).toBeNull();
+    expect(document.body.textContent).not.toContain('project-alpha');
+    expect(document.body.textContent).not.toContain('private-suite-auth-sentinel');
+    expect(
+      (screen.getByLabelText('Read-only access token') as HTMLInputElement).value,
+    ).toBe('');
   });
 
   it('keeps distributions available and retries case evidence independently', async () => {
