@@ -12,6 +12,21 @@ import {
   isReleaseDecisionDistributions,
   isReleaseDecisionPage,
 } from './validation';
+import {
+  isSuitePage,
+  isSuiteRunHistoryPage,
+  isSuiteDecisionHistoryPage,
+} from './suite-history-validation';
+
+export type SuitePage = components['schemas']['SuitePage'];
+export type SuiteRunHistoryPage = components['schemas']['SuiteRunHistoryPage'];
+export type SuiteDecisionHistoryPage =
+  components['schemas']['SuiteDecisionHistoryPage'];
+type SuiteQuery = NonNullable<
+  operations['list_suite_revisions']['parameters']['query']
+>;
+type SuiteHistoryQuery =
+  operations['list_suite_run_history']['parameters']['query'];
 
 export type ReleaseDecision =
   components['schemas']['ReleaseDecisionResponse'];
@@ -240,6 +255,84 @@ export function createControlPlaneClient(getCredential: CredentialSource) {
   }
 
   return {
+    async listSuites(
+      query: SuiteQuery = {},
+      signal?: AbortSignal,
+    ): Promise<ApiResult<SuitePage>> {
+      const auth = credential();
+      return request(
+        () =>
+          client.GET('/v1/suites', {
+            headers: requestHeaders(auth),
+            params: {
+              header: { 'X-Project-ID': auth.projectId },
+              query,
+            },
+            signal,
+          }),
+        (value): value is SuitePage =>
+          isSuitePage(value) &&
+          value.items.length <= (query.limit ?? 50) &&
+          (query.name == null ||
+            value.items.every((item) => item.name === query.name)),
+        signal,
+      );
+    },
+
+    async listSuiteRuns(
+      query: SuiteHistoryQuery,
+      signal?: AbortSignal,
+    ): Promise<ApiResult<SuiteRunHistoryPage>> {
+      const auth = credential();
+      return request(
+        () =>
+          client.GET('/v1/suite-runs', {
+            headers: requestHeaders(auth),
+            params: {
+              header: { 'X-Project-ID': auth.projectId },
+              query,
+            },
+            signal,
+          }),
+        (value): value is SuiteRunHistoryPage =>
+          isSuiteRunHistoryPage(value) &&
+          value.items.length <= (query.limit ?? 50) &&
+          value.items.every(
+            (item) =>
+              item.suite.name === query.suite_name &&
+              item.suite.revision === query.suite_revision,
+          ),
+        signal,
+      );
+    },
+
+    async listSuiteDecisions(
+      query: SuiteHistoryQuery,
+      signal?: AbortSignal,
+    ): Promise<ApiResult<SuiteDecisionHistoryPage>> {
+      const auth = credential();
+      return request(
+        () =>
+          client.GET('/v1/suite-comparisons', {
+            headers: requestHeaders(auth),
+            params: {
+              header: { 'X-Project-ID': auth.projectId },
+              query,
+            },
+            signal,
+          }),
+        (value): value is SuiteDecisionHistoryPage =>
+          isSuiteDecisionHistoryPage(value) &&
+          value.items.length <= (query.limit ?? 50) &&
+          value.items.every(
+            (item) =>
+              item.suite.name === query.suite_name &&
+              item.suite.revision === query.suite_revision,
+          ),
+        signal,
+      );
+    },
+
     async getReleaseDecision(
       decisionId: string,
       signal?: AbortSignal,
