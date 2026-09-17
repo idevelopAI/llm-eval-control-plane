@@ -44,6 +44,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   stale-request cancellation, and session clearing on lost authorization.
   Each collection retains at most 100 records; the hosted fixture build remains
   request-free and excludes the history client and interface.
+- Direct gate review from suite history, including decisions outside the recent
+  collection. Detail reads must match the selected immutable evidence and suite
+  pin before cases or distributions load; stale requests are canceled and failed
+  selections retain only previously verified evidence.
 - RFC 8785 canonical JSON, strict JSONL datasets, and content-derived dataset
   identities.
 - Provider-neutral target, evaluator, failure, case-result, metric-summary, and

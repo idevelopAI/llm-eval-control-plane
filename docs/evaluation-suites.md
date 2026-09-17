@@ -147,6 +147,12 @@ selected suite digest and descending ordering across pages. See the
 and authorization boundary. The offline CLI remains file-based and does not
 query the server's experiment history.
 
+An explicit **Review gates** action opens any loaded historical decision through
+the existing ID-based detail routes, even outside the newest-decision page. The
+client verifies the entire selected decision identity and suite pin before
+fetching gate cases or distributions. This adds no new endpoint, execution path,
+provider request, or hosted capability.
+
 ### Database maintenance
 
 Migration `20260915_0006` adds indexed suite projections and resolved run-target

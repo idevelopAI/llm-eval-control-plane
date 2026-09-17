@@ -26,6 +26,8 @@ review the newest decision history, failed-first gates, transition-filtered case
 scores, and privacy-bounded score, latency, and usage-unit distributions.
 The local suite-history panel groups completed runs and release decisions by
 an exact suite revision and digest, with explicit, bounded pagination.
+Historical decisions open directly in detailed gate review after their complete
+identity is verified, including decisions outside the newest collection.
 
 ![Deterministic release evidence dashboard showing a blocked release, failed gate, and redacted scoring evidence](docs/assets/release-dashboard-fixture.jpg)
 
