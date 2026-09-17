@@ -3,6 +3,7 @@
 import { useCallback, useState, useSyncExternalStore, type FormEvent } from 'react';
 
 import { ReleaseOverviewView } from './release-overview';
+import { SuiteHistoryPanel } from './suite-history-panel';
 import {
   createControlPlaneClient,
   type ReleaseDecisionPage,
@@ -204,34 +205,45 @@ export default function ReleaseDashboard() {
   }
 
   const sourceControl = (
-    <section className="source-control" aria-label="Dashboard data source">
-      <div>
-        <span className={`source-badge ${sourceMode}`}>
-          {sourceMode === 'fixture' ? 'example' : sourceMode}
-        </span>
-        <strong>
-          {sourceMode === 'fixture'
-            ? 'Public example environment'
-            : 'Local live control plane'}
-        </strong>
-      </div>
-      {sourceMode === 'fixture' ? (
-        loopbackEnabled ? (
-          <button onClick={enterLiveMode} type="button">
-            Use local live data
+    <>
+      <section className="source-control" aria-label="Dashboard data source">
+        <div>
+          <span className={`source-badge ${sourceMode}`}>
+            {sourceMode === 'fixture' ? 'example' : sourceMode}
+          </span>
+          <strong>
+            {sourceMode === 'fixture'
+              ? 'Public example environment'
+              : 'Local live control plane'}
+          </strong>
+        </div>
+        {sourceMode === 'fixture' ? (
+          loopbackEnabled ? (
+            <button onClick={enterLiveMode} type="button">
+              Use local live data
+            </button>
+          ) : null
+        ) : (
+          <button onClick={returnToFixture} type="button">
+            Disconnect and return to fixture
           </button>
-        ) : null
-      ) : (
-        <button onClick={returnToFixture} type="button">
-          Disconnect and return to fixture
-        </button>
-      )}
-      {!loopbackEnabled && sourceMode === 'fixture' ? (
-        <small>
-          Synthetic data · no credentials, API, or model requests.
-        </small>
+        )}
+        {!loopbackEnabled && sourceMode === 'fixture' ? (
+          <small>
+            Synthetic data · no credentials, API, or model requests.
+          </small>
+        ) : null}
+      </section>
+      {sourceMode === 'live' && liveProject != null ? (
+        <SuiteHistoryPanel
+          client={client}
+          onAuthenticationFailure={() => {
+            clearCredential();
+            live.disconnect();
+          }}
+        />
       ) : null}
-    </section>
+    </>
   );
 
   if (sourceMode === 'fixture') {
