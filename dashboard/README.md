@@ -25,6 +25,8 @@ Live mode supports:
 
 - the newest 20 immutable release decisions, ordered newest first;
 - decision and gate selection with cancellation of superseded requests;
+- explicitly opened suite history for a selected immutable protocol revision,
+  showing completed run metadata and release decisions pinned to its digest;
 - transition filters over redacted case evidence;
 - cursor-based case pagination, bounded to 100 cases per request and 500 cases
   retained by the browser view;
@@ -34,6 +36,32 @@ Live mode supports:
   states without silently substituting fixture data. A non-authorization failure
   in the case or distribution projection leaves the successful sibling visible
   and gives the failed panel its own retry action.
+
+### Browse suite history
+
+After connecting to the local API, select **Browse suite history**. Select a
+registered **Suite revision** to inspect its exact digest, execution mode, gate
+count, evaluated target revisions, and baseline/candidate run IDs. The panel
+does not fetch case content, execute evaluations, or select a baseline.
+
+Catalog, run, and decision pages load 20 records at a time and retain at most 100
+records each. Use **Load more suites**, **Load older runs**, or **Load older
+decisions** explicitly; the panel does not poll or prefetch. Runs and decisions
+are ordered newest first, preserving timestamp microseconds and ID tie-breaks.
+Older records remain available through the authenticated API after the display
+limit. **Refresh suites** resets the view and loads the current first pages.
+
+Unpinned legacy evidence, queued jobs, and canceled jobs are outside suite
+history. A **Blocked** release means policy failed, not that its worker failed.
+Empty, loading, and retry states never substitute synthetic evidence for a live
+response. Invalid ordering, duplicate IDs, inconsistent suite pins, or repeated
+cursors fail closed; a pagination failure preserves already verified records.
+Changing revisions aborts superseded reads. Any `401`/`403` clears both history
+and the release view and requires a new local connection.
+
+This view is metadata-only: opening a historical decision in the detailed gate
+review is not implemented. The hosted synthetic dashboard has no suite browser
+and makes no suite API requests.
 
 ## Credential boundary
 

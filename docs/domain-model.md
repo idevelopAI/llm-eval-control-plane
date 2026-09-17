@@ -119,8 +119,9 @@ These contracts are accepted in
 canonical normalization, application registration and submission services,
 PostgreSQL persistence, worker snapshot execution, and run/decision digest
 integration, authenticated suite HTTP surfaces, and local offline suite CLI
-commands and bounded experiment-history queries are implemented. Dedicated
-suite-history dashboard views are not implemented yet. Historical unpinned
+commands and bounded experiment-history queries are implemented. The local
+dashboard presents exact-suite metadata with bounded pagination; it introduces
+no mutable experiment entity or baseline selection. Historical unpinned
 evidence remains suite-unpinned and is not assigned an inferred suite.
 
 ## Execution invariants

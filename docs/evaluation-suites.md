@@ -139,9 +139,13 @@ use `/v1/jobs` for execution lifecycle state. A failed release decision can stil
 belong to a successfully completed comparison job.
 
 No mutable experiment record, target grouping, synthetic trend, automatic
-baseline selection, or current-result pointer is introduced. Dedicated dashboard
-history views are not implemented yet. The offline CLI remains file-based and
-does not query the server's experiment history.
+baseline selection, or current-result pointer is introduced. The local dashboard
+offers a metadata-only suite-history view after an explicit operator action.
+It loads 20 records per page, retains at most 100 per collection, and checks the
+selected suite digest and descending ordering across pages. See the
+[dashboard guide](../dashboard/README.md#browse-suite-history) for the workflow
+and authorization boundary. The offline CLI remains file-based and does not
+query the server's experiment history.
 
 ### Database maintenance
 
@@ -176,10 +180,11 @@ responses omit the field and retain their existing document shape; run and
 decision collection items are unchanged. Evidence digest v3 binds the complete
 suite identity and explicit execution mode; old v1/v2 evidence is not rewritten.
 
-The dashboard client accepts and validates the optional suite reference without
-changing its current review workflow. The [offline suite CLI](suite-cli.md)
-authors and executes local suite files without connecting to the API.
-Suite-history dashboard views are not yet implemented. Legacy `/v1/runs`,
+The dashboard client accepts and validates the optional suite reference and
+provides a separate local-only metadata history panel. The production fixture
+build does not include this panel or its authenticated client. The
+[offline suite CLI](suite-cli.md) authors and executes local suite files without
+connecting to the API. Legacy `/v1/runs`,
 `/v1/comparisons`, and unpinned CLI submissions remain suite-unpinned and cannot
 supply replacement policy for pinned evidence.
 

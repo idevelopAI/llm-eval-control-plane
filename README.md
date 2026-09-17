@@ -24,6 +24,8 @@ The dashboard opens in an immutable, zero-request fixture mode. When served on
 loopback, an operator can explicitly connect it to the local control plane and
 review the newest decision history, failed-first gates, transition-filtered case
 scores, and privacy-bounded score, latency, and usage-unit distributions.
+The local suite-history panel groups completed runs and release decisions by
+an exact suite revision and digest, with explicit, bounded pagination.
 
 ![Deterministic release evidence dashboard showing a blocked release, failed gate, and redacted scoring evidence](docs/assets/release-dashboard-fixture.jpg)
 
@@ -76,8 +78,10 @@ documents. Run and decision detail responses include
 the resolved `suite` reference when pinned; historical unpinned responses remain
 unchanged. See the [evaluation-suite API guide](docs/evaluation-suites.md) for
 the exact inputs, permissions, replay behavior, and compatibility boundary.
-Suite-history dashboard views are not implemented yet. Legacy run/comparison
-endpoints and CLI commands remain unpinned and cannot replace suite policy.
+The local dashboard can browse this metadata after an explicit operator action;
+it does not create runs, select baselines, or contact a provider. Legacy
+run/comparison endpoints and CLI commands remain unpinned and cannot replace
+suite policy.
 
 ### Local Compose quickstart
 
