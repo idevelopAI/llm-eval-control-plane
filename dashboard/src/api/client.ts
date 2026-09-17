@@ -22,6 +22,7 @@ export type SuitePage = components['schemas']['SuitePage'];
 export type SuiteRunHistoryPage = components['schemas']['SuiteRunHistoryPage'];
 export type SuiteDecisionHistoryPage =
   components['schemas']['SuiteDecisionHistoryPage'];
+export type SuiteDecisionHistoryItem = SuiteDecisionHistoryPage['items'][number];
 type SuiteQuery = NonNullable<
   operations['list_suite_revisions']['parameters']['query']
 >;

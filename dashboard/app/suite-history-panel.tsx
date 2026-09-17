@@ -7,6 +7,7 @@ import {
   type SuitePage,
   type SuiteRunHistoryPage,
   type SuiteDecisionHistoryPage,
+  type SuiteDecisionHistoryItem,
 } from '@/src/api/client';
 import {
   isSuitePage,
@@ -46,9 +47,15 @@ function time(value: string) {
 export function SuiteHistoryPanel({
   client,
   onAuthenticationFailure,
+  onReviewDecision,
+  selectedDecisionId = null,
+  openingDecisionId = null,
 }: {
   client: ControlPlaneClient;
   onAuthenticationFailure: () => void;
+  onReviewDecision: (item: SuiteDecisionHistoryItem) => void;
+  selectedDecisionId?: string | null;
+  openingDecisionId?: string | null;
 }) {
   const [opened, setOpened] = useState(false);
   const [catalog, setCatalog] = useState<SuitePage | null>(null);
@@ -383,6 +390,25 @@ export function SuiteHistoryPanel({
                         Candidate <code>{item.candidate_run_id}</code>
                       </span>
                       <span>{time(item.created_at)} UTC</span>
+                      <button
+                        type="button"
+                        aria-label={`Review gates for ${item.decision_id}`}
+                        aria-current={
+                          selectedDecisionId === item.decision_id
+                            ? 'true'
+                            : undefined
+                        }
+                        disabled={
+                          busy || openingDecisionId === item.decision_id
+                        }
+                        onClick={() => onReviewDecision(item)}
+                      >
+                        {openingDecisionId === item.decision_id
+                          ? 'Opening decision…'
+                          : selectedDecisionId === item.decision_id
+                            ? 'Reviewing gates'
+                            : 'Review gates'}
+                      </button>
                     </li>
                   ))}
                 </ul>
