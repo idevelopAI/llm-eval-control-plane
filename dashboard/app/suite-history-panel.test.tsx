@@ -29,7 +29,7 @@ function harness() {
     requestId: null,
   });
   const onAuthenticationFailure = vi.fn();
-  return { client, onAuthenticationFailure };
+  return { client, onAuthenticationFailure, onReviewDecision: vi.fn() };
 }
 
 async function open(user: ReturnType<typeof userEvent.setup>) {
@@ -65,6 +65,32 @@ describe('local suite history panel', () => {
     );
     await screen.findByText(/No evaluation suites registered yet/);
     expect(props.client.listSuiteRuns).not.toHaveBeenCalled();
+  });
+
+  it('passes the verified history record to review and marks opening and selected rows', async () => {
+    const props = harness();
+    const user = userEvent.setup();
+    const { rerender } = render(<SuiteHistoryPanel {...props} />);
+    await open(user);
+    const name = 'Review gates for suite-decision-001';
+    await user.click(screen.getByRole('button', { name }));
+    expect(props.onReviewDecision).toHaveBeenCalledWith(
+      suiteDecisionPage.items[0],
+    );
+    rerender(
+      <SuiteHistoryPanel {...props} openingDecisionId="suite-decision-001" />,
+    );
+    expect(
+      (screen.getByRole('button', { name }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(screen.getByText('Opening decision…')).not.toBeNull();
+    rerender(
+      <SuiteHistoryPanel {...props} selectedDecisionId="suite-decision-001" />,
+    );
+    expect(
+      screen.getByRole('button', { name }).getAttribute('aria-current'),
+    ).toBe('true');
+    expect(screen.getByText('Reviewing gates')).not.toBeNull();
   });
 
   it('rejects a different digest and recovers only through an explicit retry', async () => {
@@ -209,7 +235,8 @@ describe('local suite history panel', () => {
     expect(screen.queryByText('stale-run')).toBeNull();
     expect(screen.queryByRole('alert')).toBeNull();
     expect(
-      (screen.getByLabelText('Suite revision') as unknown as { value: string }).value,
+      (screen.getByLabelText('Suite revision') as unknown as { value: string })
+        .value,
     ).toBe('release/core@1');
   });
 

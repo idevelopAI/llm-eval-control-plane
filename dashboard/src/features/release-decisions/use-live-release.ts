@@ -10,7 +10,9 @@ import {
   type ReleaseDecisionCasePage,
   type ReleaseDecisionDistributions,
   type ReleaseDecisionPage,
+  type SuiteDecisionHistoryItem,
 } from '../../api/client';
+import { sameSuitePin } from '../../api/suite-history-validation';
 import {
   buildReleaseDashboardModel,
   gateId,
@@ -42,6 +44,7 @@ export type LiveReleaseState =
   | Readonly<{
       kind: 'loading';
       previous?: ReadyRelease;
+      openingDecisionId?: string;
       stage: 'cases' | 'decision' | 'evidence' | 'list';
     }>
   | Readonly<{ decisions: ReleaseDecisionPage; kind: 'empty'; projectId: string }>
@@ -49,6 +52,7 @@ export type LiveReleaseState =
   | Readonly<{
       kind: 'error';
       message: string;
+      operation?: 'decision';
       previous?: ReadyRelease;
       requestId: string | null;
     }>;
@@ -77,7 +81,7 @@ function authenticationFailure(error: unknown): boolean {
 }
 
 function listItemMatchesDecision(
-  item: ReleaseDecisionPage['items'][number],
+  item: ReleaseDecisionPage['items'][number] | SuiteDecisionHistoryItem,
   decision: ReleaseDecision,
 ): boolean {
   return (
@@ -146,6 +150,7 @@ export function useLiveRelease({
       caseChange,
       previous,
       projectId,
+      openingDecisionId,
     }: {
       decision: ReleaseDecision;
       decisions: ReleaseDecisionPage;
@@ -154,9 +159,10 @@ export function useLiveRelease({
       caseChange: ReleaseCaseChangeFilter;
       previous?: ReadyRelease;
       projectId: string;
+      openingDecisionId?: string;
     }) => {
       const { controller, generation } = beginRequest();
-      setState({ kind: 'loading', previous, stage: 'evidence' });
+      setState({ kind: 'loading', previous, stage: 'evidence', openingDecisionId });
       const scopedQuery = gateSlice == null ? {} : { gate_slice: gateSlice };
       const changeQuery = caseChange === 'all' ? {} : { change: caseChange };
       try {
@@ -270,6 +276,7 @@ export function useLiveRelease({
         }
         setState({
           kind: 'error',
+          operation: openingDecisionId ? 'decision' : undefined,
           previous: isAuthenticationFailure ? undefined : previous,
           ...safeError(error),
         });
@@ -391,6 +398,68 @@ export function useLiveRelease({
       loadEvidence,
       onAuthenticationFailure,
     ],
+  );
+
+  const reviewHistoricalDecision = useCallback(
+    async (projectId: string, item: SuiteDecisionHistoryItem) => {
+      const previous = readyRef.current ?? undefined;
+      // Keep the newest collection separate: one historical selection must not
+      // silently expand or reorder the bounded recent-decision picker.
+      const decisions = previous?.decisions ?? {
+        schema_version: 'release-decision-page/v1' as const,
+        items: [],
+        next_cursor: null,
+      };
+      const { controller, generation } = beginRequest();
+      setState({
+        kind: 'loading',
+        previous,
+        stage: 'decision',
+        openingDecisionId: item.decision_id,
+      });
+      try {
+        const detail = await client.getReleaseDecision(
+          item.decision_id, controller.signal,
+        );
+        if (!currentRequest(generation, controller)) return;
+        if (
+          !listItemMatchesDecision(item, detail.data) ||
+          !detail.data.suite ||
+          !sameSuitePin(item.suite, detail.data.suite)
+        ) {
+          throw new Error('Historical decision identity mismatch');
+        }
+        const gate =
+          detail.data.gates.find((candidate) => candidate.status === 'failed') ??
+          detail.data.gates[0];
+        if (!gate) throw new Error('Release decision has no gates');
+        await loadEvidence({
+          decision: detail.data,
+          decisions,
+          gateMetric: gate.metric,
+          gateSlice: gate.slice ?? null,
+          caseChange: 'all',
+          previous,
+          projectId,
+          openingDecisionId: item.decision_id,
+        });
+      } catch (error) {
+        if (!currentRequest(generation, controller) || abortError(error)) return;
+        controller.abort();
+        const isAuthenticationFailure = authenticationFailure(error);
+        if (isAuthenticationFailure) {
+          readyRef.current = null;
+          onAuthenticationFailure();
+        }
+        setState({
+          kind: 'error',
+          operation: 'decision',
+          previous: isAuthenticationFailure ? undefined : previous,
+          ...safeError(error),
+        });
+      }
+    },
+    [beginRequest, client, currentRequest, loadEvidence, onAuthenticationFailure],
   );
 
   const selectGate = useCallback(
@@ -671,6 +740,7 @@ export function useLiveRelease({
     loadMoreCases,
     retryCaseEvidence,
     retryDistributionEvidence,
+    reviewHistoricalDecision,
     selectCaseChange,
     selectDecision,
     selectGate,

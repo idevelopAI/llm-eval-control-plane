@@ -1,11 +1,12 @@
 'use client';
 
-import { useCallback, useState, useSyncExternalStore, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
 
 import { ReleaseOverviewView } from './release-overview';
 import { SuiteHistoryPanel } from './suite-history-panel';
 import {
   createControlPlaneClient,
+  type ReleaseDecision,
   type ReleaseDecisionPage,
 } from '@/src/api/client';
 import {
@@ -113,13 +114,16 @@ function DecisionPicker({
   busy,
   decisions,
   onSelect,
-  selectedDecisionId,
+  selectedDecision,
 }: {
   busy: boolean;
   decisions: ReleaseDecisionPage;
   onSelect: (decisionId: string) => void;
-  selectedDecisionId: string;
+  selectedDecision: ReleaseDecision;
 }) {
+  const outsideRecent = !decisions.items.some(
+    (item) => item.decision_id === selectedDecision.decision_id,
+  );
   return (
     <section className="decision-picker" aria-label="Live decision history">
       <label htmlFor="live-decision">Decision history</label>
@@ -128,8 +132,14 @@ function DecisionPicker({
         disabled={busy}
         id="live-decision"
         onChange={(event) => onSelect(event.currentTarget.value)}
-        value={selectedDecisionId}
+        value={selectedDecision.decision_id}
       >
+        {outsideRecent ? (
+          <option value={selectedDecision.decision_id}>
+            Suite history · {decisionTimestamp(selectedDecision.created_at)} UTC ·{' '}
+            {selectedDecision.decision_id}
+          </option>
+        ) : null}
         {decisions.items.map((item) => (
           <option key={item.decision_id} value={item.decision_id}>
             {item.status === 'failed' ? 'Blocked' : 'Passed'} ·{' '}
@@ -142,6 +152,9 @@ function DecisionPicker({
         {decisions.items.length === 1 ? '' : 's'} loaded
         {decisions.next_cursor ? ' · older decisions available through the API' : ''}
       </small>
+      {outsideRecent ? (
+        <small>Selected from suite history, outside the newest collection.</small>
+      ) : null}
     </section>
   );
 }
@@ -151,6 +164,7 @@ export default function ReleaseDashboard() {
   const [fixtureModel, setFixtureModel] = useState(demoDashboardModel);
   const [credentialError, setCredentialError] = useState<string | null>(null);
   const [liveProject, setLiveProject] = useState<string | null>(null);
+  const pendingReviewFocus = useRef<string | null>(null);
   const loopbackEnabled = useSyncExternalStore(
     subscribeToLocation,
     browserLoopbackSnapshot,
@@ -166,6 +180,22 @@ export default function ReleaseDashboard() {
     client,
     onAuthenticationFailure: clearCredential,
   });
+
+  useEffect(() => {
+    if (live.state.kind === 'loading') return;
+    if (
+      live.state.kind === 'ready' &&
+      live.state.value.decision.decision_id === pendingReviewFocus.current
+    ) {
+      document.getElementById('overview')?.focus();
+    }
+    pendingReviewFocus.current = null;
+  }, [live.state]);
+
+  const displayedDecision =
+    live.state.kind === 'ready'
+      ? live.state.value.decision
+      : 'previous' in live.state ? live.state.previous?.decision : undefined;
 
   function enterLiveMode() {
     if (!loopbackEnabled) return;
@@ -237,6 +267,14 @@ export default function ReleaseDashboard() {
       {sourceMode === 'live' && liveProject != null ? (
         <SuiteHistoryPanel
           client={client}
+          selectedDecisionId={displayedDecision?.decision_id}
+          openingDecisionId={
+            live.state.kind === 'loading' ? live.state.openingDecisionId : null
+          }
+          onReviewDecision={(item) => {
+            pendingReviewFocus.current = item.decision_id;
+            void live.reviewHistoricalDecision(liveProject, item);
+          }}
           onAuthenticationFailure={() => {
             clearCredential();
             live.disconnect();
@@ -331,9 +369,18 @@ export default function ReleaseDashboard() {
   return (
     <>
       {sourceControl}
+      {live.state.kind === 'loading' && live.state.openingDecisionId ? (
+        <div className="inline-live-error" role="status">
+          Opening historical decision… The previous verified decision remains visible.
+        </div>
+      ) : null}
       {live.state.kind === 'error' ? (
         <div className="inline-live-error" role="alert">
-          <strong>Selected gate evidence could not be refreshed.</strong>{' '}
+          <strong>
+            {live.state.operation === 'decision'
+              ? 'Selected decision could not be opened. The previous verified decision remains visible.'
+              : 'Selected gate evidence could not be refreshed.'}
+          </strong>{' '}
           {live.state.message}
           {live.state.requestId ? ` Request ID: ${live.state.requestId}` : ''}
         </div>
@@ -341,10 +388,14 @@ export default function ReleaseDashboard() {
       <DecisionPicker
         busy={live.state.kind === 'loading'}
         decisions={ready.decisions}
-        onSelect={(decisionId) => void live.selectDecision(decisionId)}
-        selectedDecisionId={ready.decision.decision_id}
+        onSelect={(decisionId) => {
+          pendingReviewFocus.current = null;
+          void live.selectDecision(decisionId);
+        }}
+        selectedDecision={ready.decision}
       />
       <ReleaseOverviewView
+        key={ready.decision.decision_id}
         busy={live.state.kind === 'loading'}
         caseChangeFilter={ready.caseChange}
         caseDisplayLimitReached={
