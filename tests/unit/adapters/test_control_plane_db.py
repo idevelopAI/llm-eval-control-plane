@@ -176,12 +176,18 @@ def execute_suite(
     *,
     run_id: str,
     target_revision: int = 1,
+    target_name: str = "fake/deterministic",
+    scenario_overrides: dict[str, str] | None = None,
 ) -> RunResult:
     return asyncio.run(
         InProcessRunner(clock=SequenceClock((0.0, 0.005))).run(
             run_id=run_id,
             dataset=data,
-            target=DeterministicFakeTarget(revision=target_revision),
+            target=DeterministicFakeTarget(
+                name=target_name,
+                revision=target_revision,
+                scenario_overrides=scenario_overrides,
+            ),
             evaluators=build_evaluators(
                 (BuiltInEvaluatorKind.EXACT_MATCH, BuiltInEvaluatorKind.USAGE)
             ),
@@ -222,6 +228,338 @@ def history_records(
             )
         )
     return suite, results
+
+
+def test_target_groups_deduplicate_and_page_by_complete_identity(
+    repository: SqlAlchemyControlPlaneRepository,
+    history_records: tuple[EvaluationSuiteVersion, tuple[RunResult, ...]],
+) -> None:
+    suite, results = history_records
+    extra = [
+        execute_suite(dataset(), suite, run_id="repeat"),
+        execute_suite(dataset(), suite, run_id="revision-ten", target_revision=10),
+        execute_suite(dataset(), suite, run_id="uppercase-name", target_name="Fake/a"),
+        execute_suite(
+            dataset(),
+            suite,
+            run_id="different-content",
+            scenario_overrides={"case-001": "mismatch"},
+        ),
+    ]
+    for result in extra:
+        repository.put_run(RunRecord(result=result, created_at=NOW))
+    expected = sorted(
+        {item.target for item in (*results, *extra)},
+        key=lambda ref: (ref.name, ref.revision, ref.digest or ""),
+    )
+    found: list[ArtifactRef] = []
+    cursor = None
+    while True:
+        page = repository.list_suite_targets(suite.artifact_ref, limit=2, cursor=cursor)
+        assert all(item.suite == suite.artifact_ref for item in page.items)
+        found.extend(item.target for item in page.items)
+        cursor = page.next_cursor
+        if cursor is None:
+            break
+    assert found == expected
+    assert len(found) == 7
+    assert (
+        len(
+            [
+                ref
+                for ref in found
+                if ref.name == results[0].target.name and ref.revision == 1
+            ]
+        )
+        == 2
+    )
+    for reference in found:
+        history = repository.list_suite_runs(
+            suite.artifact_ref, target=reference, limit=100
+        )
+        assert history.items and all(item.target == reference for item in history.items)
+
+
+def test_target_pair_groups_are_directed_and_derived_from_decisions(
+    repository: SqlAlchemyControlPlaneRepository,
+    history_records: tuple[EvaluationSuiteVersion, tuple[RunResult, ...]],
+) -> None:
+    suite, results = history_records
+    original = repository.get_release_decision("history-decision-a")
+    repository.put_release_decision(
+        original.model_copy(update={"decision_id": "repeated-decision"})
+    )
+    reversed_decision = compare_runs(
+        dataset=dataset(),
+        baseline=results[1],
+        candidate=results[0],
+        suite=suite,
+        spec=suite.to_evaluation_spec(
+            baseline=results[1].target, candidate=results[0].target
+        ),
+    )
+    repository.put_release_decision(
+        ReleaseDecisionRecord(
+            decision_id="reversed-decision",
+            decision=reversed_decision,
+            created_at=NOW,
+        )
+    )
+    pairs: list[tuple[ArtifactRef, ArtifactRef]] = []
+    cursor = None
+    while True:
+        page = repository.list_suite_target_pairs(
+            suite.artifact_ref, limit=1, cursor=cursor
+        )
+        pairs.extend(
+            (item.baseline_target, item.candidate_target) for item in page.items
+        )
+        cursor = page.next_cursor
+        if cursor is None:
+            break
+    assert pairs == [
+        (results[0].target, results[1].target),
+        (results[0].target, results[2].target),
+        (results[1].target, results[0].target),
+    ]
+    # The fourth target has runs but no release decision; never invent a pair.
+    assert all(results[3].target not in pair for pair in pairs)
+    first = repository.list_suite_decisions(
+        suite.artifact_ref,
+        limit=1,
+        baseline_target=results[0].target,
+        candidate_target=results[1].target,
+    )
+    assert first.items[0].decision_id == "repeated-decision"
+    assert first.next_cursor is not None
+    second = repository.list_suite_decisions(
+        suite.artifact_ref,
+        limit=1,
+        cursor=first.next_cursor,
+        baseline_target=results[0].target,
+        candidate_target=results[1].target,
+    )
+    assert second.items[0].decision_id == "history-decision-a"
+    assert second.next_cursor is None
+    with raises(InvalidCursorError):
+        repository.list_suite_decisions(
+            suite.artifact_ref, limit=1, cursor=first.next_cursor
+        )
+    with raises(InvalidCursorError):
+        repository.list_suite_decisions(
+            suite.artifact_ref,
+            limit=1,
+            cursor=first.next_cursor,
+            baseline_target=results[1].target,
+            candidate_target=results[0].target,
+        )
+
+
+def test_target_pair_grouping_separates_same_revision_different_content(
+    repository: SqlAlchemyControlPlaneRepository,
+    history_records: tuple[EvaluationSuiteVersion, tuple[RunResult, ...]],
+) -> None:
+    suite, results = history_records
+    alternate = execute_suite(
+        dataset(),
+        suite,
+        run_id="alternate-target",
+        target_revision=2,
+        scenario_overrides={"case-001": "mismatch"},
+    )
+    repository.put_run(RunRecord(result=alternate, created_at=NOW))
+    decision = compare_runs(
+        dataset=dataset(),
+        baseline=results[0],
+        candidate=alternate,
+        suite=suite,
+        spec=suite.to_evaluation_spec(
+            baseline=results[0].target, candidate=alternate.target
+        ),
+    )
+    repository.put_release_decision(
+        ReleaseDecisionRecord(
+            decision_id="alternate-decision", decision=decision, created_at=NOW
+        )
+    )
+    pairs = repository.list_suite_target_pairs(suite.artifact_ref, limit=100).items
+    assert len(pairs) == 3
+    assert {
+        item.candidate_target.digest
+        for item in pairs
+        if item.candidate_target.revision == 2
+    } == {results[1].target.digest, alternate.target.digest}
+    selected = repository.list_suite_decisions(
+        suite.artifact_ref,
+        limit=100,
+        baseline_target=results[0].target,
+        candidate_target=alternate.target,
+    )
+    assert [item.decision_id for item in selected.items] == ["alternate-decision"]
+
+
+def test_target_group_and_run_cursors_reject_scope_changes(
+    repository: SqlAlchemyControlPlaneRepository,
+    history_records: tuple[EvaluationSuiteVersion, tuple[RunResult, ...]],
+) -> None:
+    suite, results = history_records
+    extra = execute_suite(dataset(), suite, run_id="repeat")
+    repository.put_run(RunRecord(result=extra, created_at=NOW))
+    page = repository.list_suite_runs(
+        suite.artifact_ref, limit=1, target=results[0].target
+    )
+    assert page.next_cursor is not None
+    next_page = repository.list_suite_runs(
+        suite.artifact_ref, limit=1, cursor=page.next_cursor, target=results[0].target
+    )
+    assert next_page.items[0].run_id == "history-a"
+    for target in (
+        None,
+        results[1].target,
+        results[0].target.model_copy(update={"digest": "sha256:" + "0" * 64}),
+    ):
+        with raises(InvalidCursorError):
+            repository.list_suite_runs(
+                suite.artifact_ref, limit=1, cursor=page.next_cursor, target=target
+            )
+    groups = repository.list_suite_targets(suite.artifact_ref, limit=1)
+    assert groups.next_cursor is not None
+    with raises(InvalidCursorError):
+        repository.list_suite_target_pairs(
+            suite.artifact_ref, limit=1, cursor=groups.next_cursor
+        )
+    for field, value in (
+        ("name", "other"),
+        ("revision", 2),
+        ("digest", "sha256:" + "0" * 64),
+    ):
+        other = suite.artifact_ref.model_copy(update={field: value})
+        assert repository.list_suite_targets(other, limit=100).items == ()
+        assert repository.list_suite_target_pairs(other, limit=100).items == ()
+        with raises(InvalidCursorError):
+            repository.list_suite_targets(other, limit=1, cursor=groups.next_cursor)
+
+
+@mark.parametrize("pair", [False, True])
+@mark.parametrize(
+    "key",
+    [
+        [],
+        ["target", True, "sha256:" + "a" * 64],
+        ["target", 1, None],
+        ["bad name", 1, "sha256:" + "a" * 64],
+        ["target", 0, "sha256:" + "a" * 64],
+    ],
+)
+def test_target_group_cursors_validate_complete_key_shapes(
+    repository: SqlAlchemyControlPlaneRepository,
+    pair: bool,
+    key: list[JsonValue],
+) -> None:
+    suite = evaluation_suite(dataset()).artifact_ref
+    cursor = _encode_cursor(
+        stream="suite-target-pairs" if pair else "suite-targets",
+        filters={
+            "suite_name": suite.name,
+            "suite_revision": suite.revision,
+            "suite_digest": suite.digest,
+            "order": "identity-asc",
+        },
+        key=key * 2 if pair else key,
+    )
+    query = (
+        repository.list_suite_target_pairs if pair else repository.list_suite_targets
+    )
+    with raises(InvalidCursorError):
+        query(suite, limit=1, cursor=cursor)
+
+
+def test_target_queries_select_only_bounded_metadata(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+    history_records: tuple[EvaluationSuiteVersion, tuple[RunResult, ...]],
+) -> None:
+    suite, results = history_records
+    statements: list[str] = []
+
+    def record_query(
+        _conn: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _many: bool,
+    ) -> None:
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record_query)
+    try:
+        repository.list_suite_targets(suite.artifact_ref, limit=1)
+        repository.list_suite_target_pairs(suite.artifact_ref, limit=1)
+        repository.list_suite_runs(
+            suite.artifact_ref, limit=1, target=results[0].target
+        )
+        repository.list_suite_decisions(
+            suite.artifact_ref,
+            limit=1,
+            baseline_target=results[0].target,
+            candidate_target=results[1].target,
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", record_query)
+    assert len(statements) == 4
+    assert all("document" not in sql and "LIMIT" in sql for sql in statements)
+
+
+def test_target_queries_reject_incomplete_references_and_sanitize_storage_errors(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    suite = evaluation_suite(dataset()).artifact_ref
+    for target in (
+        ArtifactRef(kind=ArtifactKind.TARGET, name="test", revision=1),
+        suite,
+    ):
+        with raises(ValueError, match="resolved target"):
+            repository.list_suite_runs(suite, target=target, limit=1)
+    with raises(ValueError, match="complete"):
+        repository.list_suite_decisions(suite, baseline_target=suite, limit=1)
+    for query in (repository.list_suite_targets, repository.list_suite_target_pairs):
+        with raises(ValueError, match="page limit"):
+            query(suite, limit=101)
+        with raises(ValueError, match="resolved suite"):
+            query(
+                ArtifactRef(kind=ArtifactKind.TARGET, name="test", revision=1), limit=1
+            )
+
+    def unavailable() -> None:
+        raise SQLAlchemyError("private-database-sentinel")
+
+    monkeypatch.setattr(engine, "connect", unavailable)
+    for query in (repository.list_suite_targets, repository.list_suite_target_pairs):
+        with raises(
+            ControlPlaneRepositoryError, match="Could not list target groups"
+        ) as error:
+            query(suite, limit=1)
+        assert "private" not in str(error.value)
+
+
+def test_target_groups_reject_corrupt_projected_targets(
+    engine: Engine,
+    repository: SqlAlchemyControlPlaneRepository,
+    history_records: tuple[EvaluationSuiteVersion, tuple[RunResult, ...]],
+) -> None:
+    suite, _ = history_records
+    with engine.begin() as connection:
+        connection.execute(
+            update(runs_table)
+            .where(runs_table.c.run_id == "history-a")
+            .values(target_digest="x" * 71)
+        )
+    for query in (repository.list_suite_targets, repository.list_suite_target_pairs):
+        with raises(CorruptRecordError, match="target group is invalid"):
+            query(suite.artifact_ref, limit=100)
 
 
 def test_suite_history_is_newest_first_with_stable_ties_and_exact_pins(
