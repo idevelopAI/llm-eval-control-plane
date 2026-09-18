@@ -48,6 +48,10 @@ from llm_eval_control_plane.api.contracts import (
     SuiteRunCreateRequest,
     SuiteRunHistoryItemResponse,
     SuiteRunHistoryPage,
+    SuiteTargetGroupPage,
+    SuiteTargetGroupResponse,
+    SuiteTargetPairGroupPage,
+    SuiteTargetPairGroupResponse,
 )
 from llm_eval_control_plane.api.middleware import (
     ApiBoundaryMiddleware,
@@ -75,6 +79,7 @@ from llm_eval_control_plane.application.control_plane import (
     SuiteComparisonSubmission,
     SuiteRunSubmission,
 )
+from llm_eval_control_plane.domain.artifacts import ArtifactKind, ArtifactRef
 from llm_eval_control_plane.domain.comparison import CaseChange, ReleaseStatus
 from llm_eval_control_plane.domain.control_plane import JobKind, JobStatus, ListOrder
 from llm_eval_control_plane.observability import Observability
@@ -151,6 +156,24 @@ NameQuery = Annotated[
 RequiredNameQuery = Annotated[
     str, Query(min_length=1, max_length=128, pattern=_NAME_PATTERN)
 ]
+TargetRevisionQuery = Annotated[int | None, Query(gt=0)]
+TargetDigestQuery = Annotated[str | None, Query(pattern=r"^sha256:[0-9a-f]{64}$")]
+
+
+def _target_filter(
+    name: str | None, revision: int | None, digest: str | None
+) -> ArtifactRef | None:
+    if name is None and revision is None and digest is None:
+        return None
+    if name is None or revision is None or digest is None:
+        raise InvalidSubmissionError(
+            "Target filters require name, revision, and digest"
+        )
+    return ArtifactRef(
+        kind=ArtifactKind.TARGET, name=name, revision=revision, digest=digest
+    )
+
+
 JobKindQuery = Annotated[JobKind | None, Query()]
 JobStatusQuery = Annotated[JobStatus | None, Query()]
 ReleaseStatusQuery = Annotated[ReleaseStatus | None, Query()]
@@ -462,9 +485,16 @@ def create_app(
         suite_revision: Annotated[int, Query(gt=0)],
         limit: LimitQuery = 50,
         cursor: CursorQuery = None,
+        target_name: NameQuery = None,
+        target_revision: TargetRevisionQuery = None,
+        target_digest: TargetDigestQuery = None,
     ) -> SuiteRunHistoryPage:
         page = service.list_suite_runs(
-            suite_name, suite_revision, limit=limit, cursor=cursor
+            suite_name,
+            suite_revision,
+            limit=limit,
+            cursor=cursor,
+            target=_target_filter(target_name, target_revision, target_digest),
         )
         return SuiteRunHistoryPage(
             items=tuple(
@@ -489,14 +519,89 @@ def create_app(
         suite_revision: Annotated[int, Query(gt=0)],
         limit: LimitQuery = 50,
         cursor: CursorQuery = None,
+        baseline_target_name: NameQuery = None,
+        baseline_target_revision: TargetRevisionQuery = None,
+        baseline_target_digest: TargetDigestQuery = None,
+        candidate_target_name: NameQuery = None,
+        candidate_target_revision: TargetRevisionQuery = None,
+        candidate_target_digest: TargetDigestQuery = None,
     ) -> SuiteDecisionHistoryPage:
+        baseline = _target_filter(
+            baseline_target_name, baseline_target_revision, baseline_target_digest
+        )
+        candidate = _target_filter(
+            candidate_target_name, candidate_target_revision, candidate_target_digest
+        )
+        if (baseline is None) != (candidate is None):
+            raise InvalidSubmissionError(
+                "Target pair filters require both complete references"
+            )
         page = service.list_suite_decisions(
-            suite_name, suite_revision, limit=limit, cursor=cursor
+            suite_name,
+            suite_revision,
+            limit=limit,
+            cursor=cursor,
+            baseline_target=baseline,
+            candidate_target=candidate,
         )
         return SuiteDecisionHistoryPage(
             items=tuple(
                 SuiteDecisionHistoryItemResponse.from_record(item)
                 for item in page.items
+            ),
+            next_cursor=page.next_cursor,
+        )
+
+    @app.get(
+        "/v1/suite-targets",
+        response_model=SuiteTargetGroupPage,
+        operation_id="list_suite_target_groups",
+        responses=_ERROR_RESPONSES,
+        tags=["suites"],
+        description=(
+            "Distinct resolved targets in persisted suite runs, "
+            "ordered by exact identity. Metadata only."
+        ),
+    )
+    async def list_suite_targets(
+        suite_name: RequiredNameQuery,
+        suite_revision: Annotated[int, Query(gt=0)],
+        limit: LimitQuery = 50,
+        cursor: CursorQuery = None,
+    ) -> SuiteTargetGroupPage:
+        page = service.list_suite_targets(
+            suite_name, suite_revision, limit=limit, cursor=cursor
+        )
+        return SuiteTargetGroupPage(
+            items=tuple(
+                SuiteTargetGroupResponse.from_record(item) for item in page.items
+            ),
+            next_cursor=page.next_cursor,
+        )
+
+    @app.get(
+        "/v1/suite-target-pairs",
+        response_model=SuiteTargetPairGroupPage,
+        operation_id="list_suite_target_pair_groups",
+        responses=_ERROR_RESPONSES,
+        tags=["suites"],
+        description=(
+            "Distinct baseline/candidate target pairs in persisted suite decisions, "
+            "ordered by exact identity. Metadata only."
+        ),
+    )
+    async def list_suite_target_pairs(
+        suite_name: RequiredNameQuery,
+        suite_revision: Annotated[int, Query(gt=0)],
+        limit: LimitQuery = 50,
+        cursor: CursorQuery = None,
+    ) -> SuiteTargetPairGroupPage:
+        page = service.list_suite_target_pairs(
+            suite_name, suite_revision, limit=limit, cursor=cursor
+        )
+        return SuiteTargetPairGroupPage(
+            items=tuple(
+                SuiteTargetPairGroupResponse.from_record(item) for item in page.items
             ),
             next_cursor=page.next_cursor,
         )
