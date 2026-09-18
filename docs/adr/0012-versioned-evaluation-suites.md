@@ -134,8 +134,13 @@ collection. It validates exact suite pins and cancels superseded reads without
 changing the hosted fixture. History rows can open detailed gate review after
 matching the complete suite pin and immutable decision metadata. Only the active
 historical selection supplements the bounded recent-decision picker; cases and
-distributions retain their existing redacted projections. Target-grouping queries
-are not implemented yet.
+distributions retain their existing redacted projections. Metadata-only target
+and directed target-pair discovery now derives groups from persisted suite runs
+and decision-to-run joins. Exact target filters bind name, revision, and digest
+into history cursors without introducing mutable experiment records or new
+schema projections. Group discovery uses bytewise identity ordering, while
+filtered evidence remains newest-first. Dashboard group selection remains a
+follow-up; the authenticated API is available locally.
 
 ### Registration is create-once; jobs pin complete snapshots
 

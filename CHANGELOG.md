@@ -48,6 +48,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   collection. Detail reads must match the selected immutable evidence and suite
   pin before cases or distributions load; stale requests are canceled and failed
   selections retain only previously verified evidence.
+- Project-authorized discovery of exact suite target groups and directed
+  baseline/candidate target pairs, plus complete-identity filters on existing
+  run and decision history. Group pages deduplicate persisted metadata and bind
+  cursors to the suite and stream; filtered history cursors bind the complete
+  target selection. No evaluation execution, new migration, or hosted capability
+  is added. Dashboard group controls remain a follow-up.
 - RFC 8785 canonical JSON, strict JSONL datasets, and content-derived dataset
   identities.
 - Provider-neutral target, evaluator, failure, case-result, metric-summary, and
