@@ -28,6 +28,9 @@ The local suite-history panel groups completed runs and release decisions by
 an exact suite revision and digest, with explicit, bounded pagination.
 Historical decisions open directly in detailed gate review after their complete
 identity is verified, including decisions outside the newest collection.
+The local API also discovers exact target and baseline/candidate groups and
+filters their histories by full versioned identity; dashboard group controls are
+not yet available.
 
 ![Deterministic release evidence dashboard showing a blocked release, failed gate, and redacted scoring evidence](docs/assets/release-dashboard-fixture.jpg)
 

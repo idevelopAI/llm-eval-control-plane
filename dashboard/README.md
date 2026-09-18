@@ -77,6 +77,12 @@ through that row. Authorization failure clears both panels immediately.
 History rows remain metadata-only until explicitly opened. The hosted synthetic
 dashboard has no suite browser and makes no suite API requests.
 
+The local API now supports [target-group discovery and exact-target history
+filters](../docs/evaluation-suites.md#target-grouped-history). Dashboard controls
+for these groups are not implemented yet; this panel still shows suite-wide
+history. Generated API types include the new read contracts without enabling any
+additional browser requests.
+
 ## Credential boundary
 
 Use a project credential with only `control-plane:read`. The raw value stays in
