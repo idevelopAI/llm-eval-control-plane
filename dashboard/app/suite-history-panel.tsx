@@ -8,21 +8,39 @@ import {
   type SuiteRunHistoryPage,
   type SuiteDecisionHistoryPage,
   type SuiteDecisionHistoryItem,
+  type SuiteTargetGroupPage,
+  type SuiteTargetPairGroupPage,
 } from '@/src/api/client';
 import {
   isSuitePage,
   isSuiteRunHistoryPage,
   isSuiteDecisionHistoryPage,
   sameSuitePin,
+  sameTargetPin,
+  isSuiteTargetGroupPage,
+  isSuiteTargetPairGroupPage,
   type SuitePin,
 } from '@/src/api/suite-history-validation';
 import styles from './suite-history-panel.module.css';
+import {
+  TargetHistoryFilters,
+  ALL_TARGETS,
+  runTargetFilter,
+  decisionTargetFilter,
+  type HistoryFilters,
+} from './target-history-filters';
 
 type Suite = SuitePage['items'][number];
 type History = {
   suite: Suite;
   runs: SuiteRunHistoryPage;
   decisions: SuiteDecisionHistoryPage;
+  filters: HistoryFilters;
+};
+type Groups = {
+  suite: Suite;
+  targets: SuiteTargetGroupPage;
+  pairs: SuiteTargetPairGroupPage;
 };
 const PAGE_SIZE = 20;
 const DISPLAY_LIMIT = 100;
@@ -53,7 +71,10 @@ export function SuiteHistoryPanel({
 }: {
   client: ControlPlaneClient;
   onAuthenticationFailure: () => void;
-  onReviewDecision: (item: SuiteDecisionHistoryItem) => void;
+  onReviewDecision: (
+    item: SuiteDecisionHistoryItem,
+    pair?: SuiteTargetPairGroupPage['items'][number],
+  ) => void;
   selectedDecisionId?: string | null;
   openingDecisionId?: string | null;
 }) {
@@ -61,6 +82,8 @@ export function SuiteHistoryPanel({
   const [catalog, setCatalog] = useState<SuitePage | null>(null);
   const [selected, setSelected] = useState<Suite | null>(null);
   const [history, setHistory] = useState<History | null>(null);
+  const [groups, setGroups] = useState<Groups | null>(null);
+  const [filters, setFilters] = useState<HistoryFilters>(ALL_TARGETS);
   const [busy, setBusy] = useState(false);
   const [issue, setIssue] = useState<string | null>(null);
   const controller = useRef<AbortController | null>(null);
@@ -96,6 +119,8 @@ export function SuiteHistoryPanel({
         setHistory(null);
         setCatalog(null);
         setSelected(null);
+        setGroups(null);
+        setFilters(ALL_TARGETS);
         onAuthenticationFailure();
       } else {
         setIssue(
@@ -110,6 +135,7 @@ export function SuiteHistoryPanel({
   async function readHistory(
     suite: Suite,
     signal: AbortSignal,
+    selection: HistoryFilters = ALL_TARGETS,
   ): Promise<History> {
     const query = {
       suite_name: suite.name,
@@ -117,17 +143,56 @@ export function SuiteHistoryPanel({
       limit: PAGE_SIZE,
     };
     const [runs, decisions] = await Promise.all([
-      client.listSuiteRuns(query, signal),
-      client.listSuiteDecisions(query, signal),
+      client.listSuiteRuns(
+        { ...query, ...runTargetFilter(selection) },
+        signal,
+      ),
+      client.listSuiteDecisions(
+        { ...query, ...decisionTargetFilter(selection) },
+        signal,
+      ),
     ]);
     const pin = suiteRef(suite);
     if (
       !runs.data.items.every((item) => sameSuitePin(item.suite, pin)) ||
-      !decisions.data.items.every((item) => sameSuitePin(item.suite, pin))
+      !decisions.data.items.every((item) => sameSuitePin(item.suite, pin)) ||
+      (selection.target &&
+        !runs.data.items.every((item) =>
+          sameTargetPin(item.target, selection.target!),
+        ))
     ) {
       throw new Error('Suite history identity mismatch');
     }
-    return { suite, runs: runs.data, decisions: decisions.data };
+    return {
+      suite,
+      runs: runs.data,
+      decisions: decisions.data,
+      filters: selection,
+    };
+  }
+
+  async function readSuite(suite: Suite, signal: AbortSignal) {
+    const query = {
+      suite_name: suite.name,
+      suite_revision: suite.revision,
+      limit: PAGE_SIZE,
+    };
+    const [next, targets, pairs] = await Promise.all([
+      readHistory(suite, signal),
+      client.listSuiteTargets(query, signal),
+      client.listSuiteTargetPairs(query, signal),
+    ]);
+    const pin = suiteRef(suite);
+    if (
+      !targets.data.items.every((item) => sameSuitePin(item.suite, pin)) ||
+      !pairs.data.items.every((item) => sameSuitePin(item.suite, pin))
+    ) {
+      throw new Error('Target group identity mismatch');
+    }
+    return {
+      history: next,
+      groups: { suite, targets: targets.data, pairs: pairs.data },
+    };
   }
 
   function refresh() {
@@ -135,15 +200,18 @@ export function SuiteHistoryPanel({
     setCatalog(null);
     setHistory(null);
     setSelected(null);
+    setGroups(null);
+    setFilters(ALL_TARGETS);
     void execute(async (signal) => {
       const result = await client.listSuites({ limit: PAGE_SIZE }, signal);
       if (signal.aborted) return () => undefined;
       const suite = result.data.items[0] ?? null;
-      const next = suite ? await readHistory(suite, signal) : null;
+      const next = suite ? await readSuite(suite, signal) : null;
       return () => {
         setCatalog(result.data);
         setSelected(suite);
-        setHistory(next);
+        setHistory(next?.history ?? null);
+        setGroups(next?.groups ?? null);
       };
     });
   }
@@ -151,9 +219,64 @@ export function SuiteHistoryPanel({
   function select(suite: Suite) {
     setSelected(suite);
     setHistory(null);
+    setGroups(null);
+    setFilters(ALL_TARGETS);
     void execute(async (signal) => {
-      const next = await readHistory(suite, signal);
+      const next = await readSuite(suite, signal);
+      return () => {
+        setHistory(next.history);
+        setGroups(next.groups);
+      };
+    });
+  }
+
+  function filter(selection: HistoryFilters) {
+    if (!groups) return;
+    setFilters(selection);
+    setHistory(null);
+    void execute(async (signal) => {
+      const next = await readHistory(groups.suite, signal, selection);
       return () => setHistory(next);
+    });
+  }
+
+  function loadGroups(kind: 'targets' | 'pairs') {
+    if (!groups || busy) return;
+    const current = groups;
+    const previous = current[kind];
+    const cursor = previous.next_cursor;
+    if (!cursor || previous.items.length >= DISPLAY_LIMIT) return;
+    void execute(async (signal) => {
+      const query = {
+        suite_name: current.suite.name,
+        suite_revision: current.suite.revision,
+        cursor,
+        limit: Math.min(PAGE_SIZE, DISPLAY_LIMIT - previous.items.length),
+      };
+      const result =
+        kind === 'targets'
+          ? await client.listSuiteTargets(query, signal)
+          : await client.listSuiteTargetPairs(query, signal);
+      const merged = {
+        ...result.data,
+        items: [...previous.items, ...result.data.items],
+      };
+      if (
+        result.data.next_cursor === cursor ||
+        result.data.items.length === 0 ||
+        !merged.items.every((item) =>
+          sameSuitePin(item.suite, suiteRef(current.suite)),
+        )
+      ) {
+        throw new Error('Inconsistent group pagination');
+      }
+      if (kind === 'targets' && isSuiteTargetGroupPage(merged)) {
+        return () => setGroups({ ...current, targets: merged });
+      }
+      if (kind === 'pairs' && isSuiteTargetPairGroupPage(merged)) {
+        return () => setGroups({ ...current, pairs: merged });
+      }
+      throw new Error('Inconsistent group pagination');
     });
   }
 
@@ -201,7 +324,10 @@ export function SuiteHistoryPanel({
         limit: Math.min(PAGE_SIZE, DISPLAY_LIMIT - previous.items.length),
       };
       if (kind === 'runs') {
-        const result = await client.listSuiteRuns(query, signal);
+        const result = await client.listSuiteRuns(
+          { ...query, ...runTargetFilter(currentHistory.filters) },
+          signal,
+        );
         const merged = {
           ...result.data,
           items: [...currentHistory.runs.items, ...result.data.items],
@@ -215,7 +341,10 @@ export function SuiteHistoryPanel({
         }
         return () => setHistory({ ...currentHistory, runs: merged });
       }
-      const result = await client.listSuiteDecisions(query, signal);
+      const result = await client.listSuiteDecisions(
+        { ...query, ...decisionTargetFilter(currentHistory.filters) },
+        signal,
+      );
       const merged = {
         ...result.data,
         items: [...currentHistory.decisions.items, ...result.data.items],
@@ -239,10 +368,15 @@ export function SuiteHistoryPanel({
     return (
       <div className={styles.pagination}>
         <span>
-          {count} {count === 1 ? kind.slice(0, -1) : kind} loaded · newest first
+          {count} {count === 1 ? kind.slice(0, -1) : kind} loaded · newest
+          first
         </span>
         {cursor && count < DISPLAY_LIMIT ? (
-          <button type="button" disabled={busy} onClick={() => loadMore(kind)}>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => loadMore(kind)}
+          >
             Load older {kind}
           </button>
         ) : null}
@@ -321,6 +455,16 @@ export function SuiteHistoryPanel({
           ) : null}
         </div>
       ) : null}
+      {groups ? (
+        <TargetHistoryFilters
+          targets={groups.targets}
+          pairs={groups.pairs}
+          filters={filters}
+          busy={busy}
+          onChange={filter}
+          onLoadMore={loadGroups}
+        />
+      ) : null}
       {history ? (
         <>
           <div className={styles.protocol}>
@@ -340,7 +484,11 @@ export function SuiteHistoryPanel({
             <section aria-labelledby="suite-runs-heading">
               <h3 id="suite-runs-heading">Evaluation runs</h3>
               {history.runs.items.length === 0 ? (
-                <p>No completed runs for this suite revision.</p>
+                <p>
+                  {history.filters.target
+                    ? 'No completed runs for this target in the selected suite.'
+                    : 'No completed runs for this suite revision.'}
+                </p>
               ) : (
                 <ul className={styles.records}>
                   {history.runs.items.map((item) => (
@@ -370,7 +518,11 @@ export function SuiteHistoryPanel({
             <section aria-labelledby="suite-decisions-heading">
               <h3 id="suite-decisions-heading">Release decisions</h3>
               {history.decisions.items.length === 0 ? (
-                <p>No release comparisons for this suite revision.</p>
+                <p>
+                  {history.filters.pair
+                    ? 'No release comparisons for this pair in the selected suite.'
+                    : 'No release comparisons for this suite revision.'}
+                </p>
               ) : (
                 <ul className={styles.records}>
                   {history.decisions.items.map((item) => (
@@ -401,7 +553,11 @@ export function SuiteHistoryPanel({
                         disabled={
                           busy || openingDecisionId === item.decision_id
                         }
-                        onClick={() => onReviewDecision(item)}
+                        onClick={() =>
+                          history.filters.pair
+                            ? onReviewDecision(item, history.filters.pair)
+                            : onReviewDecision(item)
+                        }
                       >
                         {openingDecisionId === item.decision_id
                           ? 'Opening decision…'

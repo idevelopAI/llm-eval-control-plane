@@ -11,11 +11,44 @@ import {
   suitePage,
   suiteRunPage,
   suiteDecisionPage,
+  suiteTargetPage,
+  suitePairPage,
 } from '@/src/test/suite-history';
 import { SuiteHistoryPanel } from './suite-history-panel';
+import { pairKey, targetKey } from '@/src/api/suite-history-validation';
 
 function harness() {
   const client = createControlPlaneClient(() => null);
+  vi.spyOn(client, 'listSuiteTargets').mockImplementation(async (query) => ({
+    data: {
+      ...suiteTargetPage,
+      items: suiteTargetPage.items.map((item) => ({
+        ...item,
+        suite: {
+          ...item.suite,
+          name: query.suite_name,
+          revision: query.suite_revision,
+        },
+      })),
+    },
+    requestId: null,
+  }));
+  vi.spyOn(client, 'listSuiteTargetPairs').mockImplementation(
+    async (query) => ({
+      data: {
+        ...suitePairPage,
+        items: suitePairPage.items.map((item) => ({
+          ...item,
+          suite: {
+            ...item.suite,
+            name: query.suite_name,
+            revision: query.suite_revision,
+          },
+        })),
+      },
+      requestId: null,
+    }),
+  );
   vi.spyOn(client, 'listSuites').mockResolvedValue({
     data: suitePage,
     requestId: null,
@@ -40,6 +73,382 @@ async function open(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('local suite history panel', () => {
+  it('caps target catalogs at 100 without fetching extra history', async () => {
+    const props = harness();
+    let page = 0;
+    vi.mocked(props.client.listSuiteTargets).mockImplementation(async () => {
+      const offset = page++ * 20;
+      return {
+        data: {
+          ...suiteTargetPage,
+          next_cursor: `targets-${page}`,
+          items: Array.from({ length: 20 }, (_, index) => ({
+            ...suiteTargetPage.items[0],
+            target: {
+              ...suiteTargetPage.items[0].target,
+              revision: offset + index + 1,
+            },
+          })),
+        },
+        requestId: null,
+      };
+    });
+    const user = userEvent.setup();
+    render(<SuiteHistoryPanel {...props} />);
+    await open(user);
+    for (let index = 0; index < 4; index += 1) {
+      await user.click(
+        screen.getByRole('button', { name: 'Load more targets' }),
+      );
+      await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
+    }
+    expect(
+      screen.getByText('100 targets loaded · identity order'),
+    ).not.toBeNull();
+    expect(
+      screen.queryByRole('button', { name: 'Load more targets' }),
+    ).toBeNull();
+    expect(props.client.listSuiteTargets).toHaveBeenCalledTimes(5);
+    expect(props.client.listSuiteRuns).toHaveBeenCalledTimes(1);
+    expect(props.client.listSuiteDecisions).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not invent target pairs for a suite without comparisons', async () => {
+    const props = harness();
+    vi.mocked(props.client.listSuiteTargetPairs).mockResolvedValue({
+      data: { ...suitePairPage, items: [] },
+      requestId: null,
+    });
+    vi.mocked(props.client.listSuiteDecisions).mockResolvedValue({
+      data: { ...suiteDecisionPage, items: [] },
+      requestId: null,
+    });
+    render(<SuiteHistoryPanel {...props} />);
+    await open(userEvent.setup());
+    expect(
+      screen.getByText(
+        'No baseline/candidate pairs recorded for this suite.',
+      ),
+    ).not.toBeNull();
+    expect(
+      screen.getByText('No release comparisons for this suite revision.'),
+    ).not.toBeNull();
+    expect(
+      screen.queryByRole('option', { name: /fake\/baseline/ }),
+    ).toBeNull();
+  });
+
+  it('sends complete target and directed-pair filters, resets cursors, and opens filtered review', async () => {
+    const props = harness();
+    vi.mocked(props.client.listSuiteRuns).mockResolvedValue({
+      data: { ...suiteRunPage, next_cursor: 'run-next' },
+      requestId: null,
+    });
+    vi.mocked(props.client.listSuiteDecisions).mockResolvedValue({
+      data: { ...suiteDecisionPage, next_cursor: 'decision-next' },
+      requestId: null,
+    });
+    const user = userEvent.setup();
+    render(<SuiteHistoryPanel {...props} />);
+    await open(user);
+    const target = suiteTargetPage.items[0].target;
+    const pair = suitePairPage.items[0];
+    await user.selectOptions(
+      screen.getByLabelText('Run target'),
+      targetKey(target),
+    );
+    await screen.findByRole('heading', { name: 'Evaluation runs' });
+    expect(props.client.listSuiteRuns).toHaveBeenLastCalledWith(
+      {
+        suite_name: 'release/core',
+        suite_revision: 1,
+        limit: 20,
+        target_name: target.name,
+        target_revision: target.revision,
+        target_digest: target.digest,
+      },
+      expect.any(AbortSignal),
+    );
+    await user.selectOptions(
+      screen.getByLabelText('Decision target pair'),
+      pairKey(pair),
+    );
+    await screen.findByRole('heading', { name: 'Release decisions' });
+    const pairQuery = {
+      suite_name: 'release/core',
+      suite_revision: 1,
+      limit: 20,
+      baseline_target_name: pair.baseline_target.name,
+      baseline_target_revision: pair.baseline_target.revision,
+      baseline_target_digest: pair.baseline_target.digest,
+      candidate_target_name: pair.candidate_target.name,
+      candidate_target_revision: pair.candidate_target.revision,
+      candidate_target_digest: pair.candidate_target.digest,
+    };
+    expect(props.client.listSuiteDecisions).toHaveBeenLastCalledWith(
+      pairQuery,
+      expect.any(AbortSignal),
+    );
+    await user.click(
+      screen.getByRole('button', {
+        name: 'Review gates for suite-decision-001',
+      }),
+    );
+    expect(props.onReviewDecision).toHaveBeenCalledWith(
+      suiteDecisionPage.items[0],
+      pair,
+    );
+    await user.click(
+      screen.getByRole('button', { name: 'Load older decisions' }),
+    );
+    await screen.findByRole('alert'); // Duplicate mocked page is rejected, previous evidence retained.
+    expect(props.client.listSuiteDecisions).toHaveBeenLastCalledWith(
+      { ...pairQuery, cursor: 'decision-next' },
+      expect.any(AbortSignal),
+    );
+    await user.selectOptions(
+      screen.getByLabelText('Decision target pair'),
+      '',
+    );
+    await screen.findByRole('heading', { name: 'Release decisions' });
+    expect(props.client.listSuiteDecisions).toHaveBeenLastCalledWith(
+      { suite_name: 'release/core', suite_revision: 1, limit: 20 },
+      expect.any(AbortSignal),
+    );
+    expect(
+      (screen.getByLabelText('Run target') as unknown as { value: string })
+        .value,
+    ).toBe(targetKey(target));
+    await user.click(screen.getByRole('button', { name: 'Refresh suites' }));
+    await screen.findByRole('heading', { name: 'Evaluation runs' });
+    expect(
+      (screen.getByLabelText('Run target') as unknown as { value: string })
+        .value,
+    ).toBe('');
+  });
+
+  it('ignores a late filtered response after returning to all targets', async () => {
+    const props = harness();
+    const user = userEvent.setup();
+    render(<SuiteHistoryPanel {...props} />);
+    await open(user);
+    let resolve:
+      | ((
+          value: Awaited<ReturnType<typeof props.client.listSuiteRuns>>,
+        ) => void)
+      | undefined;
+    let stale: AbortSignal | undefined;
+    vi.mocked(props.client.listSuiteRuns).mockImplementationOnce(
+      (_query, signal) => {
+        stale = signal;
+        return new Promise((done) => {
+          resolve = done;
+        });
+      },
+    );
+    await user.selectOptions(
+      screen.getByLabelText('Run target'),
+      targetKey(suiteRunPage.items[0].target),
+    );
+    expect(screen.queryByText('suite-run-002')).toBeNull();
+    await user.selectOptions(screen.getByLabelText('Run target'), '');
+    await screen.findAllByText('suite-run-002');
+    expect(stale?.aborted).toBe(true);
+    await act(async () =>
+      resolve?.({
+        data: {
+          ...suiteRunPage,
+          items: [{ ...suiteRunPage.items[0], run_id: 'stale-run' }],
+        },
+        requestId: null,
+      }),
+    );
+    expect(screen.queryByText('stale-run')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('pages groups independently and rejects reordered pages without losing selection', async () => {
+    const props = harness();
+    const target = suiteTargetPage.items[0];
+    const other = {
+      ...target,
+      target: { ...target.target, digest: `sha256:${'d'.repeat(64)}` },
+    };
+    vi.mocked(props.client.listSuiteTargets)
+      .mockResolvedValueOnce({
+        data: { ...suiteTargetPage, next_cursor: 'targets-next' },
+        requestId: null,
+      })
+      .mockResolvedValueOnce({
+        data: {
+          ...suiteTargetPage,
+          items: [other],
+          next_cursor: 'targets-last',
+        },
+        requestId: null,
+      })
+      .mockResolvedValueOnce({
+        data: suiteTargetPage,
+        requestId: null,
+      });
+    const pair = suitePairPage.items[0];
+    const reverse = {
+      ...pair,
+      baseline_target: pair.candidate_target,
+      candidate_target: pair.baseline_target,
+    };
+    vi.mocked(props.client.listSuiteTargetPairs)
+      .mockResolvedValueOnce({
+        data: { ...suitePairPage, next_cursor: 'pairs-next' },
+        requestId: null,
+      })
+      .mockResolvedValueOnce({
+        data: { ...suitePairPage, items: [reverse] },
+        requestId: null,
+      });
+    const user = userEvent.setup();
+    render(<SuiteHistoryPanel {...props} />);
+    await open(user);
+    await user.click(
+      screen.getByRole('button', { name: 'Load more targets' }),
+    );
+    await screen.findByText('2 targets loaded · identity order');
+    await user.click(screen.getByRole('button', { name: 'Load more pairs' }));
+    await screen.findByText('2 pairs loaded · identity order');
+    expect(props.client.listSuiteRuns).toHaveBeenCalledTimes(1);
+    expect(props.client.listSuiteDecisions).toHaveBeenCalledTimes(1);
+    expect(props.client.listSuiteTargetPairs).toHaveBeenLastCalledWith(
+      {
+        suite_name: 'release/core',
+        suite_revision: 1,
+        limit: 20,
+        cursor: 'pairs-next',
+      },
+      expect.any(AbortSignal),
+    );
+    await user.selectOptions(
+      screen.getByLabelText('Decision target pair'),
+      pairKey(reverse),
+    );
+    await screen.findByRole('heading', { name: 'Release decisions' });
+    expect(props.client.listSuiteDecisions).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        baseline_target_name: reverse.baseline_target.name,
+        candidate_target_name: reverse.candidate_target.name,
+      }),
+      expect.any(AbortSignal),
+    );
+    await user.click(
+      screen.getByRole('button', { name: 'Load more targets' }),
+    );
+    await screen.findByRole('alert');
+    expect(
+      screen.getByText('2 targets loaded · identity order'),
+    ).not.toBeNull();
+    expect(
+      (
+        screen.getByLabelText('Decision target pair') as unknown as {
+          value: string;
+        }
+      ).value,
+    ).toBe(pairKey(reverse));
+  });
+
+  it('distinguishes same-name/revision targets by full digest and displays filtered empty states', async () => {
+    const props = harness();
+    const first = suiteTargetPage.items[0];
+    const second = {
+      ...first,
+      target: {
+        ...first.target,
+        digest: `${first.target.digest.slice(0, -1)}d`,
+      },
+    };
+    vi.mocked(props.client.listSuiteTargets).mockResolvedValue({
+      data: { ...suiteTargetPage, items: [first, second] },
+      requestId: null,
+    });
+    const user = userEvent.setup();
+    render(<SuiteHistoryPanel {...props} />);
+    await open(user);
+    vi.mocked(props.client.listSuiteRuns).mockResolvedValue({
+      data: { ...suiteRunPage, items: [] },
+      requestId: null,
+    });
+    vi.mocked(props.client.listSuiteDecisions).mockResolvedValue({
+      data: { ...suiteDecisionPage, items: [] },
+      requestId: null,
+    });
+    await user.selectOptions(
+      screen.getByLabelText('Run target'),
+      targetKey(second.target),
+    );
+    await screen.findByText(
+      'No completed runs for this target in the selected suite.',
+    );
+    expect(screen.getByText(second.target.digest)).not.toBeNull();
+    expect(props.client.listSuiteRuns).toHaveBeenLastCalledWith(
+      expect.objectContaining({ target_digest: second.target.digest }),
+      expect.any(AbortSignal),
+    );
+    await user.selectOptions(
+      screen.getByLabelText('Decision target pair'),
+      pairKey(suitePairPage.items[0]),
+    );
+    await screen.findByText(
+      'No release comparisons for this pair in the selected suite.',
+    );
+  });
+
+  it.each(['listSuiteTargets', 'listSuiteTargetPairs'] as const)(
+    'clears group controls when %s loses access',
+    async (method) => {
+      const props = harness();
+      vi.mocked(props.client[method]).mockRejectedValue(
+        new ControlPlaneApiError({
+          status: 403,
+          code: 'permission_denied',
+          message: 'private-error',
+        }),
+      );
+      render(<SuiteHistoryPanel {...props} />);
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Browse suite history' }),
+      );
+      await waitFor(() =>
+        expect(props.onAuthenticationFailure).toHaveBeenCalledTimes(1),
+      );
+      expect(screen.queryByLabelText('Run target')).toBeNull();
+      expect(document.body.textContent).not.toContain('private-error');
+    },
+  );
+
+  it('rejects a group catalog for the wrong suite digest', async () => {
+    const props = harness();
+    const group = suiteTargetPage.items[0];
+    vi.mocked(props.client.listSuiteTargets).mockResolvedValue({
+      data: {
+        ...suiteTargetPage,
+        items: [
+          {
+            ...group,
+            suite: {
+              ...group.suite,
+              digest: `sha256:${'0'.repeat(64)}`,
+            },
+          },
+        ],
+      },
+      requestId: null,
+    });
+    render(<SuiteHistoryPanel {...props} />);
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Browse suite history' }),
+    );
+    await screen.findByRole('alert');
+    expect(screen.queryByLabelText('Run target')).toBeNull();
+  });
+
   it('loads only on explicit action, renders redacted metadata, and is accessible', async () => {
     const props = harness();
     const user = userEvent.setup();
@@ -85,7 +494,10 @@ describe('local suite history panel', () => {
     ).toBe(true);
     expect(screen.getByText('Opening decision…')).not.toBeNull();
     rerender(
-      <SuiteHistoryPanel {...props} selectedDecisionId="suite-decision-001" />,
+      <SuiteHistoryPanel
+        {...props}
+        selectedDecisionId="suite-decision-001"
+      />,
     );
     expect(
       screen.getByRole('button', { name }).getAttribute('aria-current'),
@@ -154,7 +566,9 @@ describe('local suite history panel', () => {
   it('aborts reads on unmount and ignores late results', async () => {
     const props = harness();
     let resolve:
-      | ((result: Awaited<ReturnType<typeof props.client.listSuites>>) => void)
+      | ((
+          result: Awaited<ReturnType<typeof props.client.listSuites>>,
+        ) => void)
       | undefined;
     let signal: AbortSignal | undefined;
     vi.mocked(props.client.listSuites).mockImplementation(
@@ -225,7 +639,10 @@ describe('local suite history panel', () => {
             {
               ...suiteRunPage.items[0],
               run_id: 'stale-run',
-              suite: { ...suiteRunPage.items[0].suite, revision: 2 },
+              suite: {
+                ...suiteRunPage.items[0].suite,
+                revision: 2,
+              },
             },
           ],
         },
@@ -235,8 +652,11 @@ describe('local suite history panel', () => {
     expect(screen.queryByText('stale-run')).toBeNull();
     expect(screen.queryByRole('alert')).toBeNull();
     expect(
-      (screen.getByLabelText('Suite revision') as unknown as { value: string })
-        .value,
+      (
+        screen.getByLabelText('Suite revision') as unknown as {
+          value: string;
+        }
+      ).value,
     ).toBe('release/core@1');
   });
 
@@ -248,7 +668,10 @@ describe('local suite history panel', () => {
         requestId: null,
       })
       .mockResolvedValueOnce({
-        data: { ...suitePage, items: [{ ...suitePage.items[0], revision: 2 }] },
+        data: {
+          ...suitePage,
+          items: [{ ...suitePage.items[0], revision: 2 }],
+        },
         requestId: null,
       });
     vi.mocked(props.client.listSuiteDecisions)
@@ -271,8 +694,12 @@ describe('local suite history panel', () => {
     render(<SuiteHistoryPanel {...props} />);
     const user = userEvent.setup();
     await open(user);
-    await user.click(screen.getByRole('button', { name: 'Load more suites' }));
-    await screen.findByRole('option', { name: 'release/core · revision 2' });
+    await user.click(
+      screen.getByRole('button', { name: 'Load more suites' }),
+    );
+    await screen.findByRole('option', {
+      name: 'release/core · revision 2',
+    });
     await user.click(
       screen.getByRole('button', { name: 'Load older decisions' }),
     );
@@ -335,7 +762,9 @@ describe('local suite history panel', () => {
     const user = userEvent.setup();
     await open(user);
     for (let index = 0; index < 4; index += 1) {
-      await user.click(screen.getByRole('button', { name: 'Load older runs' }));
+      await user.click(
+        screen.getByRole('button', { name: 'Load older runs' }),
+      );
       await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
     }
     expect(screen.getByText('100 runs loaded · newest first')).not.toBeNull();

@@ -271,9 +271,9 @@ export default function ReleaseDashboard() {
           openingDecisionId={
             live.state.kind === 'loading' ? live.state.openingDecisionId : null
           }
-          onReviewDecision={(item) => {
+          onReviewDecision={(item, pair) => {
             pendingReviewFocus.current = item.decision_id;
-            void live.reviewHistoricalDecision(liveProject, item);
+            void live.reviewHistoricalDecision(liveProject, item, pair);
           }}
           onAuthenticationFailure={() => {
             clearCredential();

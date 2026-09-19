@@ -3,7 +3,13 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ReleaseDecision } from '@/src/api/client';
-import { suitePage, suiteRunPage } from '@/src/test/suite-history';
+import { pairKey } from '@/src/api/suite-history-validation';
+import {
+  suitePage,
+  suiteRunPage,
+  suiteTargetPage,
+  suitePairPage,
+} from '@/src/test/suite-history';
 import {
   releaseDecision,
   releaseDecisionPage,
@@ -55,10 +61,13 @@ function harness(
       '/v1/release-decisions': releaseDecisionPage,
       '/v1/release-decisions/decision-001': releaseDecision,
       '/v1/release-decisions/decision-001/cases': releaseCases,
-      '/v1/release-decisions/decision-001/distributions': releaseDistributions,
+      '/v1/release-decisions/decision-001/distributions':
+        releaseDistributions,
       '/v1/suites': suitePage,
       '/v1/suite-runs': suiteRunPage,
       '/v1/suite-comparisons': historicalDecisionPage,
+      '/v1/suite-targets': suiteTargetPage,
+      '/v1/suite-target-pairs': suitePairPage,
       [historicalPath]: historicalDecision,
       [`${historicalPath}/cases`]: historicalCases,
       [`${historicalPath}/distributions`]: historicalDistributions,
@@ -72,10 +81,15 @@ function harness(
 
 async function connect(user: ReturnType<typeof userEvent.setup>) {
   const live = screen.getByRole('button', { name: 'Use local live data' });
-  await waitFor(() => expect((live as HTMLButtonElement).disabled).toBe(false));
+  await waitFor(() =>
+    expect((live as HTMLButtonElement).disabled).toBe(false),
+  );
   await user.click(live);
   await user.type(screen.getByLabelText('Project ID'), 'project-alpha');
-  await user.type(screen.getByLabelText('Read-only access token'), TEST_TOKEN);
+  await user.type(
+    screen.getByLabelText('Read-only access token'),
+    TEST_TOKEN,
+  );
   await user.click(
     screen.getByRole('button', { name: 'Connect and load newest decision' }),
   );
@@ -98,6 +112,56 @@ function selectedDecision() {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('historical gate review', () => {
+  it.each([false, true])(
+    'verifies the selected target pair before loading detail evidence (mismatch=%s)',
+    async (mismatch) => {
+      const pair = {
+        ...suitePairPage.items[0],
+        baseline_target: historicalDecision.baseline,
+        candidate_target: mismatch
+          ? {
+              ...historicalDecision.candidate,
+              digest: `sha256:${'0'.repeat(64)}`,
+            }
+          : historicalDecision.candidate,
+      };
+      const fetch = harness((request) =>
+        new URL(request.url).pathname === '/v1/suite-target-pairs'
+          ? Promise.resolve(json({ ...suitePairPage, items: [pair] }))
+          : undefined,
+      );
+      const user = userEvent.setup();
+      render(<ReleaseDashboard />);
+      await connect(user);
+      await browse(user);
+      await user.selectOptions(
+        screen.getByLabelText('Decision target pair'),
+        pairKey(pair),
+      );
+      await screen.findByRole('button', { name: reviewName });
+      await user.click(screen.getByRole('button', { name: reviewName }));
+      if (mismatch) {
+        await screen.findByRole('alert');
+        expect(selectedDecision()).toBe(releaseDecision.decision_id);
+        expect(
+          fetch.mock.calls.some(([request]) =>
+            new URL(request.url).pathname.startsWith(`${historicalPath}/`),
+          ),
+        ).toBe(false);
+      } else {
+        await waitFor(() =>
+          expect(selectedDecision()).toBe(historicalDecision.decision_id),
+        );
+        expect(
+          fetch.mock.calls.some(
+            ([request]) =>
+              new URL(request.url).pathname === `${historicalPath}/cases`,
+          ),
+        ).toBe(true);
+      }
+    },
+  );
+
   it('opens a decision outside the recent page, focuses review, and returns to recent evidence', async () => {
     const fetch = harness();
     const storageWrite = vi.spyOn(Storage.prototype, 'setItem');
@@ -142,9 +206,9 @@ describe('historical gate review', () => {
     expect(
       screen.getByLabelText('Decision history').querySelectorAll('option'),
     ).toHaveLength(2);
-    expect(document.querySelector('.provenance-strip code')?.textContent).toBe(
-      historicalDecision.decision_id,
-    );
+    expect(
+      document.querySelector('.provenance-strip code')?.textContent,
+    ).toBe(historicalDecision.decision_id);
     const historyRequests = fetch.mock.calls
       .map(([request]) => request)
       .filter((request) =>
@@ -164,8 +228,11 @@ describe('historical gate review', () => {
     expect(cases?.url).toContain('gate_slice=language%2Fde');
     expect(cases?.url).not.toContain('change=');
     expect(
-      (screen.getByLabelText('Case transition') as unknown as { value: string })
-        .value,
+      (
+        screen.getByLabelText('Case transition') as unknown as {
+          value: string;
+        }
+      ).value,
     ).toBe('all');
     expect(storageWrite).not.toHaveBeenCalled();
     expect(document.body.textContent).not.toContain(TEST_TOKEN);
@@ -302,7 +369,9 @@ describe('historical gate review', () => {
     expect(
       screen.queryByRole('heading', { name: 'Release blocked' }),
     ).toBeNull();
-    expect(screen.queryByRole('heading', { name: 'Suite history' })).toBeNull();
+    expect(
+      screen.queryByRole('heading', { name: 'Suite history' }),
+    ).toBeNull();
     expect(document.body.textContent).not.toContain(
       'private-history-error-sentinel',
     );
@@ -327,11 +396,15 @@ describe('historical gate review', () => {
     await user.click(screen.getByRole('button', { name: reviewName }));
     await screen.findByText(/Opening historical decision/);
     await user.click(
-      screen.getByRole('button', { name: 'Disconnect and return to fixture' }),
+      screen.getByRole('button', {
+        name: 'Disconnect and return to fixture',
+      }),
     );
     expect(pending?.request.signal.aborted).toBe(true);
     await act(async () => pending?.resolve(json(historicalDecision)));
-    expect(screen.queryByRole('heading', { name: 'Suite history' })).toBeNull();
+    expect(
+      screen.queryByRole('heading', { name: 'Suite history' }),
+    ).toBeNull();
     expect(
       fetch.mock.calls.some(([request]) =>
         new URL(request.url).pathname.startsWith(`${historicalPath}/`),
@@ -418,7 +491,9 @@ describe('historical gate review', () => {
     await user.click(screen.getByRole('button', { name: reviewName }));
     await screen.findByLabelText('Read-only access token');
     expect(sibling?.signal.aborted).toBe(true);
-    expect(screen.queryByRole('heading', { name: 'Suite history' })).toBeNull();
+    expect(
+      screen.queryByRole('heading', { name: 'Suite history' }),
+    ).toBeNull();
     expect(screen.queryByLabelText('Decision history')).toBeNull();
   });
 });
