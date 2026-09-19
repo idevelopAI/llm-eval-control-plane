@@ -6,6 +6,8 @@ import {
   suitePage,
   suitePin,
   suiteRunPage,
+  suiteTargetPage,
+  suitePairPage,
 } from '../test/suite-history';
 
 const TEST_TOKEN = `cpk_${'A'.repeat(43)}`;
@@ -26,15 +28,106 @@ const response = (value: unknown) =>
 afterEach(() => vi.unstubAllGlobals());
 
 describe('read-only suite history client', () => {
+  it('encodes all exact target filters and rejects a mismatched run target', async () => {
+    const fetch = vi.fn(async (request: Request) =>
+      response(
+        new URL(request.url).pathname === '/v1/suite-runs'
+          ? suiteRunPage
+          : suiteDecisionPage,
+      ),
+    );
+    vi.stubGlobal('fetch', fetch);
+    const client = createControlPlaneClient(credential);
+    const target = suiteRunPage.items[0].target;
+    const targetFilter = {
+      target_name: target.name,
+      target_revision: target.revision,
+      target_digest: target.digest,
+    };
+    await client.listSuiteRuns({
+      ...query,
+      ...targetFilter,
+      cursor: 'runs-next',
+    });
+    const pair = suitePairPage.items[0];
+    const pairFilter = {
+      baseline_target_name: pair.baseline_target.name,
+      baseline_target_revision: pair.baseline_target.revision,
+      baseline_target_digest: pair.baseline_target.digest,
+      candidate_target_name: pair.candidate_target.name,
+      candidate_target_revision: pair.candidate_target.revision,
+      candidate_target_digest: pair.candidate_target.digest,
+    };
+    await client.listSuiteDecisions({
+      ...query,
+      ...pairFilter,
+      cursor: 'decisions-next',
+    });
+    for (const [index, filter] of [targetFilter, pairFilter].entries()) {
+      const params = new URL(fetch.mock.calls[index][0].url).searchParams;
+      for (const [key, value] of Object.entries(filter))
+        expect(params.get(key)).toBe(String(value));
+      expect(params.get('cursor')).toBe(
+        index === 0 ? 'runs-next' : 'decisions-next',
+      );
+    }
+    for (const change of [
+      { target_name: 'other' },
+      { target_revision: 3 },
+      { target_digest: `sha256:${'0'.repeat(64)}` },
+    ]) {
+      await expect(
+        client.listSuiteRuns({
+          ...query,
+          ...targetFilter,
+          ...change,
+        }),
+      ).rejects.toMatchObject({ code: 'unexpected_response' });
+    }
+  });
+
+  it.each([
+    ['listSuiteTargets', suiteTargetPage],
+    ['listSuiteTargetPairs', suitePairPage],
+  ] as const)(
+    'validates %s scope, limits, and private fields',
+    async (method, fixture) => {
+      const fetch = vi.fn(async () => response(fixture));
+      vi.stubGlobal('fetch', fetch);
+      const client = createControlPlaneClient(credential);
+      await expect(
+        client[method]({ ...query, suite_name: 'other' }),
+      ).rejects.toMatchObject({ code: 'unexpected_response' });
+      await expect(
+        client[method]({ ...query, suite_revision: 2 }),
+      ).rejects.toMatchObject({ code: 'unexpected_response' });
+      await expect(
+        client[method]({ ...query, limit: 0 }),
+      ).rejects.toMatchObject({ code: 'unexpected_response' });
+      fetch.mockResolvedValue(
+        response({ ...fixture, document: 'private-target-sentinel' }),
+      );
+      const error = await client[method](query).catch(
+        (error: unknown) => error,
+      );
+      expect(error).toMatchObject({ code: 'unexpected_response' });
+      expect(String(error)).not.toContain('private-target-sentinel');
+    },
+  );
+
   it('uses only same-origin authenticated GETs with encoded suite names', async () => {
     const fetch = vi.fn(async (request: Request) => {
       const path = new URL(request.url).pathname;
       return response(
         path === '/v1/suites'
           ? suitePage
-          : path === '/v1/suite-runs'
-            ? suiteRunPage
-            : suiteDecisionPage,
+          : path === '/v1/suite-targets'
+            ? suiteTargetPage
+            : path === '/v1/suite-target-pairs'
+              ? suitePairPage
+              : path === '/v1/suite-runs'
+                ? suiteRunPage
+                : suiteDecisionPage,
       );
     });
     vi.stubGlobal('fetch', fetch);
@@ -43,14 +136,18 @@ describe('read-only suite history client', () => {
       client.listSuites({ name: suitePin.name, limit: 20 }),
       client.listSuiteRuns(query),
       client.listSuiteDecisions(query),
+      client.listSuiteTargets(query),
+      client.listSuiteTargetPairs(query),
     ]);
-    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch).toHaveBeenCalledTimes(5);
     for (const [request] of fetch.mock.calls) {
       expect(request.method).toBe('GET');
       expect(request.url).not.toContain(TEST_TOKEN);
       expect(request.url).toContain('release%2Fcore');
       expect(new URL(request.url).origin).toBe(location.origin);
-      expect(request.headers.get('authorization')).toBe(`Bearer ${TEST_TOKEN}`);
+      expect(request.headers.get('authorization')).toBe(
+        `Bearer ${TEST_TOKEN}`,
+      );
       expect(request.headers.get('x-project-id')).toBe('project-test');
       expect(request.cache).toBe('no-store');
       expect(request.redirect).toBe('error');
@@ -68,6 +165,8 @@ describe('read-only suite history client', () => {
       () => client.listSuites(),
       () => client.listSuiteRuns(query),
       () => client.listSuiteDecisions(query),
+      () => client.listSuiteTargets(query),
+      () => client.listSuiteTargetPairs(query),
     ])
       await expect(request()).rejects.toMatchObject({
         status: 401,
@@ -110,7 +209,10 @@ describe('read-only suite history client', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
-        response({ ...suitePage, items: [suitePage.items[0], other] }),
+        response({
+          ...suitePage,
+          items: [suitePage.items[0], other],
+        }),
       ),
     );
     const client = createControlPlaneClient(credential);

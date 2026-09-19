@@ -68,3 +68,32 @@ export const suiteDecisionPage = {
   ],
   next_cursor: null,
 } satisfies components['schemas']['SuiteDecisionHistoryPage'];
+
+export const suiteTargetPage = {
+  schema_version: 'suite-target-group-page/v1',
+  items: [
+    {
+      schema_version: 'suite-target-group/v1',
+      suite: suitePin,
+      target: suiteRunPage.items[0].target,
+    },
+  ],
+  next_cursor: null,
+} satisfies components['schemas']['SuiteTargetGroupPage'];
+
+export const suitePairPage = {
+  schema_version: 'suite-target-pair-group-page/v1',
+  items: [
+    {
+      schema_version: 'suite-target-pair-group/v1',
+      suite: suitePin,
+      baseline_target: {
+        ...suiteRunPage.items[0].target,
+        name: 'fake/baseline',
+        revision: 1,
+      },
+      candidate_target: suiteRunPage.items[0].target,
+    },
+  ],
+  next_cursor: null,
+} satisfies components['schemas']['SuiteTargetPairGroupPage'];
