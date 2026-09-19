@@ -3,6 +3,8 @@ import type { components } from './generated/schema';
 type SuitePage = components['schemas']['SuitePage'];
 type RunPage = components['schemas']['SuiteRunHistoryPage'];
 type DecisionPage = components['schemas']['SuiteDecisionHistoryPage'];
+type TargetPage = components['schemas']['SuiteTargetGroupPage'];
+type PairPage = components['schemas']['SuiteTargetPairGroupPage'];
 export type SuitePin = components['schemas']['ArtifactRef'];
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
@@ -78,6 +80,105 @@ export function sameSuitePin(left: SuitePin, right: SuitePin): boolean {
     left.digest != null &&
     left.digest === right.digest
   );
+}
+
+export function sameTargetPin(left: SuitePin, right: SuitePin): boolean {
+  return (
+    left.kind === 'target' &&
+    right.kind === 'target' &&
+    left.name === right.name &&
+    left.revision === right.revision &&
+    left.digest != null &&
+    left.digest === right.digest
+  );
+}
+
+export const targetKey = (target: SuitePin): string =>
+  JSON.stringify([target.name, target.revision, target.digest]);
+
+export const pairKey = (pair: PairPage['items'][number]): string =>
+  JSON.stringify([
+    targetKey(pair.baseline_target),
+    targetKey(pair.candidate_target),
+  ]);
+
+// The API uses bytewise ASCII names/digests and numeric revisions, not locale order.
+function compareTarget(left: SuitePin, right: SuitePin): number {
+  for (const [a, b] of [
+    [left.name, right.name],
+    [left.revision, right.revision],
+    [left.digest!, right.digest!],
+  ] as const) {
+    if (a < b) return -1;
+    if (a > b) return 1;
+  }
+  return 0;
+}
+
+export function isSuiteTargetGroupPage(value: unknown): value is TargetPage {
+  if (
+    !page(
+      value,
+      'suite-target-group-page/v1',
+      (item) =>
+        record(item) &&
+        keys(item, ['schema_version', 'suite', 'target']) &&
+        item.schema_version === 'suite-target-group/v1' &&
+        pin(item.suite, 'suite') &&
+        pin(item.target, 'target'),
+    ) ||
+    !singleSuite(value.items)
+  )
+    return false;
+  return value.items.every(
+    (item, index) =>
+      index === 0 ||
+      compareTarget(
+        value.items[index - 1].target as SuitePin,
+        item.target as SuitePin,
+      ) < 0,
+  );
+}
+
+export function isSuiteTargetPairGroupPage(
+  value: unknown,
+): value is PairPage {
+  if (
+    !page(
+      value,
+      'suite-target-pair-group-page/v1',
+      (item) =>
+        record(item) &&
+        keys(item, [
+          'schema_version',
+          'suite',
+          'baseline_target',
+          'candidate_target',
+        ]) &&
+        item.schema_version === 'suite-target-pair-group/v1' &&
+        pin(item.suite, 'suite') &&
+        pin(item.baseline_target, 'target') &&
+        pin(item.candidate_target, 'target'),
+    ) ||
+    !singleSuite(value.items)
+  )
+    return false;
+  return value.items.every((item, index) => {
+    if (index === 0) return true;
+    const previous = value.items[index - 1];
+    const baseline = compareTarget(
+      previous.baseline_target as SuitePin,
+      item.baseline_target as SuitePin,
+    );
+    return (
+      baseline < 0 ||
+      (baseline === 0 &&
+        compareTarget(
+          previous.candidate_target as SuitePin,
+          item.candidate_target as SuitePin,
+        ) < 0)
+    );
+  });
 }
 
 function page(

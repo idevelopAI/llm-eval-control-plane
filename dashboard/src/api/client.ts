@@ -16,6 +16,8 @@ import {
   isSuitePage,
   isSuiteRunHistoryPage,
   isSuiteDecisionHistoryPage,
+  isSuiteTargetGroupPage,
+  isSuiteTargetPairGroupPage,
 } from './suite-history-validation';
 
 export type SuitePage = components['schemas']['SuitePage'];
@@ -23,11 +25,18 @@ export type SuiteRunHistoryPage = components['schemas']['SuiteRunHistoryPage'];
 export type SuiteDecisionHistoryPage =
   components['schemas']['SuiteDecisionHistoryPage'];
 export type SuiteDecisionHistoryItem = SuiteDecisionHistoryPage['items'][number];
+export type SuiteTargetGroupPage = components['schemas']['SuiteTargetGroupPage'];
+export type SuiteTargetPairGroupPage =
+  components['schemas']['SuiteTargetPairGroupPage'];
 type SuiteQuery = NonNullable<
   operations['list_suite_revisions']['parameters']['query']
 >;
 type SuiteHistoryQuery =
   operations['list_suite_run_history']['parameters']['query'];
+type SuiteDecisionHistoryQuery =
+  operations['list_suite_decision_history']['parameters']['query'];
+type SuiteGroupQuery =
+  operations['list_suite_target_groups']['parameters']['query'];
 
 export type ReleaseDecision =
   components['schemas']['ReleaseDecisionResponse'];
@@ -301,14 +310,20 @@ export function createControlPlaneClient(getCredential: CredentialSource) {
           value.items.every(
             (item) =>
               item.suite.name === query.suite_name &&
-              item.suite.revision === query.suite_revision,
+              item.suite.revision === query.suite_revision &&
+              (query.target_name == null ||
+                item.target.name === query.target_name) &&
+              (query.target_revision == null ||
+                item.target.revision === query.target_revision) &&
+              (query.target_digest == null ||
+                item.target.digest === query.target_digest),
           ),
         signal,
       );
     },
 
     async listSuiteDecisions(
-      query: SuiteHistoryQuery,
+      query: SuiteDecisionHistoryQuery,
       signal?: AbortSignal,
     ): Promise<ApiResult<SuiteDecisionHistoryPage>> {
       const auth = credential();
@@ -328,6 +343,52 @@ export function createControlPlaneClient(getCredential: CredentialSource) {
           value.items.every(
             (item) =>
               item.suite.name === query.suite_name &&
+              item.suite.revision === query.suite_revision,
+          ),
+        signal,
+      );
+    },
+
+    async listSuiteTargets(
+      query: SuiteGroupQuery,
+      signal?: AbortSignal,
+    ): Promise<ApiResult<SuiteTargetGroupPage>> {
+      const auth = credential();
+      return request(
+        () =>
+          client.GET('/v1/suite-targets', {
+            headers: requestHeaders(auth),
+            params: { header: { 'X-Project-ID': auth.projectId }, query },
+            signal,
+          }),
+        (value): value is SuiteTargetGroupPage =>
+          isSuiteTargetGroupPage(value) &&
+          value.items.length <= (query.limit ?? 50) &&
+          value.items.every(
+            (item) => item.suite.name === query.suite_name &&
+              item.suite.revision === query.suite_revision,
+          ),
+        signal,
+      );
+    },
+
+    async listSuiteTargetPairs(
+      query: SuiteGroupQuery,
+      signal?: AbortSignal,
+    ): Promise<ApiResult<SuiteTargetPairGroupPage>> {
+      const auth = credential();
+      return request(
+        () =>
+          client.GET('/v1/suite-target-pairs', {
+            headers: requestHeaders(auth),
+            params: { header: { 'X-Project-ID': auth.projectId }, query },
+            signal,
+          }),
+        (value): value is SuiteTargetPairGroupPage =>
+          isSuiteTargetPairGroupPage(value) &&
+          value.items.length <= (query.limit ?? 50) &&
+          value.items.every(
+            (item) => item.suite.name === query.suite_name &&
               item.suite.revision === query.suite_revision,
           ),
         signal,
