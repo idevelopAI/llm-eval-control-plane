@@ -28,15 +28,22 @@ The local suite-history panel groups completed runs and release decisions by
 an exact suite revision and digest, with explicit, bounded pagination.
 Historical decisions open directly in detailed gate review after their complete
 identity is verified, including decisions outside the newest collection.
-The local API also discovers exact target and baseline/candidate groups and
-filters their histories by full versioned identity; dashboard group controls are
-not yet available.
+Select a **Run target** or directed **Decision target pair** to filter history by
+complete name, revision, and digest. Group discovery and filtered history use
+separate bounded pages; changing a filter resets history cursors and cancels
+superseded reads. Gate review also verifies the selected target pair before
+loading case or distribution evidence.
 
 ![Deterministic release evidence dashboard showing a blocked release, failed gate, and redacted scoring evidence](docs/assets/release-dashboard-fixture.jpg)
 
 [Open the public synthetic release-evidence dashboard](https://llm-eval-control-plane.nick0ne.chatgpt.site/)
 
 _Deterministic fixture mode: no credential or API request is used._
+
+![Local suite history with exact target and baseline-to-candidate filters, immutable digests, and direct gate review](docs/assets/suite-target-history.png)
+
+_Local-only grouped history, captured using intercepted synthetic test data.
+These controls are not present on the hosted fixture Site._
 
 Raw evaluation content is outside the dashboard contract. Case reads expose
 only IDs, slice labels, score status, pass state, numeric score, delta, and change

@@ -205,9 +205,12 @@ sorts matching metadata in the database; a bounded response is not a claim of
 constant query cost for arbitrarily large suites. No total counts, trend scores,
 or automatic baseline choices are inferred.
 
-Dashboard group selection is a separate follow-up. The current dashboard still
-shows suite-wide history and can open historical decisions directly; the hosted
-synthetic Site does not expose any of these authenticated routes.
+The local dashboard offers independent exact-target and directed-pair selectors
+with bounded group pagination and complete identity checks. Filter changes reset
+history cursors; detailed gate review verifies the selected pair before reading
+case or distribution evidence. See the [operator workflow](../dashboard/README.md#filter-history-by-target).
+The hosted synthetic Site does not expose any of these authenticated routes or
+controls.
 
 ### Database maintenance
 

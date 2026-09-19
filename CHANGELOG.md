@@ -53,7 +53,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   run and decision history. Group pages deduplicate persisted metadata and bind
   cursors to the suite and stream; filtered history cursors bind the complete
   target selection. No evaluation execution, new migration, or hosted capability
-  is added. Dashboard group controls remain a follow-up.
+  is added.
+- Local dashboard target and directed-pair selectors with full-identity filters,
+  bounded group catalogs, cursor resets, stale-request cancellation, and exact
+  pair verification before historical gate evidence loads. Group responses are
+  metadata-only, lost authorization clears the local session, and the hosted
+  fixture remains unchanged. The operator guide includes a synthetic-data
+  screenshot of the grouped history view.
 - RFC 8785 canonical JSON, strict JSONL datasets, and content-derived dataset
   identities.
 - Provider-neutral target, evaluator, failure, case-result, metric-summary, and

@@ -27,6 +27,7 @@ Live mode supports:
 - decision and gate selection with cancellation of superseded requests;
 - explicitly opened suite history for a selected immutable protocol revision,
   showing completed run metadata and release decisions pinned to its digest;
+- independent exact-target and directed baseline/candidate-pair history filters;
 - transition filters over redacted case evidence;
 - cursor-based case pagination, bounded to 100 cases per request and 500 cases
   retained by the browser view;
@@ -77,11 +78,47 @@ through that row. Authorization failure clears both panels immediately.
 History rows remain metadata-only until explicitly opened. The hosted synthetic
 dashboard has no suite browser and makes no suite API requests.
 
-The local API now supports [target-group discovery and exact-target history
-filters](../docs/evaluation-suites.md#target-grouped-history). Dashboard controls
-for these groups are not implemented yet; this panel still shows suite-wide
-history. Generated API types include the new read contracts without enabling any
-additional browser requests.
+### Filter history by target
+
+Opening a suite also loads the first [target and target-pair group
+pages](../docs/evaluation-suites.md#target-grouped-history) for that exact suite.
+Choose **Run target** to filter evaluation runs, or **Decision target pair** to
+filter release decisions. These filters are independent: filtering runs does not
+implicitly choose a comparison baseline. **All targets** and **All baseline →
+candidate pairs** restore their respective suite-wide histories.
+
+Selections bind the complete name, revision, and digest; the same name and
+revision with different digests remain different options. Option labels shorten
+digests, extending them to disambiguate loaded options. Selected pins are shown
+in full. Pair direction matters: A → B and B → A are separate groups. Only
+pairs observed in persisted comparisons are offered, not every possible target
+combination.
+
+Group pages load 20 records at a time, in bytewise name, numeric revision, and
+digest order (baseline first, then candidate for pairs). **Load more targets**
+and **Load more pairs** explicitly extend their own catalogs, each capped at
+100 groups. They do not reload history. Further groups remain available through
+the API; loaded counts are not suite totals.
+
+Changing either filter cancels pending metadata reads and reloads both history
+columns from their first pages, preserving the other filter. Previous rows are
+cleared while loading so they cannot appear under a new selection. Pagination
+keeps the active full-identity filters; selecting a different suite or
+**Refresh suites** resets both filters and all cursors. Failed pagination retains
+already verified records; refresh to recover from an inconsistent cursor.
+
+Group responses use strict runtime metadata allowlists, exact suite-pin checks,
+and ordering/duplicate validation, including across pages. Filtered run responses
+must match the requested target. The API enforces pair filtering; before loading
+cases or distributions, **Review gates** additionally verifies the decision's
+resolved baseline and candidate against the selected pair. A mismatch leaves
+the previous verified review visible with an error. Authorization failure on any
+group or history read clears the entire local session.
+
+![Local target-grouped history using synthetic test evidence](../docs/assets/suite-target-history.png)
+
+_Captured from the local dashboard with intercepted synthetic test responses;
+no real credential, provider, or hosted API is involved._
 
 ## Credential boundary
 
