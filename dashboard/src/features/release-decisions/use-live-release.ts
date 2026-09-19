@@ -11,8 +11,9 @@ import {
   type ReleaseDecisionDistributions,
   type ReleaseDecisionPage,
   type SuiteDecisionHistoryItem,
+  type SuiteTargetPairGroupPage,
 } from '../../api/client';
-import { sameSuitePin } from '../../api/suite-history-validation';
+import { sameSuitePin, sameTargetPin } from '../../api/suite-history-validation';
 import {
   buildReleaseDashboardModel,
   gateId,
@@ -401,7 +402,11 @@ export function useLiveRelease({
   );
 
   const reviewHistoricalDecision = useCallback(
-    async (projectId: string, item: SuiteDecisionHistoryItem) => {
+    async (
+      projectId: string,
+      item: SuiteDecisionHistoryItem,
+      pair?: SuiteTargetPairGroupPage['items'][number],
+    ) => {
       const previous = readyRef.current ?? undefined;
       // Keep the newest collection separate: one historical selection must not
       // silently expand or reorder the bounded recent-decision picker.
@@ -425,7 +430,11 @@ export function useLiveRelease({
         if (
           !listItemMatchesDecision(item, detail.data) ||
           !detail.data.suite ||
-          !sameSuitePin(item.suite, detail.data.suite)
+          !sameSuitePin(item.suite, detail.data.suite) ||
+          (pair &&
+            (!sameSuitePin(pair.suite, item.suite) ||
+              !sameTargetPin(pair.baseline_target, detail.data.baseline) ||
+              !sameTargetPin(pair.candidate_target, detail.data.candidate)))
         ) {
           throw new Error('Historical decision identity mismatch');
         }

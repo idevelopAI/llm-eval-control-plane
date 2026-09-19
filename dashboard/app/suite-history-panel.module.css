@@ -144,6 +144,39 @@
 .error {
   color: #853918;
 }
+.filters {
+  margin: 1.25rem 0;
+  padding: 1rem;
+  background: #f6f9f7;
+  border: 1px solid #e0e7e2;
+  border-radius: 0.75rem;
+}
+.filters > div {
+  min-width: 0;
+}
+.filters label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.filters select {
+  width: 100%;
+  min-width: 0;
+  background: #fff;
+}
+.pin {
+  display: grid;
+  gap: 0.375rem;
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+.filterNote {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 0.875rem;
+  color: #476657;
+}
 @media (max-width: 760px) {
   .panel {
     margin: 0.75rem;
