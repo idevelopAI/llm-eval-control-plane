@@ -29,6 +29,8 @@ from llm_eval_control_plane.domain.control_plane import (
     ScenarioOverride,
     SuiteListRecord,
     SuiteRecord,
+    SuiteTargetGroupRecord,
+    SuiteTargetPairGroupRecord,
 )
 from llm_eval_control_plane.domain.evaluation import (
     EvaluationSpec,
@@ -39,6 +41,28 @@ from llm_eval_control_plane.domain.results import ExecutionMode
 
 NOW = datetime(2026, 8, 20, 12, tzinfo=UTC)
 TRACEPARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+
+
+def test_target_group_models_require_resolved_correct_reference_kinds() -> None:
+    suite = ArtifactRef(
+        kind=ArtifactKind.SUITE, name="suite", revision=1, digest=sha256_digest("suite")
+    )
+    target = ArtifactRef(
+        kind=ArtifactKind.TARGET,
+        name="target",
+        revision=1,
+        digest=sha256_digest("target"),
+    )
+    for bad_suite in (target, suite.model_copy(update={"digest": None})):
+        with raises(ValidationError):
+            SuiteTargetGroupRecord(suite=bad_suite, target=target)
+    for bad_target in (suite, target.model_copy(update={"digest": None})):
+        with raises(ValidationError):
+            SuiteTargetGroupRecord(suite=suite, target=bad_target)
+        with raises(ValidationError):
+            SuiteTargetPairGroupRecord(
+                suite=suite, baseline_target=target, candidate_target=bad_target
+            )
 
 
 def job(*, status: JobStatus = JobStatus.QUEUED) -> JobRecord:

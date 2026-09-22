@@ -242,8 +242,10 @@ reference, omitted for historical unpinned evidence. The generated dashboard
 client validates this bounded metadata while preserving existing fixture and
 live-review behavior. Authenticated experiment-history reads use exact suite
 pins and descending time/ID keysets over bounded relational projections; they
-never select canonical run or decision documents. Suite-history dashboard
-views are not implemented yet. The
+never select canonical run or decision documents. A local-only dashboard panel
+loads that history on explicit action, validates the selected digest and page
+ordering, and retains at most 100 metadata records per collection. The public
+fixture entry excludes this panel and its API client. The
 [suite API guide](evaluation-suites.md) documents the request and privacy boundary.
 
 Target expectations are never passed through the target port. Target and
