@@ -43,6 +43,8 @@ from llm_eval_control_plane.domain.control_plane import (
     SuiteListRecord,
     SuiteRecord,
     SuiteRunHistoryRecord,
+    SuiteTargetGroupRecord,
+    SuiteTargetPairGroupRecord,
     TraceParent,
     WorkerId,
     validate_traceparent,
@@ -115,12 +117,39 @@ class ControlPlaneRepository(Protocol):
     def get_suite(self, name: str, revision: int) -> SuiteRecord: ...
 
     def list_suite_runs(
-        self, suite: ArtifactRef, *, limit: int, cursor: str | None = None
+        self,
+        suite: ArtifactRef,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        target: ArtifactRef | None = None,
     ) -> CursorPage[SuiteRunHistoryRecord]: ...
 
     def list_suite_decisions(
-        self, suite: ArtifactRef, *, limit: int, cursor: str | None = None
+        self,
+        suite: ArtifactRef,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        baseline_target: ArtifactRef | None = None,
+        candidate_target: ArtifactRef | None = None,
     ) -> CursorPage[SuiteDecisionHistoryRecord]: ...
+
+    def list_suite_targets(
+        self,
+        suite: ArtifactRef,
+        *,
+        limit: int,
+        cursor: str | None = None,
+    ) -> CursorPage[SuiteTargetGroupRecord]: ...
+
+    def list_suite_target_pairs(
+        self,
+        suite: ArtifactRef,
+        *,
+        limit: int,
+        cursor: str | None = None,
+    ) -> CursorPage[SuiteTargetPairGroupRecord]: ...
 
     def list_suites(
         self,
@@ -612,11 +641,12 @@ class ControlPlaneService:
         *,
         limit: int,
         cursor: str | None = None,
+        target: ArtifactRef | None = None,
     ) -> CursorPage[SuiteRunHistoryRecord]:
         suite = self.get_suite(name, revision).suite
         try:
             return self._repository.list_suite_runs(
-                suite.artifact_ref, limit=limit, cursor=cursor
+                suite.artifact_ref, limit=limit, cursor=cursor, target=target
             )
         except StoreInvalidCursorError as error:
             raise InvalidCursorError("Pagination cursor is invalid") from error
@@ -628,10 +658,48 @@ class ControlPlaneService:
         *,
         limit: int,
         cursor: str | None = None,
+        baseline_target: ArtifactRef | None = None,
+        candidate_target: ArtifactRef | None = None,
     ) -> CursorPage[SuiteDecisionHistoryRecord]:
         suite = self.get_suite(name, revision).suite
         try:
             return self._repository.list_suite_decisions(
+                suite.artifact_ref,
+                limit=limit,
+                cursor=cursor,
+                baseline_target=baseline_target,
+                candidate_target=candidate_target,
+            )
+        except StoreInvalidCursorError as error:
+            raise InvalidCursorError("Pagination cursor is invalid") from error
+
+    def list_suite_targets(
+        self,
+        name: str,
+        revision: int,
+        *,
+        limit: int,
+        cursor: str | None = None,
+    ) -> CursorPage[SuiteTargetGroupRecord]:
+        suite = self.get_suite(name, revision).suite
+        try:
+            return self._repository.list_suite_targets(
+                suite.artifact_ref, limit=limit, cursor=cursor
+            )
+        except StoreInvalidCursorError as error:
+            raise InvalidCursorError("Pagination cursor is invalid") from error
+
+    def list_suite_target_pairs(
+        self,
+        name: str,
+        revision: int,
+        *,
+        limit: int,
+        cursor: str | None = None,
+    ) -> CursorPage[SuiteTargetPairGroupRecord]:
+        suite = self.get_suite(name, revision).suite
+        try:
+            return self._repository.list_suite_target_pairs(
                 suite.artifact_ref, limit=limit, cursor=cursor
             )
         except StoreInvalidCursorError as error:

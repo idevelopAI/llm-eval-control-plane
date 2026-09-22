@@ -39,6 +39,27 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   exact-pin cursor pages and project-authorized read endpoints. The maintenance
   migration projects only existing explicit suite pins, preserves canonical
   evidence bytes, and leaves legacy unpinned runs outside suite history.
+- A local-only suite-history dashboard with exact revision/digest checks,
+  independent catalog/run/decision pagination, strict metadata validation,
+  stale-request cancellation, and session clearing on lost authorization.
+  Each collection retains at most 100 records; the hosted fixture build remains
+  request-free and excludes the history client and interface.
+- Direct gate review from suite history, including decisions outside the recent
+  collection. Detail reads must match the selected immutable evidence and suite
+  pin before cases or distributions load; stale requests are canceled and failed
+  selections retain only previously verified evidence.
+- Project-authorized discovery of exact suite target groups and directed
+  baseline/candidate target pairs, plus complete-identity filters on existing
+  run and decision history. Group pages deduplicate persisted metadata and bind
+  cursors to the suite and stream; filtered history cursors bind the complete
+  target selection. No evaluation execution, new migration, or hosted capability
+  is added.
+- Local dashboard target and directed-pair selectors with full-identity filters,
+  bounded group catalogs, cursor resets, stale-request cancellation, and exact
+  pair verification before historical gate evidence loads. Group responses are
+  metadata-only, lost authorization clears the local session, and the hosted
+  fixture remains unchanged. The operator guide includes a synthetic-data
+  screenshot of the grouped history view.
 - RFC 8785 canonical JSON, strict JSONL datasets, and content-derived dataset
   identities.
 - Provider-neutral target, evaluator, failure, case-result, metric-summary, and
