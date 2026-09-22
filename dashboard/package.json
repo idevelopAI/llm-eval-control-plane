@@ -41,7 +41,7 @@
     "@vitejs/plugin-rsc": "0.5.34",
     "axe-core": "4.13.0",
     "eslint": "9.39.4",
-    "eslint-config-next": "16.3.3",
+    "eslint-config-next": "16.3.5",
     "jsdom": "30.0.1",
     "openapi-typescript": "7.13.0",
     "react-server-dom-webpack": "19.2.8",
