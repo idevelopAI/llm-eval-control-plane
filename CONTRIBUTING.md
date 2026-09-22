@@ -55,6 +55,24 @@ check names are `Dependency Vulnerability Audit`, `Static Security Analysis`,
 - Do not publish benchmark numbers that cannot be reproduced from a tagged
   dataset and configuration.
 
+## Dependency updates
+
+Dashboard dependency updates follow compatibility boundaries. React, its browser
+and server renderers, and their types update together across production and
+development dependencies. Next.js and its ESLint configuration form a second
+group. Vite, Vinext, and Cloudflare build tooling have their own minor/patch
+group; other development dependencies use a separate minor/patch group.
+Major tooling updates, including Vitest, remain individual pull requests rather
+than joining either batch. Existing explicit major-version exclusions remain
+unchanged, and security updates retain Dependabot's separate handling.
+
+Before merging an update, refresh it against the current base and require fresh
+checks. Dashboard updates must pass a frozen-lockfile install, the vulnerability
+audit, and `pnpm run check` (including production build and public-runtime smoke
+checks). Keep the transitive security floors in `pnpm-workspace.yaml`; do not
+silence an audit or bypass typing to make a dependency update pass. A grouped
+update that fails should be isolated before widening the batch.
+
 ## Pull requests
 
 Describe the problem, the chosen trade-offs, and the validation performed.
