@@ -128,8 +128,19 @@ uses nullable relational projections populated atomically with pinned evidence,
 with all-or-none constraints and suite/time/ID indexes. The maintenance migration
 backfills only explicit existing pins without rewriting canonical documents.
 Collection reads select only metadata, newest first, with cursors bound to the
-complete suite pin and stream. Dedicated dashboard history presentation and
-target-grouping queries are not implemented yet.
+complete suite pin and stream. The local dashboard presents catalog, run, and
+decision metadata with explicit pagination and at most 100 records retained per
+collection. It validates exact suite pins and cancels superseded reads without
+changing the hosted fixture. History rows can open detailed gate review after
+matching the complete suite pin and immutable decision metadata. Only the active
+historical selection supplements the bounded recent-decision picker; cases and
+distributions retain their existing redacted projections. Metadata-only target
+and directed target-pair discovery now derives groups from persisted suite runs
+and decision-to-run joins. Exact target filters bind name, revision, and digest
+into history cursors without introducing mutable experiment records or new
+schema projections. Group discovery uses bytewise identity ordering, while
+filtered evidence remains newest-first. Dashboard group selection remains a
+follow-up; the authenticated API is available locally.
 
 ### Registration is create-once; jobs pin complete snapshots
 
@@ -233,8 +244,8 @@ artifact remains subject to ADR 0011 and its build and runtime acceptance gates.
   bytes or exposing canonical suite documents through an HTTP route.
 - Suite HTTP contracts and optional detail-response provenance are implemented.
   The offline CLI provides a local file-based workflow. Exact-suite run and
-  decision history queries are implemented; suite-history dashboard views still
-  require bounded integration.
+  decision history queries and the bounded, local-only suite-history dashboard
+  are implemented; hosted live history remains disabled.
 - Initial execution remains deliberately serial and single-invocation. A future
   sampling or concurrency model requires a new reviewed semantic contract.
 
