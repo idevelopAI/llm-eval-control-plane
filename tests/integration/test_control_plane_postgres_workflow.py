@@ -621,6 +621,38 @@ def test_suite_execution_snapshots_survive_postgres_worker_restart(
         )
         assert decision_history.items[0].decision_digest == decision.decision_digest
         assert decision_history.items[0].suite == suite.artifact_ref
+        # Group discovery and exact-target continuation also run on PostgreSQL.
+        targets = history_repository.list_suite_targets(suite.artifact_ref, limit=1)
+        assert targets.next_cursor is not None
+        more_targets = history_repository.list_suite_targets(
+            suite.artifact_ref, limit=1, cursor=targets.next_cursor
+        )
+        assert more_targets.next_cursor is None
+        assert {targets.items[0].target, more_targets.items[0].target} == {
+            baseline.target,
+            candidate.target,
+        }
+        pairs = history_repository.list_suite_target_pairs(suite.artifact_ref, limit=1)
+        assert len(pairs.items) == 1
+        assert pairs.items[0].baseline_target == baseline.target
+        assert pairs.items[0].candidate_target == candidate.target
+        assert (
+            history_repository.list_suite_runs(
+                suite.artifact_ref, limit=1, target=baseline.target
+            )
+            .items[0]
+            .run_id
+            == baseline.run_id
+        )
+        assert (
+            history_repository.list_suite_decisions(
+                suite.artifact_ref,
+                limit=1,
+                baseline_target=baseline.target,
+                candidate_target=candidate.target,
+            ).items
+            == decision_history.items
+        )
 
         # This fixture requires a disposable test database. Exercise the PostgreSQL
         # JSON backfill with real worker evidence and a missing suite registry row.

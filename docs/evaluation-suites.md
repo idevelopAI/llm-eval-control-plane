@@ -21,6 +21,8 @@ configuration, not command arguments, source files, logs, or screenshots.
 | `POST /v1/suite-comparisons` | `control-plane:write` | Enqueue comparison using only the pinned policy |
 | `GET /v1/suite-runs` | `control-plane:read` | Newest-first, metadata-only run history for one suite revision |
 | `GET /v1/suite-comparisons` | `control-plane:read` | Newest-first, metadata-only release history for one suite revision |
+| `GET /v1/suite-targets` | `control-plane:read` | Distinct exact targets observed in persisted suite runs |
+| `GET /v1/suite-target-pairs` | `control-plane:read` | Distinct directed baseline/candidate target pairs observed in suite decisions |
 
 These are local control-plane endpoints. They are not added to the public Site,
 which remains a synthetic, request-free build.
@@ -138,10 +140,77 @@ on later pages. History lists completed evidence, not queued or canceled jobs;
 use `/v1/jobs` for execution lifecycle state. A failed release decision can still
 belong to a successfully completed comparison job.
 
-No mutable experiment record, target grouping, synthetic trend, automatic
-baseline selection, or current-result pointer is introduced. Dedicated dashboard
-history views are not implemented yet. The offline CLI remains file-based and
-does not query the server's experiment history.
+No mutable experiment record, synthetic trend, automatic
+baseline selection, or current-result pointer is introduced. The local dashboard
+offers a metadata-only suite-history view after an explicit operator action.
+It loads 20 records per page, retains at most 100 per collection, and checks the
+selected suite digest and descending ordering across pages. See the
+[dashboard guide](../dashboard/README.md#browse-suite-history) for the workflow
+and authorization boundary. The offline CLI remains file-based and does not
+query the server's experiment history.
+
+An explicit **Review gates** action opens any loaded historical decision through
+the existing ID-based detail routes, even outside the newest-decision page. The
+client verifies the entire selected decision identity and suite pin before
+fetching gate cases or distributions. This adds no new endpoint, execution path,
+provider request, or hosted capability.
+
+### Target-grouped history
+
+The API discovers groups from persisted evidence across the selected suite, not
+just the records currently loaded in the dashboard:
+
+```text
+GET /v1/suite-targets?suite_name=release%2Fcore&suite_revision=1&limit=20
+GET /v1/suite-target-pairs?suite_name=release%2Fcore&suite_revision=1&limit=20
+```
+
+Both routes require the same project authorization and registered suite as the
+existing history routes. Target items return only `suite` and `target` resolved
+references plus a schema version. Pair items return `suite`, `baseline_target`,
+and `candidate_target` references plus a schema version. A resolved reference
+includes kind, name, revision, and digest. Repeated runs or decisions do not
+create duplicate groups. A target with runs but no comparisons appears in target
+discovery but does not invent a comparison pair. Baseline/candidate direction
+matters: A → B and B → A are different groups.
+
+Use the exact returned references to filter the existing history endpoints:
+
+| History route | Required filter fields when selecting a group |
+| --- | --- |
+| `/v1/suite-runs` | `target_name`, `target_revision`, `target_digest` |
+| `/v1/suite-comparisons` | `baseline_target_name`, `baseline_target_revision`, `baseline_target_digest`, `candidate_target_name`, `candidate_target_revision`, `candidate_target_digest` |
+
+Omit all target fields for the original suite-wide history. Partial references
+or a one-sided pair return `422`; filters never resolve a name to a mutable
+latest revision. A valid reference with no matching evidence returns an empty
+page. Different digests remain separate even when names and revisions match.
+Filtered pages retain their original response shapes and newest-first ordering.
+Comparison filtering joins the decision's exact run IDs to their target metadata
+and requires both runs to belong to the same complete suite pin.
+
+Group discovery accepts `limit` 1–100 (default 50) and opaque cursors. Groups sort
+ascending by case-sensitive bytewise name, numeric revision, then digest;
+comparison pairs sort by baseline identity followed by candidate identity. This
+is identity order, not a ranking or chronology. Cursors bind the complete suite
+pin and collection; filtered history cursors additionally bind every target
+field. Reusing a cursor with another group, direction, or collection returns
+`400`. Refresh the first page to discover groups inserted before a current
+cursor; pages are not a frozen snapshot of concurrent writes.
+
+These queries reuse existing relational projections and suite indexes. They do
+not load canonical documents, expose raw evaluation content, execute targets,
+or add a migration or mutable experiment table. Group discovery deduplicates and
+sorts matching metadata in the database; a bounded response is not a claim of
+constant query cost for arbitrarily large suites. No total counts, trend scores,
+or automatic baseline choices are inferred.
+
+The local dashboard offers independent exact-target and directed-pair selectors
+with bounded group pagination and complete identity checks. Filter changes reset
+history cursors; detailed gate review verifies the selected pair before reading
+case or distribution evidence. See the [operator workflow](../dashboard/README.md#filter-history-by-target).
+The hosted synthetic Site does not expose any of these authenticated routes or
+controls.
 
 ### Database maintenance
 
@@ -176,10 +245,11 @@ responses omit the field and retain their existing document shape; run and
 decision collection items are unchanged. Evidence digest v3 binds the complete
 suite identity and explicit execution mode; old v1/v2 evidence is not rewritten.
 
-The dashboard client accepts and validates the optional suite reference without
-changing its current review workflow. The [offline suite CLI](suite-cli.md)
-authors and executes local suite files without connecting to the API.
-Suite-history dashboard views are not yet implemented. Legacy `/v1/runs`,
+The dashboard client accepts and validates the optional suite reference and
+provides a separate local-only metadata history panel. The production fixture
+build does not include this panel or its authenticated client. The
+[offline suite CLI](suite-cli.md) authors and executes local suite files without
+connecting to the API. Legacy `/v1/runs`,
 `/v1/comparisons`, and unpinned CLI submissions remain suite-unpinned and cannot
 supply replacement policy for pinned evidence.
 

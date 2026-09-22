@@ -68,6 +68,8 @@ _HTTP_ROUTES = frozenset(
         "/v1/suite-comparisons",
         "/v1/suite-revisions/{revision}/{name:path}",
         "/v1/suite-runs",
+        "/v1/suite-targets",
+        "/v1/suite-target-pairs",
         "/v1/suites",
     }
 )

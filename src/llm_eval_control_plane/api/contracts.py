@@ -58,6 +58,8 @@ from llm_eval_control_plane.domain.control_plane import (
     SuiteListRecord,
     SuiteRecord,
     SuiteRunHistoryRecord,
+    SuiteTargetGroupRecord,
+    SuiteTargetPairGroupRecord,
 )
 from llm_eval_control_plane.domain.datasets import DatasetVersion, EvaluationCase
 from llm_eval_control_plane.domain.evaluation import (
@@ -628,6 +630,41 @@ class SuiteDecisionHistoryPage(ApiModel):
     next_cursor: str | None = None
 
 
+class SuiteTargetGroupResponse(ApiModel):
+    schema_version: Literal["suite-target-group/v1"] = "suite-target-group/v1"
+    suite: ArtifactRef
+    target: ArtifactRef
+
+    @classmethod
+    def from_record(cls, record: SuiteTargetGroupRecord) -> Self:
+        return cls(**record.model_dump())
+
+
+class SuiteTargetGroupPage(ApiModel):
+    schema_version: Literal["suite-target-group-page/v1"] = "suite-target-group-page/v1"
+    items: tuple[SuiteTargetGroupResponse, ...]
+    next_cursor: str | None = None
+
+
+class SuiteTargetPairGroupResponse(ApiModel):
+    schema_version: Literal["suite-target-pair-group/v1"] = "suite-target-pair-group/v1"
+    suite: ArtifactRef
+    baseline_target: ArtifactRef
+    candidate_target: ArtifactRef
+
+    @classmethod
+    def from_record(cls, record: SuiteTargetPairGroupRecord) -> Self:
+        return cls(**record.model_dump())
+
+
+class SuiteTargetPairGroupPage(ApiModel):
+    schema_version: Literal["suite-target-pair-group-page/v1"] = (
+        "suite-target-pair-group-page/v1"
+    )
+    items: tuple[SuiteTargetPairGroupResponse, ...]
+    next_cursor: str | None = None
+
+
 class EvaluationSpecInput(ApiModel):
     """Public comparison policy over fully resolved immutable evidence."""
 
@@ -1018,4 +1055,8 @@ __all__ = [
     "SuiteRunCreateRequest",
     "SuiteRunHistoryItemResponse",
     "SuiteRunHistoryPage",
+    "SuiteTargetGroupPage",
+    "SuiteTargetGroupResponse",
+    "SuiteTargetPairGroupPage",
+    "SuiteTargetPairGroupResponse",
 ]
