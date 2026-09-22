@@ -9,6 +9,12 @@ Install Python 3.11 or newer and
 uv sync --locked
 ```
 
+For the dashboard, use Node.js 22.22.2+ on the 22.x line, 24.15.0+ on the
+24.x line, or 26+. CI currently pins Node.js 24.19.0. Use the package manager
+declared in `dashboard/package.json` (pnpm 11.19.0), then run
+`pnpm install --frozen-lockfile` and `pnpm run check` from `dashboard/`.
+The minimum Node versions also apply to the jsdom-backed test environment.
+
 ## Quality checks
 
 Run the same checks used by continuous integration:
