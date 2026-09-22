@@ -639,6 +639,37 @@ class SuiteDecisionHistoryRecord(ReleaseDecisionListRecord):
         return self
 
 
+class SuiteTargetGroupRecord(FrozenModel):
+    """One exact target observed in persisted runs of a suite revision."""
+
+    suite: ArtifactRef
+    target: ArtifactRef
+
+    @model_validator(mode="after")
+    def validate_refs(self) -> Self:
+        for reference, kind in (
+            (self.suite, ArtifactKind.SUITE),
+            (self.target, ArtifactKind.TARGET),
+        ):
+            if reference.kind is not kind or reference.digest is None:
+                raise ValueError("Target grouping requires resolved references")
+        return self
+
+
+class SuiteTargetPairGroupRecord(FrozenModel):
+    """One directed baseline/candidate target pair with persisted decisions."""
+
+    suite: ArtifactRef
+    baseline_target: ArtifactRef
+    candidate_target: ArtifactRef
+
+    @model_validator(mode="after")
+    def validate_refs(self) -> Self:
+        for target in (self.baseline_target, self.candidate_target):
+            SuiteTargetGroupRecord(suite=self.suite, target=target)
+        return self
+
+
 PageItem = TypeVar("PageItem")
 
 

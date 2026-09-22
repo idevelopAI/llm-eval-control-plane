@@ -36,6 +36,8 @@ def test_openapi_operation_ids_and_dynamic_responses_are_stable(
         "list_suite_revisions",
         "list_suite_run_history",
         "list_suite_decision_history",
+        "list_suite_target_groups",
+        "list_suite_target_pair_groups",
         "request_job_cancellation",
         "submit_evaluation_run",
         "submit_release_comparison",
@@ -90,6 +92,10 @@ def test_openapi_pins_versioned_redacted_response_contracts(
         "SuiteRunHistoryPage": "suite-run-history-page/v1",
         "SuiteDecisionHistoryItemResponse": "suite-decision-history-item/v1",
         "SuiteDecisionHistoryPage": "suite-decision-history-page/v1",
+        "SuiteTargetGroupResponse": "suite-target-group/v1",
+        "SuiteTargetGroupPage": "suite-target-group-page/v1",
+        "SuiteTargetPairGroupResponse": "suite-target-pair-group/v1",
+        "SuiteTargetPairGroupPage": "suite-target-pair-group-page/v1",
     }
     for name, version in expected_versions.items():
         assert schemas[name]["properties"]["schema_version"]["const"] == version
