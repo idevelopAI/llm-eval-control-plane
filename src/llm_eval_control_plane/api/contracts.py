@@ -11,8 +11,10 @@ from pydantic import (
     Field,
     FiniteFloat,
     JsonValue,
+    SerializerFunctionWrapHandler,
     StrictBool,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -52,10 +54,17 @@ from llm_eval_control_plane.domain.control_plane import (
     ReleaseDecisionRecord,
     RunListRecord,
     RunRecord,
+    SuiteDecisionHistoryRecord,
+    SuiteListRecord,
+    SuiteRecord,
+    SuiteRunHistoryRecord,
+    SuiteTargetGroupRecord,
+    SuiteTargetPairGroupRecord,
 )
 from llm_eval_control_plane.domain.datasets import DatasetVersion, EvaluationCase
 from llm_eval_control_plane.domain.evaluation import (
     EvaluationSpec,
+    MetricDirection,
     MetricGate,
     MetricName,
 )
@@ -63,6 +72,11 @@ from llm_eval_control_plane.domain.results import (
     CaseResultStatus,
     ExecutionMode,
     RunStatus,
+)
+from llm_eval_control_plane.domain.suites import (
+    EvaluationSuiteVersion,
+    SuiteEvaluator,
+    SuiteExecutionSettings,
 )
 
 _NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
@@ -81,6 +95,31 @@ CaseIdInput = Annotated[
 SliceInput = Annotated[
     str,
     Field(min_length=1, max_length=128, pattern=_SLICE_PATTERN, strict=True),
+]
+ScenarioOverridesInput = Annotated[
+    dict[
+        CaseIdInput,
+        Literal[
+            "echo",
+            "malformed",
+            "mismatch",
+            "missing_usage",
+            "offset",
+            "raise",
+            "refuse",
+            "uppercase",
+        ],
+    ],
+    Field(max_length=1_000),
+]
+RunIdInput = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        strict=True,
+    ),
 ]
 
 
@@ -202,22 +241,7 @@ class RunCreateRequest(ApiModel):
         tuple[BuiltInEvaluatorKind, ...],
         Field(min_length=1, max_length=len(BuiltInEvaluatorKind)),
     ]
-    scenario_overrides: Annotated[
-        dict[
-            CaseIdInput,
-            Literal[
-                "echo",
-                "malformed",
-                "mismatch",
-                "missing_usage",
-                "offset",
-                "raise",
-                "refuse",
-                "uppercase",
-            ],
-        ],
-        Field(max_length=1_000),
-    ] = Field(default_factory=dict)
+    scenario_overrides: ScenarioOverridesInput = Field(default_factory=dict)
 
     @field_validator("evaluators")
     @classmethod
@@ -228,6 +252,23 @@ class RunCreateRequest(ApiModel):
         if len(value) != len(set(value)):
             raise ValueError("evaluator kinds must be unique")
         return tuple(sorted(value, key=lambda item: item.value))
+
+
+class SuiteRunCreateRequest(ApiModel):
+    """Select a suite revision without permitting replacement evaluation policy."""
+
+    suite_name: ArtifactNameInput
+    suite_revision: PositiveIntInput
+    target_name: ArtifactNameInput = "fake/deterministic"
+    target_revision: PositiveIntInput = 1
+    scenario_overrides: ScenarioOverridesInput = Field(default_factory=dict, repr=False)
+
+
+class SuiteComparisonCreateRequest(ApiModel):
+    suite_name: ArtifactNameInput
+    suite_revision: PositiveIntInput
+    baseline_run_id: RunIdInput
+    candidate_run_id: RunIdInput
 
 
 class JobResponse(ApiModel):
@@ -315,7 +356,23 @@ class CaseStatusCounts(ApiModel):
     target_failed: int
 
 
-class RunResponse(ApiModel):
+class _SuiteEvidenceResponse(ApiModel):
+    """Expose optional provenance without changing legacy response documents."""
+
+    suite: ArtifactRef | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_evidence(  # type: ignore[no-untyped-def]
+        self, handler: SerializerFunctionWrapHandler
+    ):
+        # A return annotation would replace the model's serialization JSON Schema.
+        document: dict[str, object] = handler(self)
+        if self.suite is None:
+            document.pop("suite", None)
+        return document
+
+
+class RunResponse(_SuiteEvidenceResponse):
     schema_version: Literal["run-summary/v1"] = "run-summary/v1"
     run_id: str
     status: RunStatus
@@ -338,6 +395,7 @@ class RunResponse(ApiModel):
             run_id=result.run_id,
             status=result.status,
             execution_mode=result.execution_mode,
+            suite=result.suite,
             dataset=result.dataset,
             target=result.target,
             evaluators=result.evaluators,
@@ -394,6 +452,219 @@ class ResolvedArtifactRefInput(ApiModel):
         return ArtifactRef.model_validate(self.model_dump())
 
 
+class SuiteEvaluatorInput(ApiModel):
+    executor_name: BuiltInEvaluatorKind
+    artifact: ResolvedArtifactRefInput
+    metrics: Annotated[tuple[MetricName, ...], Field(min_length=1, max_length=32)]
+
+    def to_domain(self) -> SuiteEvaluator:
+        return SuiteEvaluator(
+            executor_name=self.executor_name.value,
+            artifact=self.artifact.to_domain(),
+            metrics=self.metrics,
+        )
+
+
+class SuiteExecutionInput(ApiModel):
+    """Only the credential-free serial executor is exposed over HTTP."""
+
+    adapter: Literal["deterministic_fake"] = "deterministic_fake"
+    execution_mode: Literal["offline_mock"] = "offline_mock"
+    case_order: Literal["case_id_ascending"] = "case_id_ascending"
+    invocations_per_case: Annotated[int, Field(strict=True, ge=1, le=1)] = 1
+    max_concurrency: Annotated[int, Field(strict=True, ge=1, le=1)] = 1
+
+    def to_domain(self) -> SuiteExecutionSettings:
+        return SuiteExecutionSettings.model_validate(self.model_dump())
+
+
+class SuiteGateInput(ApiModel):
+    metric: MetricName
+    direction: MetricDirection
+    threshold: Annotated[FiniteFloat, Field(strict=True)]
+    allowed_regression: Annotated[FiniteFloat, Field(strict=True, ge=0)] = 0
+    slice: SliceInput | None = None
+
+    def to_domain(self) -> MetricGate:
+        return MetricGate.model_validate(self.model_dump())
+
+
+class SuiteCreateRequest(ApiModel):
+    """Explicit resolved dependencies; the server computes the canonical digest."""
+
+    name: ArtifactNameInput
+    revision: PositiveIntInput
+    dataset: ResolvedArtifactRefInput
+    evaluators: Annotated[
+        tuple[SuiteEvaluatorInput, ...], Field(min_length=1, max_length=32)
+    ]
+    execution: SuiteExecutionInput = Field(default_factory=SuiteExecutionInput)
+    slices: Annotated[tuple[SliceInput, ...], Field(max_length=128)] = ()
+    gates: Annotated[tuple[SuiteGateInput, ...], Field(min_length=1, max_length=64)]
+
+    def to_domain(self) -> EvaluationSuiteVersion:
+        return EvaluationSuiteVersion.create(
+            name=self.name,
+            revision=self.revision,
+            dataset=self.dataset.to_domain(),
+            evaluators=tuple(item.to_domain() for item in self.evaluators),
+            execution=self.execution.to_domain(),
+            slices=self.slices,
+            gates=tuple(gate.to_domain() for gate in self.gates),
+        )
+
+
+class SuiteEvaluatorResponse(ApiModel):
+    executor_name: str
+    artifact: ArtifactRef
+    metrics: tuple[MetricName, ...]
+
+
+class SuiteResponse(ApiModel):
+    """Allowlisted protocol metadata, never a raw canonical document or payload."""
+
+    schema_version: Literal["suite-summary/v1"] = "suite-summary/v1"
+    name: str
+    revision: int
+    digest: str
+    dataset: ArtifactRef
+    evaluators: tuple[SuiteEvaluatorResponse, ...]
+    execution: SuiteExecutionSettings
+    slices: tuple[str, ...]
+    gates: tuple[MetricGate, ...]
+    created_at: datetime
+
+    @classmethod
+    def from_record(cls, record: SuiteRecord) -> Self:
+        suite = record.suite
+        return cls(
+            name=suite.name,
+            revision=suite.revision,
+            digest=suite.digest,
+            dataset=suite.dataset,
+            evaluators=tuple(
+                SuiteEvaluatorResponse(
+                    executor_name=item.executor_name,
+                    artifact=item.artifact,
+                    metrics=item.metrics,
+                )
+                for item in suite.evaluators
+            ),
+            execution=suite.execution,
+            slices=suite.slices,
+            gates=suite.gates,
+            created_at=record.created_at,
+        )
+
+
+class SuiteListItemResponse(ApiModel):
+    schema_version: Literal["suite-list-item/v1"] = "suite-list-item/v1"
+    name: str
+    revision: int
+    digest: str
+    dataset_name: str
+    dataset_revision: int
+    evaluator_count: int
+    metric_count: int
+    slice_count: int
+    gate_count: int
+    execution_mode: ExecutionMode
+    created_at: datetime
+
+    @classmethod
+    def from_record(cls, record: SuiteListRecord) -> Self:
+        return cls(**record.model_dump())
+
+
+class SuitePage(ApiModel):
+    schema_version: Literal["suite-page/v1"] = "suite-page/v1"
+    items: tuple[SuiteListItemResponse, ...]
+    next_cursor: str | None = None
+
+
+class SuiteRunHistoryItemResponse(ApiModel):
+    schema_version: Literal["suite-run-history-item/v1"] = "suite-run-history-item/v1"
+    run_id: str
+    status: RunStatus
+    execution_mode: ExecutionMode
+    dataset_name: str
+    dataset_revision: int
+    result_digest: str
+    created_at: datetime
+    suite: ArtifactRef
+    target: ArtifactRef
+
+    @classmethod
+    def from_record(cls, record: SuiteRunHistoryRecord) -> Self:
+        return cls(**record.model_dump())
+
+
+class SuiteRunHistoryPage(ApiModel):
+    schema_version: Literal["suite-run-history-page/v1"] = "suite-run-history-page/v1"
+    items: tuple[SuiteRunHistoryItemResponse, ...]
+    next_cursor: str | None = None
+
+
+class SuiteDecisionHistoryItemResponse(ApiModel):
+    schema_version: Literal["suite-decision-history-item/v1"] = (
+        "suite-decision-history-item/v1"
+    )
+    decision_id: str
+    status: ReleaseStatus
+    baseline_run_id: str
+    candidate_run_id: str
+    decision_digest: str
+    created_at: datetime
+    suite: ArtifactRef
+
+    @classmethod
+    def from_record(cls, record: SuiteDecisionHistoryRecord) -> Self:
+        return cls(**record.model_dump())
+
+
+class SuiteDecisionHistoryPage(ApiModel):
+    schema_version: Literal["suite-decision-history-page/v1"] = (
+        "suite-decision-history-page/v1"
+    )
+    items: tuple[SuiteDecisionHistoryItemResponse, ...]
+    next_cursor: str | None = None
+
+
+class SuiteTargetGroupResponse(ApiModel):
+    schema_version: Literal["suite-target-group/v1"] = "suite-target-group/v1"
+    suite: ArtifactRef
+    target: ArtifactRef
+
+    @classmethod
+    def from_record(cls, record: SuiteTargetGroupRecord) -> Self:
+        return cls(**record.model_dump())
+
+
+class SuiteTargetGroupPage(ApiModel):
+    schema_version: Literal["suite-target-group-page/v1"] = "suite-target-group-page/v1"
+    items: tuple[SuiteTargetGroupResponse, ...]
+    next_cursor: str | None = None
+
+
+class SuiteTargetPairGroupResponse(ApiModel):
+    schema_version: Literal["suite-target-pair-group/v1"] = "suite-target-pair-group/v1"
+    suite: ArtifactRef
+    baseline_target: ArtifactRef
+    candidate_target: ArtifactRef
+
+    @classmethod
+    def from_record(cls, record: SuiteTargetPairGroupRecord) -> Self:
+        return cls(**record.model_dump())
+
+
+class SuiteTargetPairGroupPage(ApiModel):
+    schema_version: Literal["suite-target-pair-group-page/v1"] = (
+        "suite-target-pair-group-page/v1"
+    )
+    items: tuple[SuiteTargetPairGroupResponse, ...]
+    next_cursor: str | None = None
+
+
 class EvaluationSpecInput(ApiModel):
     """Public comparison policy over fully resolved immutable evidence."""
 
@@ -447,7 +718,7 @@ class ComparisonCreateRequest(ApiModel):
     spec: EvaluationSpecInput
 
 
-class ReleaseDecisionResponse(ApiModel):
+class ReleaseDecisionResponse(_SuiteEvidenceResponse):
     schema_version: Literal["release-decision-summary/v1"] = (
         "release-decision-summary/v1"
     )
@@ -475,6 +746,7 @@ class ReleaseDecisionResponse(ApiModel):
             status=decision.status,
             spec_name=decision.spec_name,
             execution_mode=decision.execution_mode,
+            suite=decision.suite,
             dataset=decision.dataset,
             baseline=decision.baseline,
             candidate=decision.candidate,
@@ -773,4 +1045,18 @@ __all__ = [
     "RunPage",
     "RunResponse",
     "RunSubmissionResponse",
+    "SuiteComparisonCreateRequest",
+    "SuiteCreateRequest",
+    "SuiteDecisionHistoryItemResponse",
+    "SuiteDecisionHistoryPage",
+    "SuiteListItemResponse",
+    "SuitePage",
+    "SuiteResponse",
+    "SuiteRunCreateRequest",
+    "SuiteRunHistoryItemResponse",
+    "SuiteRunHistoryPage",
+    "SuiteTargetGroupPage",
+    "SuiteTargetGroupResponse",
+    "SuiteTargetPairGroupPage",
+    "SuiteTargetPairGroupResponse",
 ]

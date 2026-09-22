@@ -1584,6 +1584,16 @@
           },
           "status": {
             "$ref": "#/components/schemas/ReleaseStatus"
+          },
+          "suite": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ArtifactRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -1904,6 +1914,16 @@
           "status": {
             "$ref": "#/components/schemas/RunStatus"
           },
+          "suite": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ArtifactRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "target": {
             "$ref": "#/components/schemas/ArtifactRef"
           }
@@ -2032,6 +2052,826 @@
         ],
         "title": "ScoreValueDistributionResponse",
         "type": "object"
+      },
+      "SuiteCaseOrder": {
+        "description": "Case ordering modes supported by an evaluation suite version.",
+        "enum": [
+          "case_id_ascending"
+        ],
+        "title": "SuiteCaseOrder",
+        "type": "string"
+      },
+      "SuiteComparisonCreateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "baseline_run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "title": "Baseline Run Id",
+            "type": "string"
+          },
+          "candidate_run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "title": "Candidate Run Id",
+            "type": "string"
+          },
+          "suite_name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+            "title": "Suite Name",
+            "type": "string"
+          },
+          "suite_revision": {
+            "exclusiveMinimum": 0.0,
+            "title": "Suite Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "suite_name",
+          "suite_revision",
+          "baseline_run_id",
+          "candidate_run_id"
+        ],
+        "title": "SuiteComparisonCreateRequest",
+        "type": "object"
+      },
+      "SuiteCreateRequest": {
+        "additionalProperties": false,
+        "description": "Explicit resolved dependencies; the server computes the canonical digest.",
+        "properties": {
+          "dataset": {
+            "$ref": "#/components/schemas/ResolvedArtifactRefInput"
+          },
+          "evaluators": {
+            "items": {
+              "$ref": "#/components/schemas/SuiteEvaluatorInput"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "title": "Evaluators",
+            "type": "array"
+          },
+          "execution": {
+            "$ref": "#/components/schemas/SuiteExecutionInput"
+          },
+          "gates": {
+            "items": {
+              "$ref": "#/components/schemas/SuiteGateInput"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "title": "Gates",
+            "type": "array"
+          },
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+            "title": "Name",
+            "type": "string"
+          },
+          "revision": {
+            "exclusiveMinimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "slices": {
+            "default": [],
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/=-]*$",
+              "type": "string"
+            },
+            "maxItems": 128,
+            "title": "Slices",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "revision",
+          "dataset",
+          "evaluators",
+          "gates"
+        ],
+        "title": "SuiteCreateRequest",
+        "type": "object"
+      },
+      "SuiteDecisionHistoryItemResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "baseline_run_id": {
+            "title": "Baseline Run Id",
+            "type": "string"
+          },
+          "candidate_run_id": {
+            "title": "Candidate Run Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "decision_digest": {
+            "title": "Decision Digest",
+            "type": "string"
+          },
+          "decision_id": {
+            "title": "Decision Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "suite-decision-history-item/v1",
+            "default": "suite-decision-history-item/v1",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReleaseStatus"
+          },
+          "suite": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          }
+        },
+        "required": [
+          "decision_id",
+          "status",
+          "baseline_run_id",
+          "candidate_run_id",
+          "decision_digest",
+          "created_at",
+          "suite"
+        ],
+        "title": "SuiteDecisionHistoryItemResponse",
+        "type": "object"
+      },
+      "SuiteDecisionHistoryPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SuiteDecisionHistoryItemResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "schema_version": {
+            "const": "suite-decision-history-page/v1",
+            "default": "suite-decision-history-page/v1",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "SuiteDecisionHistoryPage",
+        "type": "object"
+      },
+      "SuiteEvaluatorInput": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact": {
+            "$ref": "#/components/schemas/ResolvedArtifactRefInput"
+          },
+          "executor_name": {
+            "$ref": "#/components/schemas/BuiltInEvaluatorKind"
+          },
+          "metrics": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9._:/-]*$",
+              "type": "string"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "title": "Metrics",
+            "type": "array"
+          }
+        },
+        "required": [
+          "executor_name",
+          "artifact",
+          "metrics"
+        ],
+        "title": "SuiteEvaluatorInput",
+        "type": "object"
+      },
+      "SuiteEvaluatorResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "executor_name": {
+            "title": "Executor Name",
+            "type": "string"
+          },
+          "metrics": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9._:/-]*$",
+              "type": "string"
+            },
+            "title": "Metrics",
+            "type": "array"
+          }
+        },
+        "required": [
+          "executor_name",
+          "artifact",
+          "metrics"
+        ],
+        "title": "SuiteEvaluatorResponse",
+        "type": "object"
+      },
+      "SuiteExecutionInput": {
+        "additionalProperties": false,
+        "description": "Only the credential-free serial executor is exposed over HTTP.",
+        "properties": {
+          "adapter": {
+            "const": "deterministic_fake",
+            "default": "deterministic_fake",
+            "title": "Adapter",
+            "type": "string"
+          },
+          "case_order": {
+            "const": "case_id_ascending",
+            "default": "case_id_ascending",
+            "title": "Case Order",
+            "type": "string"
+          },
+          "execution_mode": {
+            "const": "offline_mock",
+            "default": "offline_mock",
+            "title": "Execution Mode",
+            "type": "string"
+          },
+          "invocations_per_case": {
+            "default": 1,
+            "maximum": 1.0,
+            "minimum": 1.0,
+            "title": "Invocations Per Case",
+            "type": "integer"
+          },
+          "max_concurrency": {
+            "default": 1,
+            "maximum": 1.0,
+            "minimum": 1.0,
+            "title": "Max Concurrency",
+            "type": "integer"
+          }
+        },
+        "title": "SuiteExecutionInput",
+        "type": "object"
+      },
+      "SuiteExecutionSettings": {
+        "additionalProperties": false,
+        "description": "Semantic execution behavior shared by every run of one suite.",
+        "properties": {
+          "adapter": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+            "title": "Adapter",
+            "type": "string"
+          },
+          "case_order": {
+            "$ref": "#/components/schemas/SuiteCaseOrder",
+            "default": "case_id_ascending"
+          },
+          "execution_mode": {
+            "$ref": "#/components/schemas/ExecutionMode"
+          },
+          "invocations_per_case": {
+            "const": 1,
+            "default": 1,
+            "title": "Invocations Per Case",
+            "type": "integer"
+          },
+          "max_concurrency": {
+            "const": 1,
+            "default": 1,
+            "title": "Max Concurrency",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "adapter",
+          "execution_mode"
+        ],
+        "title": "SuiteExecutionSettings",
+        "type": "object"
+      },
+      "SuiteGateInput": {
+        "additionalProperties": false,
+        "properties": {
+          "allowed_regression": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Allowed Regression",
+            "type": "number"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/MetricDirection"
+          },
+          "metric": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z][A-Za-z0-9._:/-]*$",
+            "title": "Metric",
+            "type": "string"
+          },
+          "slice": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/=-]*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slice"
+          },
+          "threshold": {
+            "title": "Threshold",
+            "type": "number"
+          }
+        },
+        "required": [
+          "metric",
+          "direction",
+          "threshold"
+        ],
+        "title": "SuiteGateInput",
+        "type": "object"
+      },
+      "SuiteListItemResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "dataset_name": {
+            "title": "Dataset Name",
+            "type": "string"
+          },
+          "dataset_revision": {
+            "title": "Dataset Revision",
+            "type": "integer"
+          },
+          "digest": {
+            "title": "Digest",
+            "type": "string"
+          },
+          "evaluator_count": {
+            "title": "Evaluator Count",
+            "type": "integer"
+          },
+          "execution_mode": {
+            "$ref": "#/components/schemas/ExecutionMode"
+          },
+          "gate_count": {
+            "title": "Gate Count",
+            "type": "integer"
+          },
+          "metric_count": {
+            "title": "Metric Count",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": "suite-list-item/v1",
+            "default": "suite-list-item/v1",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "slice_count": {
+            "title": "Slice Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "revision",
+          "digest",
+          "dataset_name",
+          "dataset_revision",
+          "evaluator_count",
+          "metric_count",
+          "slice_count",
+          "gate_count",
+          "execution_mode",
+          "created_at"
+        ],
+        "title": "SuiteListItemResponse",
+        "type": "object"
+      },
+      "SuitePage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SuiteListItemResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "schema_version": {
+            "const": "suite-page/v1",
+            "default": "suite-page/v1",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "SuitePage",
+        "type": "object"
+      },
+      "SuiteResponse": {
+        "additionalProperties": false,
+        "description": "Allowlisted protocol metadata, never a raw canonical document or payload.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "dataset": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "digest": {
+            "title": "Digest",
+            "type": "string"
+          },
+          "evaluators": {
+            "items": {
+              "$ref": "#/components/schemas/SuiteEvaluatorResponse"
+            },
+            "title": "Evaluators",
+            "type": "array"
+          },
+          "execution": {
+            "$ref": "#/components/schemas/SuiteExecutionSettings"
+          },
+          "gates": {
+            "items": {
+              "$ref": "#/components/schemas/MetricGate"
+            },
+            "title": "Gates",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": "suite-summary/v1",
+            "default": "suite-summary/v1",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "slices": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Slices",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "revision",
+          "digest",
+          "dataset",
+          "evaluators",
+          "execution",
+          "slices",
+          "gates",
+          "created_at"
+        ],
+        "title": "SuiteResponse",
+        "type": "object"
+      },
+      "SuiteRunCreateRequest": {
+        "additionalProperties": false,
+        "description": "Select a suite revision without permitting replacement evaluation policy.",
+        "properties": {
+          "scenario_overrides": {
+            "maxProperties": 1000,
+            "patternProperties": {
+              "^[A-Za-z0-9][A-Za-z0-9._:/-]*$": {
+                "enum": [
+                  "echo",
+                  "malformed",
+                  "mismatch",
+                  "missing_usage",
+                  "offset",
+                  "raise",
+                  "refuse",
+                  "uppercase"
+                ],
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "maxLength": 128,
+              "minLength": 1
+            },
+            "title": "Scenario Overrides",
+            "type": "object"
+          },
+          "suite_name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+            "title": "Suite Name",
+            "type": "string"
+          },
+          "suite_revision": {
+            "exclusiveMinimum": 0.0,
+            "title": "Suite Revision",
+            "type": "integer"
+          },
+          "target_name": {
+            "default": "fake/deterministic",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+            "title": "Target Name",
+            "type": "string"
+          },
+          "target_revision": {
+            "default": 1,
+            "exclusiveMinimum": 0.0,
+            "title": "Target Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "suite_name",
+          "suite_revision"
+        ],
+        "title": "SuiteRunCreateRequest",
+        "type": "object"
+      },
+      "SuiteRunHistoryItemResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "dataset_name": {
+            "title": "Dataset Name",
+            "type": "string"
+          },
+          "dataset_revision": {
+            "title": "Dataset Revision",
+            "type": "integer"
+          },
+          "execution_mode": {
+            "$ref": "#/components/schemas/ExecutionMode"
+          },
+          "result_digest": {
+            "title": "Result Digest",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "suite-run-history-item/v1",
+            "default": "suite-run-history-item/v1",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "suite": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          }
+        },
+        "required": [
+          "run_id",
+          "status",
+          "execution_mode",
+          "dataset_name",
+          "dataset_revision",
+          "result_digest",
+          "created_at",
+          "suite",
+          "target"
+        ],
+        "title": "SuiteRunHistoryItemResponse",
+        "type": "object"
+      },
+      "SuiteRunHistoryPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SuiteRunHistoryItemResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "schema_version": {
+            "const": "suite-run-history-page/v1",
+            "default": "suite-run-history-page/v1",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "SuiteRunHistoryPage",
+        "type": "object"
+      },
+      "SuiteTargetGroupPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SuiteTargetGroupResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "schema_version": {
+            "const": "suite-target-group-page/v1",
+            "default": "suite-target-group-page/v1",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "SuiteTargetGroupPage",
+        "type": "object"
+      },
+      "SuiteTargetGroupResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "schema_version": {
+            "const": "suite-target-group/v1",
+            "default": "suite-target-group/v1",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "suite": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          }
+        },
+        "required": [
+          "suite",
+          "target"
+        ],
+        "title": "SuiteTargetGroupResponse",
+        "type": "object"
+      },
+      "SuiteTargetPairGroupPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SuiteTargetPairGroupResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "schema_version": {
+            "const": "suite-target-pair-group-page/v1",
+            "default": "suite-target-pair-group-page/v1",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "SuiteTargetPairGroupPage",
+        "type": "object"
+      },
+      "SuiteTargetPairGroupResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "baseline_target": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "candidate_target": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "schema_version": {
+            "const": "suite-target-pair-group/v1",
+            "default": "suite-target-pair-group/v1",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "suite": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          }
+        },
+        "required": [
+          "suite",
+          "baseline_target",
+          "candidate_target"
+        ],
+        "title": "SuiteTargetPairGroupResponse",
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -2046,7 +2886,7 @@
   "info": {
     "summary": "Durable, content-addressed evaluation and release decisions",
     "title": "LLM Evaluation Control Plane",
-    "version": "1.4.0"
+    "version": "1.6.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -4773,6 +5613,1815 @@
         "summary": "Get Run",
         "tags": [
           "runs"
+        ]
+      }
+    },
+    "/v1/suite-comparisons": {
+      "get": {
+        "description": "Newest persisted release decisions under the exact registered suite pin. Metadata only.",
+        "operationId": "list_suite_decision_history",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "suite_name",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+              "title": "Suite Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "suite_revision",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "title": "Suite Revision",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "baseline_target_name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Baseline Target Name"
+            }
+          },
+          {
+            "in": "query",
+            "name": "baseline_target_revision",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Baseline Target Revision"
+            }
+          },
+          {
+            "in": "query",
+            "name": "baseline_target_digest",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Baseline Target Digest"
+            }
+          },
+          {
+            "in": "query",
+            "name": "candidate_target_name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Candidate Target Name"
+            }
+          },
+          {
+            "in": "query",
+            "name": "candidate_target_revision",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Candidate Target Revision"
+            }
+          },
+          {
+            "in": "query",
+            "name": "candidate_target_digest",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Candidate Target Digest"
+            }
+          },
+          {
+            "description": "Configured single-deployment project boundary",
+            "in": "header",
+            "name": "X-Project-ID",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuiteDecisionHistoryPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Permission denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Immutable conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Request body too large"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Unsupported media type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Contract validation failed"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Internal service error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Service unavailable"
+          }
+        },
+        "security": [
+          {
+            "ProjectBearer": []
+          }
+        ],
+        "summary": "List Suite Decisions",
+        "tags": [
+          "suites"
+        ]
+      },
+      "post": {
+        "description": "Compare two runs pinned to the selected suite, using only its immutable policy.",
+        "operationId": "submit_suite_release_comparison",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Configured single-deployment project boundary",
+            "in": "header",
+            "name": "X-Project-ID",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SuiteComparisonCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComparisonSubmissionResponse"
+                }
+              }
+            },
+            "description": "Terminal replay",
+            "headers": {
+              "Location": {
+                "description": "Canonical path of the durable submission job",
+                "schema": {
+                  "pattern": "^/v1/jobs/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComparisonSubmissionResponse"
+                }
+              }
+            },
+            "description": "Accepted new or nonterminal job",
+            "headers": {
+              "Location": {
+                "description": "Canonical path of the durable submission job",
+                "schema": {
+                  "pattern": "^/v1/jobs/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Permission denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Immutable conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Request body too large"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Unsupported media type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Contract validation failed"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Internal service error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Service unavailable"
+          }
+        },
+        "security": [
+          {
+            "ProjectBearer": []
+          }
+        ],
+        "summary": "Submit Suite Comparison",
+        "tags": [
+          "suites"
+        ]
+      }
+    },
+    "/v1/suite-revisions/{revision}/{name}": {
+      "get": {
+        "operationId": "get_suite_revision",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "title": "Revision",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Configured single-deployment project boundary",
+            "in": "header",
+            "name": "X-Project-ID",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuiteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Permission denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Immutable conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Request body too large"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Unsupported media type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Contract validation failed"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Internal service error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Service unavailable"
+          }
+        },
+        "security": [
+          {
+            "ProjectBearer": []
+          }
+        ],
+        "summary": "Get Suite",
+        "tags": [
+          "suites"
+        ]
+      }
+    },
+    "/v1/suite-runs": {
+      "get": {
+        "description": "Newest persisted runs under the exact registered suite pin. Metadata only.",
+        "operationId": "list_suite_run_history",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "suite_name",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+              "title": "Suite Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "suite_revision",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "title": "Suite Revision",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target_name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Name"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target_revision",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Revision"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target_digest",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Digest"
+            }
+          },
+          {
+            "description": "Configured single-deployment project boundary",
+            "in": "header",
+            "name": "X-Project-ID",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuiteRunHistoryPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Permission denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Immutable conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Request body too large"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Unsupported media type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Contract validation failed"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Internal service error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Service unavailable"
+          }
+        },
+        "security": [
+          {
+            "ProjectBearer": []
+          }
+        ],
+        "summary": "List Suite Runs",
+        "tags": [
+          "suites"
+        ]
+      },
+      "post": {
+        "description": "Pin one complete suite snapshot and target contract for asynchronous worker execution.",
+        "operationId": "submit_suite_evaluation_run",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Configured single-deployment project boundary",
+            "in": "header",
+            "name": "X-Project-ID",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SuiteRunCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunSubmissionResponse"
+                }
+              }
+            },
+            "description": "Terminal replay",
+            "headers": {
+              "Location": {
+                "description": "Canonical path of the durable submission job",
+                "schema": {
+                  "pattern": "^/v1/jobs/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunSubmissionResponse"
+                }
+              }
+            },
+            "description": "Accepted new or nonterminal job",
+            "headers": {
+              "Location": {
+                "description": "Canonical path of the durable submission job",
+                "schema": {
+                  "pattern": "^/v1/jobs/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Permission denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Immutable conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Request body too large"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Unsupported media type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Contract validation failed"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Internal service error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Service unavailable"
+          }
+        },
+        "security": [
+          {
+            "ProjectBearer": []
+          }
+        ],
+        "summary": "Submit Suite Run",
+        "tags": [
+          "suites"
+        ]
+      }
+    },
+    "/v1/suite-target-pairs": {
+      "get": {
+        "description": "Distinct baseline/candidate target pairs in persisted suite decisions, ordered by exact identity. Metadata only.",
+        "operationId": "list_suite_target_pair_groups",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "suite_name",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+              "title": "Suite Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "suite_revision",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "title": "Suite Revision",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "Configured single-deployment project boundary",
+            "in": "header",
+            "name": "X-Project-ID",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuiteTargetPairGroupPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Permission denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Immutable conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Request body too large"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Unsupported media type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Contract validation failed"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Internal service error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Service unavailable"
+          }
+        },
+        "security": [
+          {
+            "ProjectBearer": []
+          }
+        ],
+        "summary": "List Suite Target Pairs",
+        "tags": [
+          "suites"
+        ]
+      }
+    },
+    "/v1/suite-targets": {
+      "get": {
+        "description": "Distinct resolved targets in persisted suite runs, ordered by exact identity. Metadata only.",
+        "operationId": "list_suite_target_groups",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "suite_name",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+              "title": "Suite Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "suite_revision",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "title": "Suite Revision",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "Configured single-deployment project boundary",
+            "in": "header",
+            "name": "X-Project-ID",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuiteTargetGroupPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Permission denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Immutable conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Request body too large"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Unsupported media type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Contract validation failed"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Internal service error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Service unavailable"
+          }
+        },
+        "security": [
+          {
+            "ProjectBearer": []
+          }
+        ],
+        "summary": "List Suite Targets",
+        "tags": [
+          "suites"
+        ]
+      }
+    },
+    "/v1/suites": {
+      "get": {
+        "operationId": "list_suite_revisions",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            }
+          },
+          {
+            "description": "Configured single-deployment project boundary",
+            "in": "header",
+            "name": "X-Project-ID",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuitePage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Permission denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Immutable conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Request body too large"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Unsupported media type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Contract validation failed"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Internal service error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Service unavailable"
+          }
+        },
+        "security": [
+          {
+            "ProjectBearer": []
+          }
+        ],
+        "summary": "List Suites",
+        "tags": [
+          "suites"
+        ]
+      },
+      "post": {
+        "description": "Register an immutable protocol with exact resolved dependencies. No target is invoked.",
+        "operationId": "create_suite_revision",
+        "parameters": [
+          {
+            "description": "Configured single-deployment project boundary",
+            "in": "header",
+            "name": "X-Project-ID",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SuiteCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuiteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Permission denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Immutable conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Request body too large"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Unsupported media type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Contract validation failed"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Internal service error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorDocument"
+                }
+              }
+            },
+            "description": "Service unavailable"
+          }
+        },
+        "security": [
+          {
+            "ProjectBearer": []
+          }
+        ],
+        "summary": "Create Suite",
+        "tags": [
+          "suites"
         ]
       }
     }

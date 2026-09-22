@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Annotated, Generic, Literal, Self, TypeAlias, TypeVar
+from typing import Annotated, Generic, Literal, Self, TypeAlias, TypeVar, cast
 
 from pydantic import (
     BeforeValidator,
@@ -12,7 +12,9 @@ from pydantic import (
     Field,
     NonNegativeInt,
     PositiveInt,
+    SerializerFunctionWrapHandler,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -396,10 +398,26 @@ class ScenarioOverride(FrozenModel):
     scenario: ScenarioName
 
 
-class RunJobPayload(FrozenModel):
+class _SuitePayload(FrozenModel):
+    """Preserve legacy payload bytes while allowing an explicit suite snapshot."""
+
+    suite: EvaluationSuiteVersion | None = Field(default=None, repr=False)
+
+    @model_serializer(mode="wrap")
+    def serialize_payload(  # type: ignore[no-untyped-def]
+        self, handler: SerializerFunctionWrapHandler
+    ):
+        # Preserve Pydantic's model serialization schema rather than a generic dict.
+        document = cast(dict[str, object], handler(self))
+        if self.suite is None:
+            document.pop("suite", None)
+        return document
+
+
+class RunJobPayload(_SuitePayload):
     """Canonical resolved worker input for one evaluation run."""
 
-    schema_version: Literal["run-job/v1"] = "run-job/v1"
+    schema_version: Literal["run-job/v1", "run-job/v2"] = "run-job/v1"
     kind: Literal[JobKind.RUN] = JobKind.RUN
     dataset: ArtifactRef
     target_name: ArtifactName
@@ -411,6 +429,8 @@ class RunJobPayload(FrozenModel):
 
     @model_validator(mode="after")
     def validate_payload(self) -> Self:
+        if (self.schema_version == "run-job/v2") != (self.suite is not None):
+            raise ValueError("suite snapshots require run-job/v2")
         if self.dataset.kind is not ArtifactKind.DATASET or self.dataset.digest is None:
             raise ValueError("run job dataset must be resolved")
         case_ids = [override.case_id for override in self.scenario_overrides]
@@ -428,6 +448,16 @@ class RunJobPayload(FrozenModel):
             or contract.target.revision != self.target_revision
         ):
             raise ValueError("run job target does not match execution contract")
+        if self.suite is not None:
+            if self.suite.dataset != self.dataset:
+                raise ValueError("run job dataset does not match suite")
+            if (
+                self.suite.execution.adapter != contract.adapter
+                or self.suite.execution.execution_mode is not contract.execution_mode
+                or self.suite.evaluator_names != contract.evaluator_names
+                or self.suite.evaluator_refs != contract.evaluators
+            ):
+                raise ValueError("run job contract does not match suite")
         return self
 
     @property
@@ -435,10 +465,12 @@ class RunJobPayload(FrozenModel):
         return sha256_digest(self.model_dump(mode="json"))
 
 
-class ComparisonJobPayload(FrozenModel):
+class ComparisonJobPayload(_SuitePayload):
     """Canonical resolved worker input for one baseline comparison."""
 
-    schema_version: Literal["comparison-job/v1"] = "comparison-job/v1"
+    schema_version: Literal["comparison-job/v1", "comparison-job/v2"] = (
+        "comparison-job/v1"
+    )
     kind: Literal[JobKind.COMPARISON] = JobKind.COMPARISON
     dataset: ArtifactRef
     baseline_run_id: RunId
@@ -449,12 +481,23 @@ class ComparisonJobPayload(FrozenModel):
 
     @model_validator(mode="after")
     def validate_payload(self) -> Self:
+        if (self.schema_version == "comparison-job/v2") != (self.suite is not None):
+            raise ValueError("suite snapshots require comparison-job/v2")
         if self.dataset.kind is not ArtifactKind.DATASET or self.dataset.digest is None:
             raise ValueError("comparison job dataset must be resolved")
         if self.spec.dataset != self.dataset:
             raise ValueError("comparison job dataset does not match its policy")
         if self.baseline_run_id == self.candidate_run_id:
             raise ValueError("comparison job runs must be distinct")
+        if self.suite is not None and (
+            self.spec.baseline is None
+            or self.spec
+            != self.suite.to_evaluation_spec(
+                baseline=self.spec.baseline,
+                candidate=self.spec.candidate,
+            )
+        ):
+            raise ValueError("comparison job policy does not match suite")
         return self
 
     @property
@@ -567,6 +610,64 @@ class ReleaseDecisionListRecord(FrozenModel):
     created_at: datetime
 
     _normalize_created_at = field_validator("created_at")(_utc)
+
+
+class SuiteRunHistoryRecord(RunListRecord):
+    """Metadata-only history of one run under an exact immutable suite pin."""
+
+    suite: ArtifactRef
+    target: ArtifactRef
+
+    @model_validator(mode="after")
+    def validate_history_refs(self) -> Self:
+        if self.suite.kind is not ArtifactKind.SUITE or self.suite.digest is None:
+            raise ValueError("history requires a resolved suite")
+        if self.target.kind is not ArtifactKind.TARGET or self.target.digest is None:
+            raise ValueError("history requires a resolved target")
+        return self
+
+
+class SuiteDecisionHistoryRecord(ReleaseDecisionListRecord):
+    """Metadata-only release history; run IDs link to the detailed evidence."""
+
+    suite: ArtifactRef
+
+    @model_validator(mode="after")
+    def validate_history_ref(self) -> Self:
+        if self.suite.kind is not ArtifactKind.SUITE or self.suite.digest is None:
+            raise ValueError("history requires a resolved suite")
+        return self
+
+
+class SuiteTargetGroupRecord(FrozenModel):
+    """One exact target observed in persisted runs of a suite revision."""
+
+    suite: ArtifactRef
+    target: ArtifactRef
+
+    @model_validator(mode="after")
+    def validate_refs(self) -> Self:
+        for reference, kind in (
+            (self.suite, ArtifactKind.SUITE),
+            (self.target, ArtifactKind.TARGET),
+        ):
+            if reference.kind is not kind or reference.digest is None:
+                raise ValueError("Target grouping requires resolved references")
+        return self
+
+
+class SuiteTargetPairGroupRecord(FrozenModel):
+    """One directed baseline/candidate target pair with persisted decisions."""
+
+    suite: ArtifactRef
+    baseline_target: ArtifactRef
+    candidate_target: ArtifactRef
+
+    @model_validator(mode="after")
+    def validate_refs(self) -> Self:
+        for target in (self.baseline_target, self.candidate_target):
+            SuiteTargetGroupRecord(suite=self.suite, target=target)
+        return self
 
 
 PageItem = TypeVar("PageItem")

@@ -15,6 +15,8 @@ from threading import Event as ThreadEvent
 from typing import Any, cast
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from fastapi.testclient import TestClient
 from httpx import Response
 from opentelemetry.trace import Tracer
@@ -44,9 +46,12 @@ from llm_eval_control_plane.api.security import (
 from llm_eval_control_plane.application.control_plane import (
     ClaimedJob,
     ControlPlaneRepository,
+    ControlPlaneService,
     StoreConflictError,
     StoreLeaseLostError,
     StoreTransitionError,
+    SuiteComparisonSubmission,
+    SuiteRunSubmission,
 )
 from llm_eval_control_plane.application.worker import (
     WorkerResult,
@@ -58,8 +63,13 @@ from llm_eval_control_plane.domain import (
     MetricDirection,
     MetricGate,
 )
-from llm_eval_control_plane.domain.canonical import sha256_digest
+from llm_eval_control_plane.domain.canonical import (
+    canonical_json_bytes,
+    sha256_digest,
+)
+from llm_eval_control_plane.domain.comparison import ReleaseStatus
 from llm_eval_control_plane.domain.control_plane import (
+    ComparisonJobPayload,
     DatasetRecord,
     ExecutionContract,
     JobAttemptStatus,
@@ -436,6 +446,426 @@ def test_suite_registry_round_trips_immutable_evidence_in_postgres(
     with pytest.raises(StoreConflictError):
         repository.put_suite(changed)
     assert repository.get_suite(suite.name, suite.revision) == stored
+
+
+def test_suite_execution_snapshots_survive_postgres_worker_restart(
+    postgres_engine: Engine,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    repository = _repository(postgres_engine)
+    dataset = _ensure_dataset(repository).dataset
+    suite = _suite(dataset)
+    service = ControlPlaneService(
+        repository=repository,
+        executor=DeterministicEvaluationExecutor(),
+    )
+    registered = service.register_suite(suite)
+    assert (
+        _repository(postgres_engine).get_suite(suite.name, suite.revision) == registered
+    )
+    submissions = (
+        SuiteRunSubmission(
+            idempotency_key=_key("suite-baseline"),
+            suite_name=suite.name,
+            suite_revision=suite.revision,
+            target_name="fake/phase10-baseline",
+            target_revision=1,
+        ),
+        SuiteRunSubmission(
+            idempotency_key=_key("suite-candidate"),
+            suite_name=suite.name,
+            suite_revision=suite.revision,
+            target_name="fake/phase10-candidate",
+            target_revision=2,
+            scenario_overrides={"postgres-echo-001": "uppercase"},
+        ),
+    )
+    queued_runs = tuple(
+        asyncio.run(service.submit_suite_run(submission)) for submission in submissions
+    )
+    for queued in queued_runs:
+        assert queued.created
+        assert queued.job.status is JobStatus.QUEUED
+        with postgres_engine.connect() as connection:
+            row = (
+                connection.execute(
+                    select(job_payloads_table).where(
+                        job_payloads_table.c.job_id == queued.job.job_id
+                    )
+                )
+                .mappings()
+                .one()
+            )
+        payload = RunJobPayload.model_validate_json(row["document"])
+        assert payload.schema_version == "run-job/v2"
+        assert payload.suite == suite
+        assert payload.dataset == suite.dataset
+        assert payload.execution_contract.evaluators == suite.evaluator_refs
+        assert row["payload_digest"] == payload.payload_digest
+        assert row["document"] == canonical_json_bytes(
+            payload.model_dump(mode="json")
+        ).decode("utf-8")
+
+    restarted_engine = create_engine(
+        postgres_engine.url, pool_pre_ping=True, hide_parameters=True
+    )
+    try:
+        restarted_repository = _repository(restarted_engine)
+        restarted_service = ControlPlaneService(
+            repository=restarted_repository,
+            executor=DeterministicEvaluationExecutor(),
+        )
+        for queued, submission in zip(queued_runs, submissions, strict=True):
+            assert restarted_repository.get_job(queued.job.job_id) == queued.job
+            replay = asyncio.run(restarted_service.submit_suite_run(submission))
+            assert not replay.created
+            assert replay.job == queued.job
+
+        worker = WorkerService(
+            repository=_repository(restarted_engine),
+            executor=DeterministicEvaluationExecutor(),
+            worker_id="phase10-restarted-run-worker",
+            lease_token_factory=lambda: _token("suite-run"),
+        )
+        outcomes = tuple(asyncio.run(worker.run_once()) for _ in queued_runs)
+        assert {item.job_id for item in outcomes} == {
+            item.job.job_id for item in queued_runs
+        }
+        assert all(item.status is WorkerResultStatus.SUCCEEDED for item in outcomes)
+        baseline, candidate = (
+            restarted_repository.get_run(item.job.resource_id).result
+            for item in queued_runs
+        )
+        for result in (baseline, candidate):
+            assert result.suite == suite.artifact_ref
+            assert result.dataset == suite.dataset
+            assert result.evaluators == suite.evaluator_refs
+            assert result.execution_mode is suite.execution.execution_mode
+            assert _repository(postgres_engine).get_run(result.run_id).result == result
+        assert baseline.metrics[0].mean == 1.0
+        assert candidate.metrics[0].mean == 0.0
+
+        comparison = SuiteComparisonSubmission(
+            idempotency_key=_key("suite-comparison"),
+            suite_name=suite.name,
+            suite_revision=suite.revision,
+            baseline_run_id=baseline.run_id,
+            candidate_run_id=candidate.run_id,
+        )
+        queued_comparison = asyncio.run(
+            restarted_service.submit_suite_comparison(comparison)
+        )
+        assert queued_comparison.created
+        with restarted_engine.connect() as connection:
+            comparison_row = (
+                connection.execute(
+                    select(job_payloads_table).where(
+                        job_payloads_table.c.job_id == queued_comparison.job.job_id
+                    )
+                )
+                .mappings()
+                .one()
+            )
+        comparison_payload = ComparisonJobPayload.model_validate_json(
+            comparison_row["document"]
+        )
+        assert comparison_payload.schema_version == "comparison-job/v2"
+        assert comparison_payload.suite == suite
+        assert comparison_payload.spec == suite.to_evaluation_spec(
+            baseline=baseline.target, candidate=candidate.target
+        )
+        assert comparison_payload.baseline_result_digest == baseline.result_digest
+        assert comparison_payload.candidate_result_digest == candidate.result_digest
+        assert comparison_row["payload_digest"] == comparison_payload.payload_digest
+        assert comparison_row["document"] == canonical_json_bytes(
+            comparison_payload.model_dump(mode="json")
+        ).decode("utf-8")
+
+        # A queued job and its replays must not need the live suite registry.
+        with restarted_engine.begin() as connection:
+            removed = connection.execute(
+                delete(suites_table).where(suites_table.c.name == _SUITE_NAME)
+            )
+            assert removed.rowcount == 1
+        comparison_worker = WorkerService(
+            repository=_repository(postgres_engine),
+            executor=DeterministicEvaluationExecutor(),
+            worker_id="phase10-restarted-comparison-worker",
+            lease_token_factory=lambda: _token("suite-comparison"),
+        )
+        outcome = asyncio.run(comparison_worker.run_once())
+        assert outcome.status is WorkerResultStatus.SUCCEEDED
+        assert outcome.job_id == queued_comparison.job.job_id
+        decision = restarted_repository.get_release_decision(
+            queued_comparison.job.resource_id
+        ).decision
+        assert decision.suite == suite.artifact_ref
+        assert decision.baseline_result_digest == baseline.result_digest
+        assert decision.candidate_result_digest == candidate.result_digest
+        assert decision.status is ReleaseStatus.FAILED
+        assert decision.gates[0].threshold == suite.gates[0].threshold
+        history_repository = SqlAlchemyControlPlaneRepository(postgres_engine)
+        run_history = history_repository.list_suite_runs(suite.artifact_ref, limit=1)
+        assert run_history.items[0].target == candidate.target
+        assert run_history.next_cursor is not None
+        assert (
+            history_repository.list_suite_runs(
+                suite.artifact_ref, limit=1, cursor=run_history.next_cursor
+            )
+            .items[0]
+            .run_id
+            == baseline.run_id
+        )
+        decision_history = history_repository.list_suite_decisions(
+            suite.artifact_ref, limit=1
+        )
+        assert decision_history.items[0].decision_digest == decision.decision_digest
+        assert decision_history.items[0].suite == suite.artifact_ref
+        # Group discovery and exact-target continuation also run on PostgreSQL.
+        targets = history_repository.list_suite_targets(suite.artifact_ref, limit=1)
+        assert targets.next_cursor is not None
+        more_targets = history_repository.list_suite_targets(
+            suite.artifact_ref, limit=1, cursor=targets.next_cursor
+        )
+        assert more_targets.next_cursor is None
+        assert {targets.items[0].target, more_targets.items[0].target} == {
+            baseline.target,
+            candidate.target,
+        }
+        pairs = history_repository.list_suite_target_pairs(suite.artifact_ref, limit=1)
+        assert len(pairs.items) == 1
+        assert pairs.items[0].baseline_target == baseline.target
+        assert pairs.items[0].candidate_target == candidate.target
+        assert (
+            history_repository.list_suite_runs(
+                suite.artifact_ref, limit=1, target=baseline.target
+            )
+            .items[0]
+            .run_id
+            == baseline.run_id
+        )
+        assert (
+            history_repository.list_suite_decisions(
+                suite.artifact_ref,
+                limit=1,
+                baseline_target=baseline.target,
+                candidate_target=candidate.target,
+            ).items
+            == decision_history.items
+        )
+
+        # This fixture requires a disposable test database. Exercise the PostgreSQL
+        # JSON backfill with real worker evidence and a missing suite registry row.
+        monkeypatch.setenv(
+            "CONTROL_PLANE_DATABASE_URL",
+            postgres_engine.url.render_as_string(hide_password=False),
+        )
+        with postgres_engine.connect() as connection:
+            before_runs = connection.execute(
+                select(runs_table.c.run_id, runs_table.c.document).order_by(
+                    runs_table.c.run_id
+                )
+            ).all()
+            before_decisions = connection.execute(
+                select(
+                    release_decisions_table.c.decision_id,
+                    release_decisions_table.c.document,
+                ).order_by(release_decisions_table.c.decision_id)
+            ).all()
+        command.downgrade(Config("alembic.ini"), "20260903_0005")
+        assert history_repository.schema_is_current() is False
+        command.upgrade(Config("alembic.ini"), "head")
+        assert history_repository.schema_is_current() is True
+        assert (
+            history_repository.list_suite_runs(suite.artifact_ref, limit=1)
+            == run_history
+        )
+        assert (
+            history_repository.list_suite_decisions(suite.artifact_ref, limit=1)
+            == decision_history
+        )
+        with postgres_engine.connect() as connection:
+            assert (
+                connection.execute(
+                    select(runs_table.c.run_id, runs_table.c.document).order_by(
+                        runs_table.c.run_id
+                    )
+                ).all()
+                == before_runs
+            )
+            assert (
+                connection.execute(
+                    select(
+                        release_decisions_table.c.decision_id,
+                        release_decisions_table.c.document,
+                    ).order_by(release_decisions_table.c.decision_id)
+                ).all()
+                == before_decisions
+            )
+        assert (
+            _repository(postgres_engine)
+            .get_release_decision(queued_comparison.job.resource_id)
+            .decision
+            == decision
+        )
+
+        for queued, submission in zip(queued_runs, submissions, strict=True):
+            terminal = asyncio.run(restarted_service.submit_suite_run(submission))
+            assert not terminal.created
+            assert terminal.job.job_id == queued.job.job_id
+            assert terminal.job.status is JobStatus.SUCCEEDED
+            assert terminal.job.attempt_count == 1
+        terminal_comparison = asyncio.run(
+            restarted_service.submit_suite_comparison(comparison)
+        )
+        assert not terminal_comparison.created
+        assert terminal_comparison.job.job_id == queued_comparison.job.job_id
+        assert terminal_comparison.job.status is JobStatus.SUCCEEDED
+        assert terminal_comparison.job.attempt_count == 1
+        assert (
+            asyncio.run(comparison_worker.run_once())
+        ).status is WorkerResultStatus.IDLE
+    finally:
+        restarted_engine.dispose()
+
+
+def test_suite_http_api_persists_authenticated_worker_lifecycle(
+    postgres_engine: Engine,
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv(
+        "CONTROL_PLANE_DATABASE_URL",
+        postgres_engine.url.render_as_string(hide_password=False),
+    )
+    auth_file, auth_headers = _runtime_authentication(tmp_path)
+    monkeypatch.setenv("CONTROL_PLANE_AUTH_FILE", str(auth_file))
+    dataset = DatasetCreateRequest.model_validate(_dataset_body()).to_domain()
+    suite = _suite(dataset)
+    suite_body = suite.model_dump(mode="json", exclude={"schema_version", "digest"})
+    submissions = [
+        {
+            "suite_name": suite.name,
+            "suite_revision": suite.revision,
+            "target_name": f"fake/http-suite-{role}",
+            "scenario_overrides": {"postgres-echo-001": "uppercase"}
+            if role == "candidate"
+            else {},
+        }
+        for role in ("baseline", "candidate")
+    ]
+    queued: list[dict[str, Any]] = []
+    with TestClient(runtime.create_runtime_app(), headers=auth_headers) as client:
+        assert client.post("/v1/datasets", json=_dataset_body()).status_code == 201
+        registered = client.post("/v1/suites", json=suite_body)
+        assert registered.status_code == 201
+        assert registered.json()["digest"] == suite.digest
+        for index, submission in enumerate(submissions):
+            response = client.post(
+                "/v1/suite-runs",
+                json=submission,
+                headers={"Idempotency-Key": _key(f"http-suite-run-{index}")},
+            )
+            assert response.status_code == 202
+            queued.append(_json_document(response)["job"])
+
+    # Both the HTTP app and worker are recreated around the durable queue.
+    worker = WorkerService(
+        repository=_repository(postgres_engine),
+        executor=DeterministicEvaluationExecutor(),
+        worker_id="phase10-http-suite-worker",
+        lease_token_factory=lambda: _token("http-suite"),
+    )
+    for _ in submissions:
+        assert (asyncio.run(worker.run_once())).status is WorkerResultStatus.SUCCEEDED
+    comparison = {
+        "suite_name": suite.name,
+        "suite_revision": suite.revision,
+        "baseline_run_id": queued[0]["resource_id"],
+        "candidate_run_id": queued[1]["resource_id"],
+    }
+    comparison_headers = {"Idempotency-Key": _key("http-suite-comparison")}
+    with TestClient(runtime.create_runtime_app(), headers=auth_headers) as client:
+        detail = client.get(f"/v1/suite-revisions/1/{suite.name}")
+        assert detail.json()["digest"] == suite.digest
+        page = client.get("/v1/suites", params={"name": suite.name, "limit": 1})
+        assert page.json()["items"][0]["digest"] == suite.digest
+        for index, submission in enumerate(submissions):
+            replay = client.post(
+                "/v1/suite-runs",
+                json=submission,
+                headers={"Idempotency-Key": _key(f"http-suite-run-{index}")},
+            )
+            assert replay.status_code == 200
+            assert replay.json()["run"]["suite"] == suite.artifact_ref.model_dump(
+                mode="json"
+            )
+            assert "private-phase5-postgres-sentinel" not in replay.text
+        submitted = client.post(
+            "/v1/suite-comparisons",
+            json=comparison,
+            headers=comparison_headers,
+        )
+        assert submitted.status_code == 202
+        comparison_job = _json_document(submitted)["job"]
+
+    assert (asyncio.run(worker.run_once())).status is WorkerResultStatus.SUCCEEDED
+    with TestClient(runtime.create_runtime_app(), headers=auth_headers) as client:
+        replay = client.post(
+            "/v1/suite-comparisons",
+            json=comparison,
+            headers=comparison_headers,
+        )
+        assert replay.status_code == 200
+        document = _json_document(replay)
+        assert document["job"]["job_id"] == comparison_job["job_id"]
+        assert document["decision"]["status"] == "failed"
+        assert document["decision"]["suite"] == suite.artifact_ref.model_dump(
+            mode="json"
+        )
+        detail = client.get(f"/v1/release-decisions/{comparison_job['resource_id']}")
+        assert detail.json() == document["decision"]
+        assert "private-phase5-postgres-sentinel" not in detail.text
+        assert "schema_version" in detail.json()
+        params: dict[str, str | int] = {
+            "suite_name": suite.name,
+            "suite_revision": 1,
+            "limit": 1,
+        }
+        first = client.get("/v1/suite-runs", params=params)
+        assert first.status_code == 200
+        assert first.json()["items"][0]["run_id"] == queued[1]["resource_id"]
+        assert first.json()["next_cursor"] is not None
+        second = client.get(
+            "/v1/suite-runs",
+            params={
+                **params,
+                "cursor": first.json()["next_cursor"],
+            },
+        )
+        assert second.status_code == 200
+        assert second.json()["items"][0]["run_id"] == queued[0]["resource_id"]
+        assert second.json()["next_cursor"] is None
+        history = client.get("/v1/suite-comparisons", params=params)
+        assert history.status_code == 200
+        assert (
+            history.json()["items"][0]["decision_digest"]
+            == document["decision"]["decision_digest"]
+        )
+        assert (
+            "private-phase5-postgres-sentinel"
+            not in first.text + second.text + history.text
+        )
+        assert (
+            client.get(
+                "/v1/suite-comparisons",
+                params={
+                    **params,
+                    "cursor": first.json()["next_cursor"],
+                },
+            ).status_code
+            == 400
+        )
 
 
 def test_api_enqueue_survives_restart_and_terminal_replay_is_redacted(

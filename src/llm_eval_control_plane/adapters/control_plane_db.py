@@ -28,12 +28,15 @@ from sqlalchemy import (
     and_,
     func,
     insert,
+    literal,
     select,
     text,
+    tuple_,
     update,
 )
 from sqlalchemy.engine import Connection, Engine, RowMapping
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.sql import Select
 
 from llm_eval_control_plane.application.control_plane import (
     ClaimedJob,
@@ -45,6 +48,7 @@ from llm_eval_control_plane.application.control_plane import (
     StoreNotFoundError,
     StoreTransitionError,
 )
+from llm_eval_control_plane.domain.artifacts import ArtifactKind, ArtifactRef
 from llm_eval_control_plane.domain.canonical import (
     CanonicalJsonError,
     JsonValue,
@@ -73,8 +77,12 @@ from llm_eval_control_plane.domain.control_plane import (
     ReleaseDecisionRecord,
     RunListRecord,
     RunRecord,
+    SuiteDecisionHistoryRecord,
     SuiteListRecord,
     SuiteRecord,
+    SuiteRunHistoryRecord,
+    SuiteTargetGroupRecord,
+    SuiteTargetPairGroupRecord,
     WorkerId,
 )
 from llm_eval_control_plane.domain.datasets import DatasetVersion
@@ -395,6 +403,22 @@ Index(
     sqlite_where=text("status = 'running'"),
 )
 
+
+def _history_constraint(prefixes: tuple[str, ...]) -> str:
+    absent = " AND ".join(
+        f"{prefix}_{field} IS NULL"
+        for prefix in prefixes
+        for field in ("name", "revision", "digest")
+    )
+    present = " AND ".join(
+        f"{prefix}_name IS NOT NULL AND length({prefix}_name) BETWEEN 1 AND 128 "
+        f"AND {prefix}_revision IS NOT NULL AND {prefix}_revision > 0 "
+        f"AND {prefix}_digest IS NOT NULL AND length({prefix}_digest) = 71"
+        for prefix in prefixes
+    )
+    return f"({absent}) OR ({present})"
+
+
 runs_table = Table(
     "control_plane_runs",
     CONTROL_PLANE_METADATA,
@@ -406,6 +430,16 @@ runs_table = Table(
     Column("execution_mode", String(32), nullable=False),
     Column("input_units", BigInteger, nullable=False),
     Column("output_units", BigInteger, nullable=False),
+    Column("suite_name", String(128)),
+    Column("suite_revision", Integer),
+    Column("suite_digest", String(71)),
+    Column("target_name", String(128)),
+    Column("target_revision", Integer),
+    Column("target_digest", String(71)),
+    CheckConstraint(
+        _history_constraint(("suite", "target")),
+        name="ck_control_plane_runs_suite_history",
+    ),
     Column("document", Text, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
     ForeignKeyConstraint(
@@ -454,6 +488,14 @@ Index(
     runs_table.c.run_id,
 )
 Index("ix_control_plane_runs_result_digest", runs_table.c.result_digest)
+Index(
+    "ix_control_plane_runs_suite_history",
+    runs_table.c.suite_name,
+    runs_table.c.suite_revision,
+    runs_table.c.suite_digest,
+    runs_table.c.created_at,
+    runs_table.c.run_id,
+)
 
 release_decisions_table = Table(
     "control_plane_release_decisions",
@@ -463,6 +505,13 @@ release_decisions_table = Table(
     Column("baseline_run_id", String(128), nullable=False),
     Column("candidate_run_id", String(128), nullable=False),
     Column("status", String(16), nullable=False),
+    Column("suite_name", String(128)),
+    Column("suite_revision", Integer),
+    Column("suite_digest", String(71)),
+    CheckConstraint(
+        _history_constraint(("suite",)),
+        name="ck_control_plane_release_decisions_suite_history",
+    ),
     Column("document", Text, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
     ForeignKeyConstraint(
@@ -501,6 +550,14 @@ Index(
 Index(
     "ix_control_plane_release_decisions_decision_digest",
     release_decisions_table.c.decision_digest,
+)
+Index(
+    "ix_control_plane_release_decisions_suite_history",
+    release_decisions_table.c.suite_name,
+    release_decisions_table.c.suite_revision,
+    release_decisions_table.c.suite_digest,
+    release_decisions_table.c.created_at,
+    release_decisions_table.c.decision_id,
 )
 
 
@@ -638,7 +695,7 @@ def _limit(value: int) -> int:
 
 
 _CURSOR_DOMAIN = b"llm-eval-control-plane/keyset-cursor/v1\0"
-_SCHEMA_REVISION = "20260903_0005"
+_SCHEMA_REVISION = "20260915_0006"
 _DEFAULT_MAX_DOCUMENT_BYTES = 64 * 1024 * 1024
 _MAX_JOB_PAYLOAD_BYTES = 4 * 1024 * 1024
 _MAX_OPERATIONAL_VALUE = 2**63 - 1
@@ -648,6 +705,51 @@ _SAFE_CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _WORKER_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _LEASE_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
 _JOB_PAYLOAD_ADAPTER: TypeAdapter[JobPayload] = TypeAdapter(JobPayload)
+
+
+def _suite_history_values(suite: ArtifactRef | None) -> dict[str, str | int | None]:
+    return {
+        "suite_name": None if suite is None else suite.name,
+        "suite_revision": None if suite is None else suite.revision,
+        "suite_digest": None if suite is None else suite.digest,
+    }
+
+
+def _run_history_values(result: RunResult) -> dict[str, str | int | None]:
+    return {
+        **_suite_history_values(result.suite),
+        "target_name": None if result.suite is None else result.target.name,
+        "target_revision": None if result.suite is None else result.target.revision,
+        "target_digest": None if result.suite is None else result.target.digest,
+    }
+
+
+HistoryRecord = TypeVar(
+    "HistoryRecord", SuiteRunHistoryRecord, SuiteDecisionHistoryRecord
+)
+TargetGroupRecord = TypeVar(
+    "TargetGroupRecord", SuiteTargetGroupRecord, SuiteTargetPairGroupRecord
+)
+
+
+def _suite_filters(suite: ArtifactRef) -> dict[str, JsonValue]:
+    if suite.kind is not ArtifactKind.SUITE or suite.digest is None:
+        raise ValueError("Suite history requires a resolved suite reference")
+    return {
+        "suite_name": suite.name,
+        "suite_revision": suite.revision,
+        "suite_digest": suite.digest,
+    }
+
+
+def _target_filters(target: ArtifactRef, prefix: str) -> dict[str, JsonValue]:
+    if target.kind is not ArtifactKind.TARGET or target.digest is None:
+        raise ValueError("Target history requires a resolved target reference")
+    return {
+        f"{prefix}_name": target.name,
+        f"{prefix}_revision": target.revision,
+        f"{prefix}_digest": target.digest,
+    }
 
 
 def _bounded_int(value: int, *, lower: int, upper: int, name: str) -> int:
@@ -2149,6 +2251,7 @@ class SqlAlchemyControlPlaneRepository:
             ) from None
         values = {
             "run_id": record.run_id,
+            **_run_history_values(record.result),
             "result_digest": record.result.result_digest,
             "dataset_name": record.result.dataset.name,
             "dataset_revision": record.result.dataset.revision,
@@ -2262,6 +2365,7 @@ class SqlAlchemyControlPlaneRepository:
         self._require_document_size(document)
         values = {
             "decision_id": record.decision_id,
+            **_suite_history_values(record.decision.suite),
             "decision_digest": record.decision.decision_digest,
             "baseline_run_id": record.decision.baseline_run_id,
             "candidate_run_id": record.decision.candidate_run_id,
@@ -2407,6 +2511,7 @@ class SqlAlchemyControlPlaneRepository:
             ) from None
         values = {
             "run_id": record.run_id,
+            **_run_history_values(record.result),
             "result_digest": record.result.result_digest,
             "dataset_name": record.result.dataset.name,
             "dataset_revision": record.result.dataset.revision,
@@ -2509,6 +2614,7 @@ class SqlAlchemyControlPlaneRepository:
         self._require_document_size(document)
         values = {
             "decision_id": record.decision_id,
+            **_suite_history_values(record.decision.suite),
             "decision_digest": record.decision.decision_digest,
             "baseline_run_id": record.decision.baseline_run_id,
             "candidate_run_id": record.decision.candidate_run_id,
@@ -2636,6 +2742,327 @@ class SqlAlchemyControlPlaneRepository:
                 ],
             )
         return CursorPage(items=records, next_cursor=next_cursor)
+
+    def list_suite_runs(
+        self,
+        suite: ArtifactRef,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        target: ArtifactRef | None = None,
+    ) -> CursorPage[SuiteRunHistoryRecord]:
+        """Newest persisted runs first, scoped to all three suite pin fields."""
+        return self._suite_history_page(
+            suite,
+            limit=limit,
+            cursor=cursor,
+            table=runs_table,
+            identity="run_id",
+            stream="suite-runs",
+            record_type=SuiteRunHistoryRecord,
+            target=target,
+            fields=(
+                "run_id",
+                "status",
+                "execution_mode",
+                "dataset_name",
+                "dataset_revision",
+                "result_digest",
+                "created_at",
+                "suite_name",
+                "suite_revision",
+                "suite_digest",
+                "target_name",
+                "target_revision",
+                "target_digest",
+            ),
+        )
+
+    def list_suite_decisions(
+        self,
+        suite: ArtifactRef,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        baseline_target: ArtifactRef | None = None,
+        candidate_target: ArtifactRef | None = None,
+    ) -> CursorPage[SuiteDecisionHistoryRecord]:
+        """Newest persisted decisions first; raw case evidence is never selected."""
+        return self._suite_history_page(
+            suite,
+            limit=limit,
+            cursor=cursor,
+            table=release_decisions_table,
+            identity="decision_id",
+            stream="suite-decisions",
+            record_type=SuiteDecisionHistoryRecord,
+            baseline_target=baseline_target,
+            candidate_target=candidate_target,
+            fields=(
+                "decision_id",
+                "status",
+                "baseline_run_id",
+                "candidate_run_id",
+                "decision_digest",
+                "created_at",
+                "suite_name",
+                "suite_revision",
+                "suite_digest",
+            ),
+        )
+
+    def _suite_history_page(
+        self,
+        suite: ArtifactRef,
+        *,
+        limit: int,
+        cursor: str | None,
+        table: Table,
+        identity: str,
+        stream: str,
+        record_type: type[HistoryRecord],
+        fields: tuple[str, ...],
+        target: ArtifactRef | None = None,
+        baseline_target: ArtifactRef | None = None,
+        candidate_target: ArtifactRef | None = None,
+    ) -> CursorPage[HistoryRecord]:
+        page_limit = _limit(limit)
+        filters = {**_suite_filters(suite), "order": "desc"}
+        if (baseline_target is None) != (candidate_target is None):
+            raise ValueError("Target pair filters must be complete")
+        statement = select(*(table.c[field] for field in fields)).where(
+            table.c.suite_name == suite.name,
+            table.c.suite_revision == suite.revision,
+            table.c.suite_digest == suite.digest,
+        )
+        if target is not None:
+            target_filters = _target_filters(target, "target")
+            filters.update(target_filters)
+            statement = statement.where(
+                *(table.c[key] == value for key, value in target_filters.items())
+            )
+        for prefix, target_ref in (
+            ("baseline", baseline_target),
+            ("candidate", candidate_target),
+        ):
+            if target_ref is not None:
+                filters.update(_target_filters(target_ref, f"{prefix}_target"))
+                run = runs_table.alias(f"{prefix}_history_run")
+                statement = statement.join(
+                    run, table.c[f"{prefix}_run_id"] == run.c.run_id
+                ).where(
+                    *(
+                        run.c[key] == value
+                        for key, value in _suite_filters(suite).items()
+                    ),
+                    *(
+                        run.c[key] == value
+                        for key, value in _target_filters(target_ref, "target").items()
+                    ),
+                )
+        if cursor is not None:
+            key = _decode_cursor(cursor, stream=stream, filters=filters)
+            if len(key) != 2 or not isinstance(key[1], str):
+                raise InvalidCursorError("Pagination cursor is invalid")
+            created_at = _decoded_cursor_time(key[0])
+            statement = statement.where(
+                (table.c.created_at < created_at)
+                | and_(table.c.created_at == created_at, table.c[identity] < key[1])
+            )
+        statement = statement.order_by(
+            table.c.created_at.desc(), table.c[identity].desc()
+        ).limit(page_limit + 1)
+        try:
+            with self._engine.connect() as connection:
+                rows = connection.execute(statement).mappings().all()
+        except SQLAlchemyError as error:
+            raise ControlPlaneRepositoryError("Could not list suite history") from error
+        records: list[HistoryRecord] = []
+        for row in rows[:page_limit]:
+            try:
+                values = dict(row)
+                for prefix, kind in (
+                    ("suite", ArtifactKind.SUITE),
+                    ("target", ArtifactKind.TARGET),
+                ):
+                    if f"{prefix}_name" in values:
+                        values[prefix] = ArtifactRef(
+                            kind=kind,
+                            name=values.pop(f"{prefix}_name"),
+                            revision=values.pop(f"{prefix}_revision"),
+                            digest=values.pop(f"{prefix}_digest"),
+                        )
+                values["created_at"] = _aware(values["created_at"])
+                records.append(record_type.model_validate(values))
+            except (KeyError, TypeError, ValidationError, ValueError) as error:
+                raise CorruptRecordError("Stored suite history is invalid") from error
+        next_cursor = None
+        if len(rows) > page_limit:
+            next_cursor = _encode_cursor(
+                stream=stream,
+                filters=filters,
+                key=[
+                    _cursor_time(records[-1].created_at),
+                    rows[page_limit - 1][identity],
+                ],
+            )
+        return CursorPage(items=tuple(records), next_cursor=next_cursor)
+
+    def list_suite_targets(
+        self,
+        suite: ArtifactRef,
+        *,
+        limit: int,
+        cursor: str | None = None,
+    ) -> CursorPage[SuiteTargetGroupRecord]:
+        """Discover exact targets from all persisted suite runs, not a client page."""
+        filters = _suite_filters(suite)
+        statement = select(
+            runs_table.c.target_name,
+            runs_table.c.target_revision,
+            runs_table.c.target_digest,
+        ).where(*(runs_table.c[key] == value for key, value in filters.items()))
+        return self._target_group_page(
+            suite,
+            statement,
+            prefixes=("target",),
+            stream="suite-targets",
+            record_type=SuiteTargetGroupRecord,
+            limit=limit,
+            cursor=cursor,
+        )
+
+    def list_suite_target_pairs(
+        self,
+        suite: ArtifactRef,
+        *,
+        limit: int,
+        cursor: str | None = None,
+    ) -> CursorPage[SuiteTargetPairGroupRecord]:
+        """Discover directed pairs from decision run links without reading documents."""
+        filters = _suite_filters(suite)
+        baseline = runs_table.alias("baseline_group_run")
+        candidate = runs_table.alias("candidate_group_run")
+        statement = (
+            select(
+                *(
+                    run.c[f"target_{field}"].label(f"{prefix}_target_{field}")
+                    for prefix, run in (
+                        ("baseline", baseline),
+                        ("candidate", candidate),
+                    )
+                    for field in ("name", "revision", "digest")
+                )
+            )
+            .select_from(
+                release_decisions_table.join(
+                    baseline,
+                    release_decisions_table.c.baseline_run_id == baseline.c.run_id,
+                ).join(
+                    candidate,
+                    release_decisions_table.c.candidate_run_id == candidate.c.run_id,
+                )
+            )
+            .where(
+                *(
+                    table.c[key] == value
+                    for table in (release_decisions_table, baseline, candidate)
+                    for key, value in filters.items()
+                )
+            )
+        )
+        return self._target_group_page(
+            suite,
+            statement,
+            prefixes=("baseline_target", "candidate_target"),
+            stream="suite-target-pairs",
+            record_type=SuiteTargetPairGroupRecord,
+            limit=limit,
+            cursor=cursor,
+        )
+
+    def _target_group_page(
+        self,
+        suite: ArtifactRef,
+        statement: Select[Any],
+        *,
+        prefixes: tuple[str, ...],
+        stream: str,
+        record_type: type[TargetGroupRecord],
+        limit: int,
+        cursor: str | None,
+    ) -> CursorPage[TargetGroupRecord]:
+        page_limit = _limit(limit)
+        filters = {**_suite_filters(suite), "order": "identity-asc"}
+        # Explicit bytewise text ordering keeps SQLite, PostgreSQL, and clients
+        # consistent regardless of the database's default locale/collation.
+        collation = "C" if self._engine.dialect.name == "postgresql" else "BINARY"
+        fields = tuple(
+            f"{prefix}_{field}"
+            for prefix in prefixes
+            for field in ("name", "revision", "digest")
+        )
+        columns = tuple(
+            statement.selected_columns[field]
+            if field.endswith("_revision")
+            else statement.selected_columns[field].collate(collation).label(field)
+            for field in fields
+        )
+        statement = statement.with_only_columns(*columns).distinct()
+        if cursor is not None:
+            key = _decode_cursor(cursor, stream=stream, filters=filters)
+            try:
+                if len(key) != len(fields):
+                    raise ValueError("Invalid group cursor shape")
+                for offset in range(0, len(key), 3):
+                    if type(key[offset + 1]) is not int:
+                        raise ValueError("Invalid group cursor revision")
+                    ArtifactRef.model_validate(
+                        {
+                            "kind": "target",
+                            "name": key[offset],
+                            "revision": key[offset + 1],
+                            "digest": key[offset + 2],
+                        }
+                    )
+                    if key[offset + 2] is None:
+                        raise ValueError("Unresolved group cursor")
+            except (ValidationError, ValueError) as error:
+                raise InvalidCursorError("Pagination cursor is invalid") from error
+            statement = statement.where(
+                tuple_(*columns) > tuple_(*(literal(value) for value in key))
+            )
+        statement = statement.order_by(*columns).limit(page_limit + 1)
+        try:
+            with self._engine.connect() as connection:
+                rows = connection.execute(statement).mappings().all()
+        except SQLAlchemyError as error:
+            raise ControlPlaneRepositoryError("Could not list target groups") from error
+        records: list[TargetGroupRecord] = []
+        for row in rows[:page_limit]:
+            try:
+                references = {
+                    prefix: ArtifactRef(
+                        kind=ArtifactKind.TARGET,
+                        name=row[f"{prefix}_name"],
+                        revision=row[f"{prefix}_revision"],
+                        digest=row[f"{prefix}_digest"],
+                    )
+                    for prefix in prefixes
+                }
+                records.append(
+                    record_type.model_validate({"suite": suite, **references})
+                )
+            except (KeyError, TypeError, ValidationError, ValueError) as error:
+                raise CorruptRecordError("Stored target group is invalid") from error
+        next_cursor = None
+        if len(rows) > page_limit:
+            next_cursor = _encode_cursor(
+                stream=stream,
+                filters=filters,
+                key=[rows[page_limit - 1][field] for field in fields],
+            )
+        return CursorPage(items=tuple(records), next_cursor=next_cursor)
 
     def list_release_decision_cases(
         self,
@@ -2866,6 +3293,10 @@ class SqlAlchemyControlPlaneRepository:
             RunResult,
             max_document_bytes=self._max_document_bytes,
         )
+        if any(row[key] != value for key, value in _run_history_values(result).items()):
+            raise CorruptRecordError(
+                "Stored run history does not match canonical evidence"
+            )
         try:
             input_units, output_units = _run_usage(result)
         except ValueError as error:
@@ -2923,6 +3354,13 @@ class SqlAlchemyControlPlaneRepository:
             ReleaseDecision,
             max_document_bytes=self._max_document_bytes,
         )
+        if any(
+            row[key] != value
+            for key, value in _suite_history_values(decision.suite).items()
+        ):
+            raise CorruptRecordError(
+                "Stored decision history does not match canonical evidence"
+            )
         if (
             row["decision_digest"],
             row["baseline_run_id"],

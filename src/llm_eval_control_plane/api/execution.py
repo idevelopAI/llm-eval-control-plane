@@ -24,6 +24,7 @@ from llm_eval_control_plane.application.runner import InProcessRunner
 from llm_eval_control_plane.domain import (
     ArtifactRef,
     EvaluationCase,
+    EvaluationSuiteVersion,
     SuiteEvaluator,
     SuiteExecutionSettings,
     TargetObservation,
@@ -137,6 +138,53 @@ class DeterministicEvaluationExecutor:
                 tracer=self._tracer,
             )
 
+    async def execute_suite(
+        self,
+        *,
+        run_id: str,
+        dataset: DatasetVersion,
+        target_name: str,
+        target_revision: int,
+        scenario_overrides: Mapping[str, str],
+        suite: EvaluationSuiteVersion,
+    ) -> RunResult:
+        """Execute only when the installed adapter still honors the pinned suite."""
+        contract = self.validate_suite(
+            adapter=suite.execution.adapter,
+            evaluator_names=suite.evaluator_names,
+        )
+        if (
+            contract.execution != suite.execution
+            or contract.evaluators != suite.evaluators
+            or dataset.artifact_ref != suite.dataset
+        ):
+            raise ValueError("suite execution dependencies do not match")
+        self.validate(
+            target_name=target_name,
+            target_revision=target_revision,
+            adapter=suite.execution.adapter,
+            evaluator_names=suite.evaluator_names,
+            scenario_overrides=scenario_overrides,
+        )
+        kinds = self._evaluator_kinds(suite.evaluator_names)
+        with self._tracer.start_as_current_span(
+            "evaluation.run",
+            kind=SpanKind.INTERNAL,
+            record_exception=False,
+            set_status_on_exception=False,
+        ):
+            return await asyncio.to_thread(
+                _run_evaluation,
+                run_id=run_id,
+                dataset=dataset,
+                target_name=target_name,
+                target_revision=target_revision,
+                evaluator_kinds=kinds,
+                scenario_overrides=scenario_overrides,
+                tracer=self._tracer,
+                suite=suite,
+            )
+
     @staticmethod
     def _evaluator_kinds(
         evaluator_names: tuple[str, ...],
@@ -156,6 +204,7 @@ def _run_evaluation(
     evaluator_kinds: tuple[BuiltInEvaluatorKind, ...],
     scenario_overrides: Mapping[str, str],
     tracer: Tracer,
+    suite: EvaluationSuiteVersion | None = None,
 ) -> RunResult:
     """Run the synchronous deterministic workload outside the worker event loop."""
     target = _TracedTarget(
@@ -177,6 +226,7 @@ def _run_evaluation(
             target=target,
             evaluators=evaluators,
             execution_mode=ExecutionMode.OFFLINE_MOCK,
+            suite=suite,
         )
     )
 

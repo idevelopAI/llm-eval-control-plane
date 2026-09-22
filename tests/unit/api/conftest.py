@@ -27,6 +27,7 @@ from llm_eval_control_plane.application.control_plane import (
     StoreNotFoundError,
     StoreTransitionError,
 )
+from llm_eval_control_plane.domain.artifacts import ArtifactRef
 from llm_eval_control_plane.domain.comparison import (
     CaseChange,
     GateCaseComparison,
@@ -46,6 +47,12 @@ from llm_eval_control_plane.domain.control_plane import (
     ReleaseDecisionRecord,
     RunListRecord,
     RunRecord,
+    SuiteDecisionHistoryRecord,
+    SuiteListRecord,
+    SuiteRecord,
+    SuiteRunHistoryRecord,
+    SuiteTargetGroupRecord,
+    SuiteTargetPairGroupRecord,
 )
 from llm_eval_control_plane.domain.datasets import DatasetVersion
 from llm_eval_control_plane.domain.results import RunResult
@@ -92,6 +99,7 @@ class ReadyRepository:
 
     def __init__(self) -> None:
         self.datasets: dict[tuple[str, int], DatasetRecord] = {}
+        self.suites: dict[tuple[str, int], SuiteRecord] = {}
         self.jobs: dict[str, JobRecord] = {}
         self.payloads: dict[str, JobPayload] = {}
         self.runs: dict[str, RunRecord] = {}
@@ -131,6 +139,47 @@ class ReadyRepository:
             )
             for record in self.datasets.values()
             if name is None or record.dataset.name == name
+        )
+        return CursorPage(items=items[:limit])
+
+    def put_suite(self, record: SuiteRecord) -> SuiteRecord:
+        key = (record.suite.name, record.suite.revision)
+        existing = self.suites.get(key)
+        if existing is not None and existing.suite != record.suite:
+            raise StoreConflictError("private suite conflict")
+        self.suites[key] = existing or record
+        return self.suites[key]
+
+    def get_suite(self, name: str, revision: int) -> SuiteRecord:
+        try:
+            return self.suites[(name, revision)]
+        except KeyError:
+            raise StoreNotFoundError("private suite missing") from None
+
+    def list_suites(
+        self,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        name: str | None = None,
+    ) -> CursorPage[SuiteListRecord]:
+        self._validate_cursor(cursor)
+        items = tuple(
+            SuiteListRecord(
+                name=record.suite.name,
+                revision=record.suite.revision,
+                digest=record.suite.digest,
+                dataset_name=record.suite.dataset.name,
+                dataset_revision=record.suite.dataset.revision,
+                evaluator_count=len(record.suite.evaluators),
+                metric_count=sum(len(item.metrics) for item in record.suite.evaluators),
+                slice_count=len(record.suite.slices),
+                gate_count=len(record.suite.gates),
+                execution_mode=record.suite.execution.execution_mode,
+                created_at=record.created_at,
+            )
+            for record in self.suites.values()
+            if name is None or record.suite.name == name
         )
         return CursorPage(items=items[:limit])
 
@@ -246,6 +295,111 @@ class ReadyRepository:
             if dataset_name is None or record.result.dataset.name == dataset_name
         )
         return CursorPage(items=items[:limit])
+
+    def list_suite_runs(
+        self,
+        suite: ArtifactRef,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        target: ArtifactRef | None = None,
+    ) -> CursorPage[SuiteRunHistoryRecord]:
+        self._validate_cursor(cursor)
+        items = tuple(
+            SuiteRunHistoryRecord(
+                **item.model_dump(),
+                suite=suite,
+                target=self.runs[item.run_id].result.target,
+            )
+            for item in self.list_runs(limit=100).items
+            if self.runs[item.run_id].result.suite == suite
+            and (target is None or self.runs[item.run_id].result.target == target)
+        )
+        return CursorPage(
+            items=tuple(
+                sorted(
+                    items, key=lambda item: (item.created_at, item.run_id), reverse=True
+                )
+            )[:limit]
+        )
+
+    def list_suite_decisions(
+        self,
+        suite: ArtifactRef,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        baseline_target: ArtifactRef | None = None,
+        candidate_target: ArtifactRef | None = None,
+    ) -> CursorPage[SuiteDecisionHistoryRecord]:
+        self._validate_cursor(cursor)
+        items = tuple(
+            SuiteDecisionHistoryRecord(**item.model_dump(), suite=suite)
+            for item in self.list_release_decisions(
+                limit=100, order=ListOrder.DESCENDING
+            ).items
+            if self.decisions[item.decision_id].decision.suite == suite
+            and (
+                baseline_target is None
+                or self.runs[item.baseline_run_id].result.target == baseline_target
+            )
+            and (
+                candidate_target is None
+                or self.runs[item.candidate_run_id].result.target == candidate_target
+            )
+        )
+        return CursorPage(items=items[:limit])
+
+    def list_suite_targets(
+        self,
+        suite: ArtifactRef,
+        *,
+        limit: int,
+        cursor: str | None = None,
+    ) -> CursorPage[SuiteTargetGroupRecord]:
+        self._validate_cursor(cursor)
+        targets = {
+            (item.target.name, item.target.revision, item.target.digest): item.target
+            for item in self.list_suite_runs(suite, limit=100).items
+        }
+        return CursorPage(
+            items=tuple(
+                SuiteTargetGroupRecord(suite=suite, target=target)
+                for _, target in sorted(targets.items())
+            )[:limit]
+        )
+
+    def list_suite_target_pairs(
+        self,
+        suite: ArtifactRef,
+        *,
+        limit: int,
+        cursor: str | None = None,
+    ) -> CursorPage[SuiteTargetPairGroupRecord]:
+        self._validate_cursor(cursor)
+        pairs = {
+            (item.decision.baseline, item.decision.candidate)
+            for item in self.decisions.values()
+            if item.decision.suite == suite
+        }
+        return CursorPage(
+            items=tuple(
+                SuiteTargetPairGroupRecord(
+                    suite=suite, baseline_target=baseline, candidate_target=candidate
+                )
+                for baseline, candidate in sorted(
+                    pairs,
+                    key=lambda pair: (
+                        pair[0].name,
+                        pair[0].revision,
+                        pair[0].digest or "",
+                        pair[1].name,
+                        pair[1].revision,
+                        pair[1].digest or "",
+                    ),
+                )
+            )[:limit]
+        )
 
     def get_release_decision(self, decision_id: str) -> ReleaseDecisionRecord:
         try:

@@ -13,10 +13,10 @@ baseline and candidate runs, enforce release policy across critical slices, and
 trace every decision to bounded evidence.
 
 > **Current scope:** Deterministic release evidence, baseline comparison, policy
-> gates, a create-once versioned evaluation-suite registry, durable workers,
-> project authorization, privacy-safe observability, fenced PostgreSQL recovery,
-> and the DataBridge evaluation. The hosted example is a synthetic, request-free
-> build with no API or model calls.
+> gates, immutable evaluation suites with snapshot-pinned execution and evidence,
+> durable workers, project authorization, privacy-safe observability, fenced
+> PostgreSQL recovery, and the DataBridge evaluation. The hosted example is a
+> synthetic, request-free build with no API or model calls.
 
 ## Release evidence dashboard
 
@@ -24,12 +24,26 @@ The dashboard opens in an immutable, zero-request fixture mode. When served on
 loopback, an operator can explicitly connect it to the local control plane and
 review the newest decision history, failed-first gates, transition-filtered case
 scores, and privacy-bounded score, latency, and usage-unit distributions.
+The local suite-history panel groups completed runs and release decisions by
+an exact suite revision and digest, with explicit, bounded pagination.
+Historical decisions open directly in detailed gate review after their complete
+identity is verified, including decisions outside the newest collection.
+Select a **Run target** or directed **Decision target pair** to filter history by
+complete name, revision, and digest. Group discovery and filtered history use
+separate bounded pages; changing a filter resets history cursors and cancels
+superseded reads. Gate review also verifies the selected target pair before
+loading case or distribution evidence.
 
 ![Deterministic release evidence dashboard showing a blocked release, failed gate, and redacted scoring evidence](docs/assets/release-dashboard-fixture.jpg)
 
 [Open the public synthetic release-evidence dashboard](https://llm-eval-control-plane.nick0ne.chatgpt.site/)
 
 _Deterministic fixture mode: no credential or API request is used._
+
+![Local suite history with exact target and baseline-to-candidate filters, immutable digests, and direct gate review](docs/assets/suite-target-history.png)
+
+_Local-only grouped history, captured using intercepted synthetic test data.
+These controls are not present on the hosted fixture Site._
 
 Raw evaluation content is outside the dashboard contract. Case reads expose
 only IDs, slice labels, score status, pass state, numeric score, delta, and change
@@ -58,10 +72,28 @@ requests, and stores release decisions. API v1 uses only the credential-free
 deterministic executor: its latency and usage evidence are simulated and must
 not be presented as live-model measurements.
 
-The application core also validates and persists immutable evaluation-suite
-revisions against exact dataset and evaluator identities. Suite management is
-not exposed through API v1 yet, and existing run and release evidence remains
-explicitly suite-unpinned until the suite-backed execution contract is added.
+The application core also registers immutable evaluation suites and submits
+suite-backed runs and comparisons. Each job pins the complete suite snapshot;
+workers verify the executor contract and use that snapshot without reloading a
+suite alias. Run and decision digests bind the exact suite identity, and a
+comparison applies only that suite's policy. Historical suite-unpinned evidence
+keeps its original serialization and digests.
+
+The [offline suite CLI](docs/suite-cli.md) builds and validates a resolved
+protocol, runs baseline and candidate targets, and compares their pinned
+evidence without Docker, hosting, or provider API calls.
+
+The local API exposes authenticated suite registration, revision lookup,
+suite-backed run/comparison submission, and newest-first experiment history for
+an exact suite pin. History pages use indexed metadata without loading case
+documents. Run and decision detail responses include
+the resolved `suite` reference when pinned; historical unpinned responses remain
+unchanged. See the [evaluation-suite API guide](docs/evaluation-suites.md) for
+the exact inputs, permissions, replay behavior, and compatibility boundary.
+The local dashboard can browse this metadata after an explicit operator action;
+it does not create runs, select baselines, or contact a provider. Legacy
+run/comparison endpoints and CLI commands remain unpinned and cannot replace
+suite policy.
 
 ### Local Compose quickstart
 
@@ -190,7 +222,8 @@ responses also contain gate results. Collection pages use bounded indexed
 discovery projections and do not load the canonical evidence documents.
 Resource collection fields are limited to identifiers, kind or status, safe
 failure codes, digests, timestamps, dataset identity and case count, execution
-mode, and comparison run IDs where applicable. Dashboard analytical routes
+mode, comparison run IDs, and resolved suite/target references where applicable.
+Dashboard analytical routes
 separately expose the score-only case and fixed aggregate fields described
 above. No response returns case inputs, expectations, target outputs, SQL, rows,
 idempotency keys, request digests, database URLs, raw operational samples, or
@@ -203,6 +236,10 @@ exception text.
 | `GET` | `/metrics` | Authenticated API Prometheus metrics |
 | `POST`, `GET` | `/v1/datasets` | Register or page dataset revisions |
 | `GET` | `/v1/dataset-revisions/{revision}/{name:path}` | Read one slash-safe dataset summary |
+| `POST`, `GET` | `/v1/suites` | Register or page immutable evaluation suites |
+| `GET` | `/v1/suite-revisions/{revision}/{name:path}` | Read one suite protocol summary |
+| `POST`, `GET` | `/v1/suite-runs` | Submit a pinned run or page exact-suite run history |
+| `POST`, `GET` | `/v1/suite-comparisons` | Submit a pinned comparison or page exact-suite release history |
 | `POST`, `GET` | `/v1/runs` | Submit or page evaluation runs |
 | `GET` | `/v1/runs/{run_id}` | Read one redacted run summary |
 | `GET` | `/v1/jobs`, `/v1/jobs/{job_id}` | Page or inspect durable job state |

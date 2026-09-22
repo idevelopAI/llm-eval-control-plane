@@ -38,6 +38,20 @@ from llm_eval_control_plane.api.contracts import (
     RunPage,
     RunResponse,
     RunSubmissionResponse,
+    SuiteComparisonCreateRequest,
+    SuiteCreateRequest,
+    SuiteDecisionHistoryItemResponse,
+    SuiteDecisionHistoryPage,
+    SuiteListItemResponse,
+    SuitePage,
+    SuiteResponse,
+    SuiteRunCreateRequest,
+    SuiteRunHistoryItemResponse,
+    SuiteRunHistoryPage,
+    SuiteTargetGroupPage,
+    SuiteTargetGroupResponse,
+    SuiteTargetPairGroupPage,
+    SuiteTargetPairGroupResponse,
 )
 from llm_eval_control_plane.api.middleware import (
     ApiBoundaryMiddleware,
@@ -62,7 +76,10 @@ from llm_eval_control_plane.application.control_plane import (
     ResourceNotFoundError,
     RunSubmission,
     SubmissionResult,
+    SuiteComparisonSubmission,
+    SuiteRunSubmission,
 )
+from llm_eval_control_plane.domain.artifacts import ArtifactKind, ArtifactRef
 from llm_eval_control_plane.domain.comparison import CaseChange, ReleaseStatus
 from llm_eval_control_plane.domain.control_plane import JobKind, JobStatus, ListOrder
 from llm_eval_control_plane.observability import Observability
@@ -78,6 +95,7 @@ _SAFE_ERROR_TYPE = re.compile(r"^[A-Za-z0-9_.-]{1,96}$")
 _SAFE_LOCATIONS = frozenset(
     {
         "adapter",
+        "artifact",
         "baseline_run_id",
         "body",
         "candidate_run_id",
@@ -86,17 +104,23 @@ _SAFE_LOCATIONS = frozenset(
         "change",
         "cursor",
         "dataset_name",
+        "dataset",
         "dataset_revision",
         "evaluators",
+        "execution",
+        "execution_mode",
+        "executor_name",
         "expected",
         "expected_refusal",
         "expected_schema",
         "gate_slice",
+        "gates",
         "header",
         "idempotency-key",
         "input",
         "limit",
         "metric",
+        "metrics",
         "name",
         "numeric_tolerance",
         "path",
@@ -106,6 +130,8 @@ _SAFE_LOCATIONS = frozenset(
         "schema_version",
         "slices",
         "status",
+        "suite_name",
+        "suite_revision",
         "spec",
         "target_name",
         "target_revision",
@@ -127,6 +153,27 @@ NameQuery = Annotated[
     str | None,
     Query(min_length=1, max_length=128, pattern=_NAME_PATTERN),
 ]
+RequiredNameQuery = Annotated[
+    str, Query(min_length=1, max_length=128, pattern=_NAME_PATTERN)
+]
+TargetRevisionQuery = Annotated[int | None, Query(gt=0)]
+TargetDigestQuery = Annotated[str | None, Query(pattern=r"^sha256:[0-9a-f]{64}$")]
+
+
+def _target_filter(
+    name: str | None, revision: int | None, digest: str | None
+) -> ArtifactRef | None:
+    if name is None and revision is None and digest is None:
+        return None
+    if name is None or revision is None or digest is None:
+        raise InvalidSubmissionError(
+            "Target filters require name, revision, and digest"
+        )
+    return ArtifactRef(
+        kind=ArtifactKind.TARGET, name=name, revision=revision, digest=digest
+    )
+
+
 JobKindQuery = Annotated[JobKind | None, Query()]
 JobStatusQuery = Annotated[JobStatus | None, Query()]
 ReleaseStatusQuery = Annotated[ReleaseStatus | None, Query()]
@@ -189,7 +236,7 @@ def create_app(
     app = FastAPI(
         title="LLM Evaluation Control Plane",
         summary="Durable, content-addressed evaluation and release decisions",
-        version="1.4.0",
+        version="1.6.0",
         openapi_url="/openapi.json",
         docs_url=None,
         redoc_url=None,
@@ -370,6 +417,291 @@ def create_app(
         ],
     ) -> DatasetResponse:
         return DatasetResponse.from_record(service.get_dataset(name, revision))
+
+    @app.post(
+        "/v1/suites",
+        response_model=SuiteResponse,
+        status_code=201,
+        operation_id="create_suite_revision",
+        responses=_ERROR_RESPONSES,
+        tags=["suites"],
+        description=(
+            "Register an immutable protocol with exact resolved dependencies. "
+            "No target is invoked."
+        ),
+    )
+    async def create_suite(body: SuiteCreateRequest) -> SuiteResponse:
+        try:
+            suite = body.to_domain()
+        except (ValidationError, ValueError) as error:
+            raise InvalidSubmissionError(
+                "Evaluation suite revision is invalid"
+            ) from error
+        return SuiteResponse.from_record(service.register_suite(suite))
+
+    @app.get(
+        "/v1/suites",
+        response_model=SuitePage,
+        operation_id="list_suite_revisions",
+        responses=_ERROR_RESPONSES,
+        tags=["suites"],
+    )
+    async def list_suites(
+        limit: LimitQuery = 50,
+        cursor: CursorQuery = None,
+        name: NameQuery = None,
+    ) -> SuitePage:
+        page = service.list_suites(limit=limit, cursor=cursor, name=name)
+        return SuitePage(
+            items=tuple(SuiteListItemResponse.from_record(item) for item in page.items),
+            next_cursor=page.next_cursor,
+        )
+
+    @app.get(
+        "/v1/suite-revisions/{revision}/{name:path}",
+        response_model=SuiteResponse,
+        operation_id="get_suite_revision",
+        responses=_ERROR_RESPONSES,
+        tags=["suites"],
+    )
+    async def get_suite(
+        revision: Annotated[int, Path(gt=0)],
+        name: Annotated[str, Path(min_length=1, max_length=128, pattern=_NAME_PATTERN)],
+    ) -> SuiteResponse:
+        return SuiteResponse.from_record(service.get_suite(name, revision))
+
+    @app.get(
+        "/v1/suite-runs",
+        response_model=SuiteRunHistoryPage,
+        operation_id="list_suite_run_history",
+        responses=_ERROR_RESPONSES,
+        tags=["suites"],
+        description=(
+            "Newest persisted runs under the exact registered suite pin. Metadata only."
+        ),
+    )
+    async def list_suite_runs(
+        suite_name: RequiredNameQuery,
+        suite_revision: Annotated[int, Query(gt=0)],
+        limit: LimitQuery = 50,
+        cursor: CursorQuery = None,
+        target_name: NameQuery = None,
+        target_revision: TargetRevisionQuery = None,
+        target_digest: TargetDigestQuery = None,
+    ) -> SuiteRunHistoryPage:
+        page = service.list_suite_runs(
+            suite_name,
+            suite_revision,
+            limit=limit,
+            cursor=cursor,
+            target=_target_filter(target_name, target_revision, target_digest),
+        )
+        return SuiteRunHistoryPage(
+            items=tuple(
+                SuiteRunHistoryItemResponse.from_record(item) for item in page.items
+            ),
+            next_cursor=page.next_cursor,
+        )
+
+    @app.get(
+        "/v1/suite-comparisons",
+        response_model=SuiteDecisionHistoryPage,
+        operation_id="list_suite_decision_history",
+        responses=_ERROR_RESPONSES,
+        tags=["suites"],
+        description=(
+            "Newest persisted release decisions under the exact registered suite pin. "
+            "Metadata only."
+        ),
+    )
+    async def list_suite_decisions(
+        suite_name: RequiredNameQuery,
+        suite_revision: Annotated[int, Query(gt=0)],
+        limit: LimitQuery = 50,
+        cursor: CursorQuery = None,
+        baseline_target_name: NameQuery = None,
+        baseline_target_revision: TargetRevisionQuery = None,
+        baseline_target_digest: TargetDigestQuery = None,
+        candidate_target_name: NameQuery = None,
+        candidate_target_revision: TargetRevisionQuery = None,
+        candidate_target_digest: TargetDigestQuery = None,
+    ) -> SuiteDecisionHistoryPage:
+        baseline = _target_filter(
+            baseline_target_name, baseline_target_revision, baseline_target_digest
+        )
+        candidate = _target_filter(
+            candidate_target_name, candidate_target_revision, candidate_target_digest
+        )
+        if (baseline is None) != (candidate is None):
+            raise InvalidSubmissionError(
+                "Target pair filters require both complete references"
+            )
+        page = service.list_suite_decisions(
+            suite_name,
+            suite_revision,
+            limit=limit,
+            cursor=cursor,
+            baseline_target=baseline,
+            candidate_target=candidate,
+        )
+        return SuiteDecisionHistoryPage(
+            items=tuple(
+                SuiteDecisionHistoryItemResponse.from_record(item)
+                for item in page.items
+            ),
+            next_cursor=page.next_cursor,
+        )
+
+    @app.get(
+        "/v1/suite-targets",
+        response_model=SuiteTargetGroupPage,
+        operation_id="list_suite_target_groups",
+        responses=_ERROR_RESPONSES,
+        tags=["suites"],
+        description=(
+            "Distinct resolved targets in persisted suite runs, "
+            "ordered by exact identity. Metadata only."
+        ),
+    )
+    async def list_suite_targets(
+        suite_name: RequiredNameQuery,
+        suite_revision: Annotated[int, Query(gt=0)],
+        limit: LimitQuery = 50,
+        cursor: CursorQuery = None,
+    ) -> SuiteTargetGroupPage:
+        page = service.list_suite_targets(
+            suite_name, suite_revision, limit=limit, cursor=cursor
+        )
+        return SuiteTargetGroupPage(
+            items=tuple(
+                SuiteTargetGroupResponse.from_record(item) for item in page.items
+            ),
+            next_cursor=page.next_cursor,
+        )
+
+    @app.get(
+        "/v1/suite-target-pairs",
+        response_model=SuiteTargetPairGroupPage,
+        operation_id="list_suite_target_pair_groups",
+        responses=_ERROR_RESPONSES,
+        tags=["suites"],
+        description=(
+            "Distinct baseline/candidate target pairs in persisted suite decisions, "
+            "ordered by exact identity. Metadata only."
+        ),
+    )
+    async def list_suite_target_pairs(
+        suite_name: RequiredNameQuery,
+        suite_revision: Annotated[int, Query(gt=0)],
+        limit: LimitQuery = 50,
+        cursor: CursorQuery = None,
+    ) -> SuiteTargetPairGroupPage:
+        page = service.list_suite_target_pairs(
+            suite_name, suite_revision, limit=limit, cursor=cursor
+        )
+        return SuiteTargetPairGroupPage(
+            items=tuple(
+                SuiteTargetPairGroupResponse.from_record(item) for item in page.items
+            ),
+            next_cursor=page.next_cursor,
+        )
+
+    @app.post(
+        "/v1/suite-runs",
+        response_model=RunSubmissionResponse,
+        status_code=202,
+        operation_id="submit_suite_evaluation_run",
+        responses={
+            **_ERROR_RESPONSES,
+            200: {
+                "model": RunSubmissionResponse,
+                "description": "Terminal replay",
+                "headers": _JOB_LOCATION_HEADERS,
+            },
+            202: {
+                "model": RunSubmissionResponse,
+                "description": "Accepted new or nonterminal job",
+                "headers": _JOB_LOCATION_HEADERS,
+            },
+        },
+        tags=["suites"],
+        description=(
+            "Pin one complete suite snapshot and target contract for asynchronous "
+            "worker execution."
+        ),
+    )
+    async def submit_suite_run(
+        body: SuiteRunCreateRequest,
+        response: Response,
+        idempotency_key: IdempotencyHeader,
+    ) -> RunSubmissionResponse:
+        outcome = await service.submit_suite_run(
+            SuiteRunSubmission(
+                idempotency_key=idempotency_key,
+                suite_name=body.suite_name,
+                suite_revision=body.suite_revision,
+                target_name=body.target_name,
+                target_revision=body.target_revision,
+                scenario_overrides=body.scenario_overrides,
+                traceparent=current_traceparent(),
+            )
+        )
+        response.status_code = _submission_status(outcome)
+        response.headers["Location"] = f"/v1/jobs/{outcome.job.job_id}"
+        run = None
+        if outcome.job.status is JobStatus.SUCCEEDED:
+            run = RunResponse.from_record(service.get_run(outcome.job.resource_id))
+        return RunSubmissionResponse(job=JobResponse.from_record(outcome.job), run=run)
+
+    @app.post(
+        "/v1/suite-comparisons",
+        response_model=ComparisonSubmissionResponse,
+        status_code=202,
+        operation_id="submit_suite_release_comparison",
+        responses={
+            **_ERROR_RESPONSES,
+            200: {
+                "model": ComparisonSubmissionResponse,
+                "description": "Terminal replay",
+                "headers": _JOB_LOCATION_HEADERS,
+            },
+            202: {
+                "model": ComparisonSubmissionResponse,
+                "description": "Accepted new or nonterminal job",
+                "headers": _JOB_LOCATION_HEADERS,
+            },
+        },
+        tags=["suites"],
+        description=(
+            "Compare two runs pinned to the selected suite, using only its "
+            "immutable policy."
+        ),
+    )
+    async def submit_suite_comparison(
+        body: SuiteComparisonCreateRequest,
+        response: Response,
+        idempotency_key: IdempotencyHeader,
+    ) -> ComparisonSubmissionResponse:
+        outcome = await service.submit_suite_comparison(
+            SuiteComparisonSubmission(
+                idempotency_key=idempotency_key,
+                suite_name=body.suite_name,
+                suite_revision=body.suite_revision,
+                baseline_run_id=body.baseline_run_id,
+                candidate_run_id=body.candidate_run_id,
+                traceparent=current_traceparent(),
+            )
+        )
+        response.status_code = _submission_status(outcome)
+        response.headers["Location"] = f"/v1/jobs/{outcome.job.job_id}"
+        decision = None
+        if outcome.job.status is JobStatus.SUCCEEDED:
+            decision = ReleaseDecisionResponse.from_record(
+                service.get_release_decision(outcome.job.resource_id)
+            )
+        return ComparisonSubmissionResponse(
+            job=JobResponse.from_record(outcome.job), decision=decision
+        )
 
     @app.post(
         "/v1/runs",

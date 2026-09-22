@@ -12,6 +12,7 @@ from llm_eval_control_plane.application.dashboard import (
     build_release_decision_distributions,
 )
 from llm_eval_control_plane.domain.analytics import ReleaseDecisionDistributions
+from llm_eval_control_plane.domain.artifacts import ArtifactRef
 from llm_eval_control_plane.domain.canonical import JsonValue, sha256_digest
 from llm_eval_control_plane.domain.comparison import (
     CaseChange,
@@ -37,9 +38,13 @@ from llm_eval_control_plane.domain.control_plane import (
     RunListRecord,
     RunRecord,
     ScenarioOverride,
+    SuiteDecisionHistoryRecord,
     SuiteExecutionContract,
     SuiteListRecord,
     SuiteRecord,
+    SuiteRunHistoryRecord,
+    SuiteTargetGroupRecord,
+    SuiteTargetPairGroupRecord,
     TraceParent,
     WorkerId,
     validate_traceparent,
@@ -110,6 +115,41 @@ class ControlPlaneRepository(Protocol):
     def put_suite(self, record: SuiteRecord) -> SuiteRecord: ...
 
     def get_suite(self, name: str, revision: int) -> SuiteRecord: ...
+
+    def list_suite_runs(
+        self,
+        suite: ArtifactRef,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        target: ArtifactRef | None = None,
+    ) -> CursorPage[SuiteRunHistoryRecord]: ...
+
+    def list_suite_decisions(
+        self,
+        suite: ArtifactRef,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        baseline_target: ArtifactRef | None = None,
+        candidate_target: ArtifactRef | None = None,
+    ) -> CursorPage[SuiteDecisionHistoryRecord]: ...
+
+    def list_suite_targets(
+        self,
+        suite: ArtifactRef,
+        *,
+        limit: int,
+        cursor: str | None = None,
+    ) -> CursorPage[SuiteTargetGroupRecord]: ...
+
+    def list_suite_target_pairs(
+        self,
+        suite: ArtifactRef,
+        *,
+        limit: int,
+        cursor: str | None = None,
+    ) -> CursorPage[SuiteTargetPairGroupRecord]: ...
 
     def list_suites(
         self,
@@ -349,6 +389,66 @@ class EvaluationExecutor(Protocol):
         scenario_overrides: Mapping[str, str],
     ) -> RunResult: ...
 
+    async def execute_suite(
+        self,
+        *,
+        run_id: str,
+        dataset: DatasetVersion,
+        target_name: str,
+        target_revision: int,
+        scenario_overrides: Mapping[str, str],
+        suite: EvaluationSuiteVersion,
+    ) -> RunResult: ...
+
+
+@dataclass(frozen=True, slots=True)
+class SuiteRunSubmission:
+    """Select an immutable suite and a target without replacing suite settings."""
+
+    idempotency_key: str
+    suite_name: str
+    suite_revision: int
+    target_name: str
+    target_revision: int
+    scenario_overrides: Mapping[str, str] = field(default_factory=dict, repr=False)
+    traceparent: TraceParent | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.traceparent is not None:
+            validate_traceparent(self.traceparent)
+
+    def digest_record(self) -> dict[str, JsonValue]:
+        return {
+            "submission_schema": "suite-run/v1",
+            "suite": {"name": self.suite_name, "revision": self.suite_revision},
+            "target": {"name": self.target_name, "revision": self.target_revision},
+            "scenario_overrides": dict(sorted(self.scenario_overrides.items())),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SuiteComparisonSubmission:
+    """Compare two exact runs using the gates of their registered suite."""
+
+    idempotency_key: str
+    suite_name: str
+    suite_revision: int
+    baseline_run_id: str
+    candidate_run_id: str
+    traceparent: TraceParent | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.traceparent is not None:
+            validate_traceparent(self.traceparent)
+
+    def digest_record(self) -> dict[str, JsonValue]:
+        return {
+            "submission_schema": "suite-comparison/v1",
+            "suite": {"name": self.suite_name, "revision": self.suite_revision},
+            "baseline_run_id": self.baseline_run_id,
+            "candidate_run_id": self.candidate_run_id,
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class SubmissionResult:
@@ -534,6 +634,77 @@ class ControlPlaneService:
         except StoreInvalidCursorError as error:
             raise InvalidCursorError("Pagination cursor is invalid") from error
 
+    def list_suite_runs(
+        self,
+        name: str,
+        revision: int,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        target: ArtifactRef | None = None,
+    ) -> CursorPage[SuiteRunHistoryRecord]:
+        suite = self.get_suite(name, revision).suite
+        try:
+            return self._repository.list_suite_runs(
+                suite.artifact_ref, limit=limit, cursor=cursor, target=target
+            )
+        except StoreInvalidCursorError as error:
+            raise InvalidCursorError("Pagination cursor is invalid") from error
+
+    def list_suite_decisions(
+        self,
+        name: str,
+        revision: int,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        baseline_target: ArtifactRef | None = None,
+        candidate_target: ArtifactRef | None = None,
+    ) -> CursorPage[SuiteDecisionHistoryRecord]:
+        suite = self.get_suite(name, revision).suite
+        try:
+            return self._repository.list_suite_decisions(
+                suite.artifact_ref,
+                limit=limit,
+                cursor=cursor,
+                baseline_target=baseline_target,
+                candidate_target=candidate_target,
+            )
+        except StoreInvalidCursorError as error:
+            raise InvalidCursorError("Pagination cursor is invalid") from error
+
+    def list_suite_targets(
+        self,
+        name: str,
+        revision: int,
+        *,
+        limit: int,
+        cursor: str | None = None,
+    ) -> CursorPage[SuiteTargetGroupRecord]:
+        suite = self.get_suite(name, revision).suite
+        try:
+            return self._repository.list_suite_targets(
+                suite.artifact_ref, limit=limit, cursor=cursor
+            )
+        except StoreInvalidCursorError as error:
+            raise InvalidCursorError("Pagination cursor is invalid") from error
+
+    def list_suite_target_pairs(
+        self,
+        name: str,
+        revision: int,
+        *,
+        limit: int,
+        cursor: str | None = None,
+    ) -> CursorPage[SuiteTargetPairGroupRecord]:
+        suite = self.get_suite(name, revision).suite
+        try:
+            return self._repository.list_suite_target_pairs(
+                suite.artifact_ref, limit=limit, cursor=cursor
+            )
+        except StoreInvalidCursorError as error:
+            raise InvalidCursorError("Pagination cursor is invalid") from error
+
     def get_release_decision_distributions(
         self,
         decision_id: str,
@@ -570,6 +741,164 @@ class ControlPlaneService:
             raise ControlPlaneStoreError(
                 "Pinned release evidence is inconsistent"
             ) from error
+
+    async def submit_suite_run(
+        self, submission: SuiteRunSubmission
+    ) -> SubmissionResult:
+        """Pin a complete suite snapshot before enqueueing one target run."""
+        request_digest = sha256_digest(submission.digest_record())
+        replay = self._idempotent_replay(
+            kind=JobKind.RUN,
+            idempotency_key=submission.idempotency_key,
+            request_digest=request_digest,
+        )
+        if replay is not None:
+            return replay
+        try:
+            suite = self._repository.get_suite(
+                submission.suite_name, submission.suite_revision
+            ).suite
+            dataset = self._repository.get_dataset(
+                suite.dataset.name, suite.dataset.revision
+            )
+        except StoreNotFoundError as error:
+            raise ResourceNotFoundError("Suite run input was not found") from error
+        try:
+            suite_contract = self._executor.validate_suite(
+                adapter=suite.execution.adapter,
+                evaluator_names=suite.evaluator_names,
+            )
+            validate_suite_registration(
+                suite=suite, dataset=dataset, contract=suite_contract
+            )
+            contract = self._executor.validate(
+                target_name=submission.target_name,
+                target_revision=submission.target_revision,
+                adapter=suite.execution.adapter,
+                evaluator_names=suite.evaluator_names,
+                scenario_overrides=submission.scenario_overrides,
+            )
+            payload = RunJobPayload(
+                schema_version="run-job/v2",
+                suite=suite,
+                dataset=suite.dataset,
+                target_name=submission.target_name,
+                target_revision=submission.target_revision,
+                adapter=suite.execution.adapter,
+                evaluator_names=suite.evaluator_names,
+                scenario_overrides=tuple(
+                    ScenarioOverride(case_id=case_id, scenario=scenario)
+                    for case_id, scenario in sorted(
+                        submission.scenario_overrides.items()
+                    )
+                ),
+                execution_contract=contract,
+            )
+        except ValueError as error:
+            raise InvalidSubmissionError("Suite run submission is invalid") from error
+        return self._enqueue_suite_job(
+            payload=payload,
+            idempotency_key=submission.idempotency_key,
+            request_digest=request_digest,
+            traceparent=submission.traceparent,
+        )
+
+    async def submit_suite_comparison(
+        self, submission: SuiteComparisonSubmission
+    ) -> SubmissionResult:
+        """Pin suite gates and exact run digests before enqueueing comparison."""
+        request_digest = sha256_digest(submission.digest_record())
+        replay = self._idempotent_replay(
+            kind=JobKind.COMPARISON,
+            idempotency_key=submission.idempotency_key,
+            request_digest=request_digest,
+        )
+        if replay is not None:
+            return replay
+        try:
+            suite = self._repository.get_suite(
+                submission.suite_name, submission.suite_revision
+            ).suite
+            dataset = self._repository.get_dataset(
+                suite.dataset.name, suite.dataset.revision
+            )
+            baseline = self._repository.get_run(submission.baseline_run_id)
+            candidate = self._repository.get_run(submission.candidate_run_id)
+        except StoreNotFoundError as error:
+            raise ResourceNotFoundError(
+                "Suite comparison input was not found"
+            ) from error
+        try:
+            spec = suite.to_evaluation_spec(
+                baseline=baseline.result.target,
+                candidate=candidate.result.target,
+            )
+            validate_comparison_inputs(
+                dataset_name=suite.dataset.name,
+                dataset_revision=suite.dataset.revision,
+                baseline_run_id=submission.baseline_run_id,
+                candidate_run_id=submission.candidate_run_id,
+                spec=spec,
+                dataset=dataset,
+                baseline=baseline,
+                candidate=candidate,
+                suite=suite,
+            )
+            payload = ComparisonJobPayload(
+                schema_version="comparison-job/v2",
+                suite=suite,
+                dataset=suite.dataset,
+                baseline_run_id=baseline.result.run_id,
+                baseline_result_digest=baseline.result.result_digest,
+                candidate_run_id=candidate.result.run_id,
+                candidate_result_digest=candidate.result.result_digest,
+                spec=spec,
+            )
+        except ValueError as error:
+            raise InvalidSubmissionError(
+                "Suite comparison submission is invalid"
+            ) from error
+        return self._enqueue_suite_job(
+            payload=payload,
+            idempotency_key=submission.idempotency_key,
+            request_digest=request_digest,
+            traceparent=submission.traceparent,
+        )
+
+    def _enqueue_suite_job(
+        self,
+        *,
+        payload: JobPayload,
+        idempotency_key: str,
+        request_digest: str,
+        traceparent: TraceParent | None,
+    ) -> SubmissionResult:
+        now = self._clock()
+        proposed = JobRecord(
+            job_id=self._identifier_factory("job"),
+            kind=payload.kind,
+            status=JobStatus.QUEUED,
+            idempotency_key=idempotency_key,
+            request_digest=request_digest,
+            resource_id=self._identifier_factory(
+                "run" if payload.kind is JobKind.RUN else "decision"
+            ),
+            attempt_count=0,
+            max_attempts=self._max_attempts,
+            available_at=now,
+            created_at=now,
+            updated_at=now,
+            traceparent=traceparent,
+        )
+        try:
+            job, created = self._repository.begin_job(proposed, payload)
+        except StoreIdempotencyConflictError as error:
+            raise IdempotencyConflictError(
+                "Idempotency key was used for a different request"
+            ) from error
+        except StoreConflictError as error:
+            raise ResourceConflictError("Job identity already exists") from error
+        return SubmissionResult(job=job, created=created)
 
     async def submit_run(self, submission: RunSubmission) -> SubmissionResult:
         """Validate and atomically enqueue one idempotent evaluation job."""
@@ -911,10 +1240,13 @@ def validate_run_result(
     resource_id: str,
     dataset: DatasetRecord,
     contract: ExecutionContract,
+    suite: EvaluationSuiteVersion | None = None,
 ) -> None:
     """Reject executor evidence that escapes its pinned durable contract."""
     if result.run_id != resource_id:
         raise ValueError("executor returned an unexpected run identity")
+    if result.suite != (None if suite is None else suite.artifact_ref):
+        raise ValueError("executor returned an unexpected suite identity")
     if result.dataset != dataset.dataset.artifact_ref:
         raise ValueError("executor returned an unexpected dataset identity")
     if result.target != contract.target:
@@ -942,6 +1274,41 @@ def validate_run_result(
     actual_case_ids = tuple(case.case_id for case in result.cases)
     if actual_case_ids != expected_case_ids:
         raise ValueError("executor returned an unexpected case set")
+    if suite is not None:
+        validate_suite_registration(
+            suite=suite,
+            dataset=dataset,
+            contract=SuiteExecutionContract(
+                execution=suite.execution,
+                evaluators=suite.evaluators,
+            ),
+        )
+        if (
+            result.evaluators != suite.evaluator_refs
+            or result.execution_mode is not suite.execution.execution_mode
+            or contract.adapter != suite.execution.adapter
+            or contract.evaluator_names != suite.evaluator_names
+        ):
+            raise ValueError("run behavior does not match pinned suite")
+        expected_metrics = {
+            (evaluator.artifact, metric)
+            for evaluator in suite.evaluators
+            for metric in evaluator.metrics
+        }
+        actual_metrics = [
+            (metric.evaluator, metric.metric) for metric in result.metrics
+        ]
+        if (
+            len(actual_metrics) != len(expected_metrics)
+            or set(actual_metrics) != expected_metrics
+        ):
+            raise ValueError("run metric inventory does not match pinned suite")
+        if any(
+            (observation.evaluator, observation.metric) not in expected_metrics
+            for case in result.cases
+            for observation in case.observations
+        ):
+            raise ValueError("run observation is outside pinned suite")
 
 
 def validate_comparison_inputs(
@@ -954,6 +1321,7 @@ def validate_comparison_inputs(
     dataset: DatasetRecord,
     baseline: RunRecord,
     candidate: RunRecord,
+    suite: EvaluationSuiteVersion | None = None,
 ) -> None:
     """Validate immutable comparison inputs before enqueueing or executing."""
     ControlPlaneService._validate_dataset_bounds(dataset.dataset)
@@ -989,6 +1357,31 @@ def validate_comparison_inputs(
         raise ValueError("spec baseline does not match baseline run")
     if spec.candidate != candidate.result.target:
         raise ValueError("spec candidate does not match candidate run")
+    expected_suite = None if suite is None else suite.artifact_ref
+    if (
+        baseline.result.suite != expected_suite
+        or candidate.result.suite != expected_suite
+    ):
+        raise ValueError("comparison runs do not match the pinned suite")
+    if suite is not None:
+        if spec != suite.to_evaluation_spec(
+            baseline=baseline.result.target, candidate=candidate.result.target
+        ):
+            raise ValueError("comparison policy does not match the pinned suite")
+        for run in (baseline, candidate):
+            validate_run_result(
+                run.result,
+                resource_id=run.run_id,
+                dataset=dataset,
+                contract=ExecutionContract(
+                    adapter=suite.execution.adapter,
+                    evaluator_names=suite.evaluator_names,
+                    target=run.result.target,
+                    evaluators=suite.evaluator_refs,
+                    execution_mode=suite.execution.execution_mode,
+                ),
+                suite=suite,
+            )
 
 
 __all__ = [
@@ -1013,7 +1406,9 @@ __all__ = [
     "StoreNotFoundError",
     "StoreTransitionError",
     "SubmissionResult",
+    "SuiteComparisonSubmission",
     "SuiteExecutionContract",
+    "SuiteRunSubmission",
     "validate_comparison_inputs",
     "validate_execution_contract",
     "validate_run_result",

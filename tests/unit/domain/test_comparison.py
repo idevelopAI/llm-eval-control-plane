@@ -1,5 +1,5 @@
-from pydantic import ValidationError
-from pytest import raises
+from pydantic import TypeAdapter, ValidationError
+from pytest import mark, raises
 
 from llm_eval_control_plane.domain import (
     AggregateComparison,
@@ -18,6 +18,7 @@ from llm_eval_control_plane.domain import (
     ReleaseDecision,
     ReleaseStatus,
 )
+from llm_eval_control_plane.domain.canonical import sha256_digest
 
 
 def ref(kind: ArtifactKind, name: str, revision: int = 1) -> ArtifactRef:
@@ -30,6 +31,7 @@ def ref(kind: ArtifactKind, name: str, revision: int = 1) -> ArtifactRef:
             ArtifactKind.DATASET: "d",
             ArtifactKind.TARGET: "a",
             ArtifactKind.EVALUATOR: "e",
+            ArtifactKind.SUITE: "f",
         }[kind]
         * 64,
     )
@@ -39,6 +41,7 @@ DATASET = ref(ArtifactKind.DATASET, "dataset")
 BASELINE = ref(ArtifactKind.TARGET, "target", 1)
 CANDIDATE = ref(ArtifactKind.TARGET, "target", 2)
 EVALUATOR = ref(ArtifactKind.EVALUATOR, "exact")
+SUITE = ref(ArtifactKind.SUITE, "release-suite")
 
 
 def aggregate(*, baseline: float = 1.0, candidate: float = 0.9) -> AggregateComparison:
@@ -100,7 +103,11 @@ def case_comparison() -> GateCaseComparison:
 
 
 def decision(
-    *, passed: bool = True, baseline_run_id: str = "baseline"
+    *,
+    passed: bool = True,
+    baseline_run_id: str = "baseline",
+    execution_mode: ExecutionMode = ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE,
+    suite: ArtifactRef | None = None,
 ) -> ReleaseDecision:
     item = aggregate()
     gate = gate_result(passed=passed)
@@ -116,6 +123,8 @@ def decision(
         aggregates=(item,),
         gates=(gate,),
         cases=(case_comparison(),),
+        execution_mode=execution_mode,
+        suite=suite,
     )
 
 
@@ -313,3 +322,103 @@ def test_release_decision_rejects_invalid_artifacts_order_and_status() -> None:
     payload["status"] = ReleaseStatus.FAILED
     with raises(ValidationError, match="status does not match"):
         ReleaseDecision.model_validate(payload)
+
+
+@mark.parametrize(
+    ("execution_mode", "decision_digest", "document_digest"),
+    (
+        (
+            ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE,
+            "sha256:1f39e32cfb2a97b57a29c90bdf74f77387dd914d5a9af92378374d006641abd2",
+            "sha256:37b9e0e238175557299d443df3eae6d3461025402302b6164f12b423905ef795",
+        ),
+        (
+            ExecutionMode.OFFLINE_MOCK,
+            "sha256:03f032bef6b82b11d6b80d0ce867a9c404ee47be3cf2f4ad9ef9bb0f114e844d",
+            "sha256:b67aae70b0b51e2e77dc65cca1f692a37e7bf8c74ad0412bfbe0c505b802c6bc",
+        ),
+        (
+            ExecutionMode.LIVE,
+            "sha256:65b5c4f5c3aedfdefa4dcc81878db41f12eb85fb5d50fd094f497366bb73cec6",
+            "sha256:38d00063d9a3bbde50c1ec774c1d0e19d157e8d866f7f101fe3d642248fdbbdb",
+        ),
+    ),
+)
+def test_unpinned_decisions_preserve_historical_digest_and_document_bytes(
+    execution_mode: ExecutionMode, decision_digest: str, document_digest: str
+) -> None:
+    # Golden fingerprints were captured from the pre-suite v1/v2 implementation.
+    release = decision(execution_mode=execution_mode)
+    payload = release.model_dump(mode="json")
+    assert release.decision_digest == decision_digest
+    assert sha256_digest(payload) == document_digest
+    assert "suite" not in release.model_dump()
+    assert ReleaseDecision.model_validate_json(release.model_dump_json()).suite is None
+    assert "suite" not in TypeAdapter(list[ReleaseDecision]).dump_python([release])[0]
+    payload["suite"] = None
+    assert ReleaseDecision.model_validate(payload).model_dump(
+        mode="json"
+    ) == release.model_dump(mode="json")
+
+
+@mark.parametrize(
+    "changed_suite",
+    (
+        SUITE.model_copy(update={"name": "another-suite"}),
+        SUITE.model_copy(update={"revision": 2}),
+        SUITE.model_copy(update={"digest": "sha256:" + "a" * 64}),
+    ),
+)
+def test_decision_digest_pins_complete_suite_identity(
+    changed_suite: ArtifactRef,
+) -> None:
+    pinned = decision(suite=SUITE)
+    changed = decision(suite=changed_suite)
+    assert pinned.decision_digest != changed.decision_digest
+    assert pinned.decision_digest != decision().decision_digest
+    assert pinned.model_dump(mode="json")["suite"] == SUITE.model_dump(mode="json")
+    assert ReleaseDecision.model_validate_json(pinned.model_dump_json()) == pinned
+
+    payload = pinned.model_dump()
+    payload["suite"] = changed_suite.model_dump()
+    with raises(ValidationError, match="digest does not match"):
+        ReleaseDecision.model_validate(payload)
+    payload.pop("suite")
+    with raises(ValidationError, match="digest does not match"):
+        ReleaseDecision.model_validate(payload)
+
+
+@mark.parametrize("invalid_suite", (DATASET, SUITE.model_copy(update={"digest": None})))
+def test_decision_suite_must_be_a_resolved_suite_artifact(
+    invalid_suite: ArtifactRef,
+) -> None:
+    with raises(ValidationError, match="resolved suite artifact"):
+        decision(suite=invalid_suite)
+
+
+def test_pinned_decision_covers_execution_mode_including_fixture_mode() -> None:
+    decisions = [decision(suite=SUITE, execution_mode=mode) for mode in ExecutionMode]
+    # Pin the v3 projection, including the explicit execution mode for fixtures.
+    assert [release.decision_digest for release in decisions] == [
+        "sha256:755ae05ac86bc9e78cbb2d9221a36c53a6d6a2ac52c2b82192977eaf2f66bef2",
+        "sha256:96d43a6c1276e4f134a347d3ca5397590bd65eb77f0ef688cd61cb9aacc1f12f",
+        "sha256:f7524ddd302d1abf45d5876430b49a6b6c9923393aa042b22044ff20e1296cd1",
+    ]
+    for release in decisions:
+        payload = release.model_dump()
+        payload["execution_mode"] = (
+            ExecutionMode.LIVE
+            if release.execution_mode is ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE
+            else ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE
+        )
+        with raises(ValidationError, match="digest does not match"):
+            ReleaseDecision.model_validate(payload)
+
+
+def test_decision_serializer_preserves_descriptive_schema_and_field_selection() -> None:
+    properties = ReleaseDecision.model_json_schema(mode="serialization")["properties"]
+    assert {"suite", "spec_name", "decision_digest"} <= properties.keys()
+    assert decision().model_dump(include={"spec_name", "suite"}) == {
+        "spec_name": "release-policy"
+    }
+    assert "suite" not in decision(suite=SUITE).model_dump(exclude={"suite"})

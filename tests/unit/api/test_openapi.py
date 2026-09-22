@@ -18,6 +18,7 @@ def test_openapi_operation_ids_and_dynamic_responses_are_stable(
 
     assert operation_ids == {
         "create_dataset_revision",
+        "create_suite_revision",
         "get_dataset_revision",
         "get_evaluation_run",
         "get_job",
@@ -25,23 +26,33 @@ def test_openapi_operation_ids_and_dynamic_responses_are_stable(
         "get_readiness",
         "get_release_decision",
         "get_release_decision_distributions",
+        "get_suite_revision",
         "list_dataset_revisions",
         "list_evaluation_runs",
         "list_job_attempts",
         "list_jobs",
         "list_release_decisions",
         "list_release_decision_cases",
+        "list_suite_revisions",
+        "list_suite_run_history",
+        "list_suite_decision_history",
+        "list_suite_target_groups",
+        "list_suite_target_pair_groups",
         "request_job_cancellation",
         "submit_evaluation_run",
         "submit_release_comparison",
+        "submit_suite_evaluation_run",
+        "submit_suite_release_comparison",
     }
-    run_responses = document["paths"]["/v1/runs"]["post"]["responses"]
-    comparison_responses = document["paths"]["/v1/comparisons"]["post"]["responses"]
-    assert {"200", "202"} <= set(run_responses)
-    assert {"200", "202"} <= set(comparison_responses)
-    assert "201" not in run_responses
-    assert "201" not in comparison_responses
-    for responses in (run_responses, comparison_responses):
+    for path in (
+        "/v1/runs",
+        "/v1/comparisons",
+        "/v1/suite-runs",
+        "/v1/suite-comparisons",
+    ):
+        responses = document["paths"][path]["post"]["responses"]
+        assert {"200", "202"} <= set(responses)
+        assert "201" not in responses
         for status in ("200", "202"):
             location = responses[status]["headers"]["Location"]
             assert location["schema"]["pattern"].startswith("^/v1/jobs/")
@@ -74,6 +85,17 @@ def test_openapi_pins_versioned_redacted_response_contracts(
         "RunPage": "run-page/v1",
         "RunResponse": "run-summary/v1",
         "RunSubmissionResponse": "run-submission/v2",
+        "SuiteResponse": "suite-summary/v1",
+        "SuiteListItemResponse": "suite-list-item/v1",
+        "SuitePage": "suite-page/v1",
+        "SuiteRunHistoryItemResponse": "suite-run-history-item/v1",
+        "SuiteRunHistoryPage": "suite-run-history-page/v1",
+        "SuiteDecisionHistoryItemResponse": "suite-decision-history-item/v1",
+        "SuiteDecisionHistoryPage": "suite-decision-history-page/v1",
+        "SuiteTargetGroupResponse": "suite-target-group/v1",
+        "SuiteTargetGroupPage": "suite-target-group-page/v1",
+        "SuiteTargetPairGroupResponse": "suite-target-pair-group/v1",
+        "SuiteTargetPairGroupPage": "suite-target-pair-group-page/v1",
     }
     for name, version in expected_versions.items():
         assert schemas[name]["properties"]["schema_version"]["const"] == version
@@ -85,6 +107,26 @@ def test_openapi_pins_versioned_redacted_response_contracts(
     assert "cases" not in decision_properties
     assert "baseline_result_digest" in decision_properties
     assert "candidate_result_digest" in decision_properties
+    for name in ("RunResponse", "ReleaseDecisionResponse"):
+        assert "suite" in schemas[name]["properties"]
+        assert "suite" not in schemas[name]["required"]
+    for name in ("SuiteResponse", "SuiteListItemResponse"):
+        assert (
+            not {
+                "document",
+                "cases",
+                "expected",
+                "input",
+                "output",
+                "scenario_overrides",
+                "target",
+            }
+            & schemas[name]["properties"].keys()
+        )
+    assert (
+        not {"evaluators", "execution", "gates", "slices"}
+        & schemas["SuiteListItemResponse"]["properties"].keys()
+    )
 
     decision_case_properties = schemas["ReleaseDecisionCaseResponse"]["properties"]
     assert {
@@ -181,16 +223,21 @@ def test_openapi_documents_required_idempotency_header_and_bounds(
     api_harness: ApiHarness,
 ) -> None:
     document = api_harness.client.get("/openapi.json").json()
-    run = document["paths"]["/v1/runs"]["post"]
-    header = next(
-        parameter
-        for parameter in run["parameters"]
-        if parameter["name"] == "Idempotency-Key"
-    )
-
-    assert header["required"] is True
-    assert header["in"] == "header"
-    assert header["schema"]["maxLength"] == 128
+    for path in (
+        "/v1/runs",
+        "/v1/comparisons",
+        "/v1/suite-runs",
+        "/v1/suite-comparisons",
+    ):
+        operation = document["paths"][path]["post"]
+        header = next(
+            parameter
+            for parameter in operation["parameters"]
+            if parameter["name"] == "Idempotency-Key"
+        )
+        assert header["required"] is True
+        assert header["in"] == "header"
+        assert header["schema"]["maxLength"] == 128
     assert (
         document["components"]["schemas"]["DatasetCreateRequest"]["properties"][
             "cases"
@@ -205,6 +252,17 @@ def test_openapi_documents_required_idempotency_header_and_bounds(
     )
     resolved_reference = document["components"]["schemas"]["ResolvedArtifactRefInput"]
     assert "digest" in resolved_reference["required"]
+    schemas = document["components"]["schemas"]
+    suite = schemas["SuiteCreateRequest"]
+    assert suite["additionalProperties"] is False
+    for field, bound in (("evaluators", 32), ("slices", 128), ("gates", 64)):
+        assert suite["properties"][field]["maxItems"] == bound
+    for name in ("SuiteRunCreateRequest", "SuiteComparisonCreateRequest"):
+        assert schemas[name]["additionalProperties"] is False
+        assert (
+            not {"dataset", "execution", "evaluators", "gates", "spec"}
+            & schemas[name]["properties"].keys()
+        )
 
 
 def test_openapi_applies_project_bearer_security_only_to_v1_operations(

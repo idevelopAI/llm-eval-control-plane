@@ -80,6 +80,20 @@ function isArtifact(value: unknown): boolean {
   );
 }
 
+function isOptionalSuite(value: unknown): boolean {
+  return (
+    value === undefined ||
+    value === null ||
+    (isRecord(value) &&
+      isArtifact(value) &&
+      value.kind === 'suite' &&
+      isString(value.name) &&
+      /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(value.name) &&
+      isString(value.digest) &&
+      /^sha256:[a-f0-9]{64}$/.test(value.digest))
+  );
+}
+
 function isMetricAggregate(value: unknown): boolean {
   if (
     !isRecord(value) ||
@@ -212,6 +226,7 @@ export function isReleaseDecision(value: unknown): value is ReleaseDecision {
       'schema_version',
       'spec_name',
       'status',
+      'suite',
     ]) &&
     value.schema_version === 'release-decision-summary/v1' &&
     Array.isArray(value.aggregates) &&
@@ -231,6 +246,7 @@ export function isReleaseDecision(value: unknown): value is ReleaseDecision {
     Array.isArray(value.gates) &&
     value.gates.every(isGate) &&
     isString(value.spec_name) &&
+    isOptionalSuite(value.suite) &&
     isString(value.status) &&
     RELEASE_STATUSES.has(value.status)
   );

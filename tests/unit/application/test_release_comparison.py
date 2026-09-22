@@ -1,7 +1,7 @@
 import asyncio
 from collections.abc import Iterator, Mapping
 
-from pytest import approx, raises
+from pytest import approx, mark, raises
 
 from llm_eval_control_plane.adapters import BuiltInEvaluatorKind, build_evaluators
 from llm_eval_control_plane.application import (
@@ -14,15 +14,23 @@ from llm_eval_control_plane.domain import (
     ArtifactRef,
     CanonicalJson,
     CaseChange,
+    CaseResult,
+    CaseResultStatus,
     DatasetVersion,
     EvaluationCase,
     EvaluationSpec,
+    EvaluationSuiteVersion,
+    ExecutionFailure,
     ExecutionMode,
+    FailureCode,
+    FailureStage,
     GateStatus,
     MetricDirection,
     MetricGate,
     ReleaseStatus,
     RunResult,
+    SuiteEvaluator,
+    SuiteExecutionSettings,
     TargetOutcome,
     TargetRequest,
     TargetResponse,
@@ -141,6 +149,7 @@ def execute(
     responses: Mapping[str, tuple[object, TargetOutcome]],
     run_id: str,
     failing_case: str | None = None,
+    suite: EvaluationSuiteVersion | None = None,
 ) -> RunResult:
     return asyncio.run(
         InProcessRunner(clock=SequenceClock((0.0, 0.005, 1.0, 1.005, 2.0, 2.005))).run(
@@ -158,6 +167,7 @@ def execute(
                     BuiltInEvaluatorKind.LATENCY,
                 )
             ),
+            suite=suite,
         )
     )
 
@@ -262,6 +272,346 @@ def test_identical_evidence_produces_zero_deltas_and_passes() -> None:
     assert decision.status is ReleaseStatus.PASSED
     assert all(item.status is GateStatus.PASSED for item in decision.gates)
     assert all(item.aggregate.delta == 0.0 for item in decision.gates)
+    assert decision.suite is None
+
+
+def comparison_suite() -> EvaluationSuiteVersion:
+    evaluators = build_evaluators(
+        (
+            BuiltInEvaluatorKind.EXACT_MATCH,
+            BuiltInEvaluatorKind.REFUSAL,
+            BuiltInEvaluatorKind.LATENCY,
+        )
+    )
+    return EvaluationSuiteVersion.create(
+        name="release-suite",
+        revision=1,
+        dataset=fixture_dataset().artifact_ref,
+        evaluators=tuple(
+            SuiteEvaluator(
+                executor_name=evaluator.ref.name.removeprefix("builtin/"),
+                artifact=evaluator.ref,
+                metrics=evaluator.metric_names,
+            )
+            for evaluator in evaluators
+        ),
+        slices=("safety/refusal",),
+        execution=SuiteExecutionSettings(
+            adapter="deterministic_fake",
+            execution_mode=ExecutionMode.OFFLINE_DETERMINISTIC_FIXTURE,
+        ),
+        gates=(
+            MetricGate(
+                metric="quality.exact_match",
+                direction=MetricDirection.HIGHER_IS_BETTER,
+                threshold=1.0,
+                allowed_regression=0.0,
+            ),
+        ),
+    )
+
+
+def suite_runs(suite: EvaluationSuiteVersion) -> tuple[RunResult, RunResult]:
+    return (
+        execute(
+            revision=1,
+            responses=BASELINE_RESPONSES,
+            run_id="suite-baseline",
+            suite=suite,
+        ),
+        execute(
+            revision=2,
+            responses=CANDIDATE_RESPONSES,
+            run_id="suite-candidate",
+            suite=suite,
+        ),
+    )
+
+
+def test_comparison_pins_suite_and_applies_its_gate_policy() -> None:
+    suite = comparison_suite()
+    baseline, candidate = suite_runs(suite)
+
+    decision = compare_runs(
+        suite=suite,
+        spec=suite.to_evaluation_spec(
+            baseline=baseline.target, candidate=candidate.target
+        ),
+        dataset=fixture_dataset(),
+        baseline=baseline,
+        candidate=candidate,
+    )
+
+    assert decision.suite == suite.artifact_ref
+    assert decision.status is ReleaseStatus.FAILED
+    assert decision.gates[0].threshold == 1.0
+    assert decision.baseline_result_digest == baseline.result_digest
+    assert decision.candidate_result_digest == candidate.result_digest
+
+
+def test_comparison_rejects_policy_override_for_suite_pinned_runs() -> None:
+    suite = comparison_suite()
+    baseline, candidate = suite_runs(suite)
+    exact_spec = suite.to_evaluation_spec(
+        baseline=baseline.target, candidate=candidate.target
+    )
+    relaxed_spec = exact_spec.model_copy(
+        update={
+            "gates": (
+                MetricGate(
+                    metric="quality.exact_match",
+                    direction=MetricDirection.HIGHER_IS_BETTER,
+                    threshold=0.0,
+                    allowed_regression=1.0,
+                ),
+            )
+        }
+    )
+
+    with raises(ComparisonConfigurationError, match="policy must exactly match"):
+        compare_runs(
+            suite=suite,
+            spec=relaxed_spec,
+            dataset=fixture_dataset(),
+            baseline=baseline,
+            candidate=candidate,
+        )
+    with raises(ComparisonConfigurationError, match=r"require.*suite snapshot"):
+        compare_runs(
+            spec=relaxed_spec,
+            dataset=fixture_dataset(),
+            baseline=baseline,
+            candidate=candidate,
+        )
+
+
+@mark.parametrize("suite_pin", ["missing", "different_revision", "different_digest"])
+def test_comparison_rejects_mixed_or_different_suite_evidence(suite_pin: str) -> None:
+    suite = comparison_suite()
+    baseline, candidate = suite_runs(suite)
+    candidate_pin = None
+    if suite_pin == "different_revision":
+        candidate_pin = suite.artifact_ref.model_copy(update={"revision": 2})
+    elif suite_pin == "different_digest":
+        candidate_pin = suite.artifact_ref.model_copy(
+            update={"digest": sha256_digest({"different": True})}
+        )
+    altered = RunResult.create(
+        run_id=candidate.run_id,
+        dataset=candidate.dataset,
+        target=candidate.target,
+        evaluators=candidate.evaluators,
+        cases=candidate.cases,
+        metrics=candidate.metrics,
+        suite=candidate_pin,
+    )
+
+    with raises(ComparisonConfigurationError, match="must pin the supplied"):
+        compare_runs(
+            suite=suite,
+            spec=suite.to_evaluation_spec(
+                baseline=baseline.target, candidate=candidate.target
+            ),
+            dataset=fixture_dataset(),
+            baseline=baseline,
+            candidate=altered,
+        )
+
+
+@mark.parametrize("drift", ["evaluators", "metrics", "metric_binding", "mode"])
+def test_comparison_validates_evidence_against_suite_contract(drift: str) -> None:
+    suite = comparison_suite()
+    baseline, candidate = suite_runs(suite)
+    altered = RunResult.create(
+        run_id=candidate.run_id,
+        dataset=candidate.dataset,
+        target=candidate.target,
+        evaluators=(
+            candidate.evaluators[:-1] if drift == "evaluators" else candidate.evaluators
+        ),
+        cases=candidate.cases,
+        metrics=(
+            candidate.metrics[:-1]
+            if drift == "metrics"
+            else tuple(
+                summary.model_copy(update={"evaluator": candidate.evaluators[0]})
+                for summary in candidate.metrics
+            )
+            if drift == "metric_binding"
+            else candidate.metrics
+        ),
+        execution_mode=(
+            ExecutionMode.LIVE if drift == "mode" else candidate.execution_mode
+        ),
+        suite=suite.artifact_ref,
+    )
+
+    with raises(ComparisonConfigurationError, match=r"does not match|do not match"):
+        compare_runs(
+            suite=suite,
+            spec=suite.to_evaluation_spec(
+                baseline=baseline.target, candidate=candidate.target
+            ),
+            dataset=fixture_dataset(),
+            baseline=baseline,
+            candidate=altered,
+        )
+
+
+@mark.parametrize("side", ["baseline", "candidate"])
+@mark.parametrize("drift", ["revision", "digest", "metric", "binding"])
+def test_suite_comparison_rejects_observations_outside_declared_binding(
+    side: str, drift: str
+) -> None:
+    suite = comparison_suite()
+    baseline, candidate = suite_runs(suite)
+    original = baseline if side == "baseline" else candidate
+    case = original.cases[0]
+    observation = case.observations[0]
+    if drift == "metric":
+        changed = observation.model_copy(update={"metric": "quality.undeclared"})
+    else:
+        evaluator = observation.evaluator
+        if drift == "revision":
+            evaluator = evaluator.model_copy(update={"revision": 999})
+        elif drift == "digest":
+            evaluator = evaluator.model_copy(
+                update={"digest": sha256_digest("different evaluator behavior")}
+            )
+        else:
+            evaluator = next(item for item in suite.evaluator_refs if item != evaluator)
+        changed = observation.model_copy(update={"evaluator": evaluator})
+    changed_case = CaseResult.model_validate(
+        {
+            **case.model_dump(mode="python"),
+            "observations": tuple(
+                sorted(
+                    (changed, *case.observations[1:]),
+                    key=lambda item: (item.evaluator.logical_key, item.metric),
+                )
+            ),
+        }
+    )
+    altered = RunResult.create(
+        run_id=original.run_id,
+        dataset=original.dataset,
+        target=original.target,
+        evaluators=original.evaluators,
+        cases=(changed_case, *original.cases[1:]),
+        metrics=original.metrics,
+        execution_mode=original.execution_mode,
+        suite=suite.artifact_ref,
+    )
+
+    with raises(ComparisonConfigurationError, match="observations do not match"):
+        compare_runs(
+            suite=suite,
+            spec=suite.to_evaluation_spec(
+                baseline=baseline.target, candidate=candidate.target
+            ),
+            dataset=fixture_dataset(),
+            baseline=altered if side == "baseline" else baseline,
+            candidate=altered if side == "candidate" else candidate,
+        )
+
+
+@mark.parametrize("side", ["baseline", "candidate"])
+@mark.parametrize("drift", ["revision", "digest", "unresolved"])
+def test_suite_comparison_rejects_failures_from_undeclared_evaluators(
+    side: str, drift: str
+) -> None:
+    suite = comparison_suite()
+    baseline, candidate = suite_runs(suite)
+    original = baseline if side == "baseline" else candidate
+    evaluator = suite.evaluator_refs[0]
+    if drift == "revision":
+        evaluator = evaluator.model_copy(update={"revision": 999})
+    else:
+        evaluator = evaluator.model_copy(
+            update={
+                "digest": None
+                if drift == "unresolved"
+                else sha256_digest("different evaluator behavior")
+            }
+        )
+    case = original.cases[0]
+    changed_case = CaseResult.model_validate(
+        {
+            **case.model_dump(mode="python"),
+            "status": CaseResultStatus.COMPLETED_WITH_ERRORS,
+            "evaluator_failures": (
+                ExecutionFailure(
+                    stage=FailureStage.EVALUATOR,
+                    code=FailureCode.EVALUATOR_EXCEPTION,
+                    message="Evaluator failed",
+                    evaluator=evaluator,
+                ),
+            ),
+        }
+    )
+    altered = RunResult.create(
+        run_id=original.run_id,
+        dataset=original.dataset,
+        target=original.target,
+        evaluators=original.evaluators,
+        cases=(changed_case, *original.cases[1:]),
+        metrics=original.metrics,
+        execution_mode=original.execution_mode,
+        suite=suite.artifact_ref,
+    )
+
+    with raises(ComparisonConfigurationError, match="failures do not match"):
+        compare_runs(
+            suite=suite,
+            spec=suite.to_evaluation_spec(
+                baseline=baseline.target, candidate=candidate.target
+            ),
+            dataset=fixture_dataset(),
+            baseline=altered if side == "baseline" else baseline,
+            candidate=altered if side == "candidate" else candidate,
+        )
+
+
+@mark.parametrize("drift", ["dataset", "slices"])
+def test_comparison_cannot_relabel_evidence_with_inapplicable_suite(drift: str) -> None:
+    suite = comparison_suite()
+    baseline, candidate = suite_runs(suite)
+    altered_suite = EvaluationSuiteVersion.create(
+        name=suite.name,
+        revision=2,
+        dataset=(
+            suite.dataset.model_copy(update={"revision": 2})
+            if drift == "dataset"
+            else suite.dataset
+        ),
+        evaluators=suite.evaluators,
+        slices=("language/missing",) if drift == "slices" else suite.slices,
+        execution=suite.execution,
+        gates=suite.gates,
+    )
+    relabeled = tuple(
+        RunResult.create(
+            run_id=run.run_id,
+            dataset=run.dataset,
+            target=run.target,
+            evaluators=run.evaluators,
+            cases=run.cases,
+            metrics=run.metrics,
+            suite=altered_suite.artifact_ref,
+        )
+        for run in (baseline, candidate)
+    )
+
+    with raises(ComparisonConfigurationError, match="dataset"):
+        compare_runs(
+            suite=altered_suite,
+            spec=altered_suite.to_evaluation_spec(
+                baseline=baseline.target, candidate=candidate.target
+            ),
+            dataset=fixture_dataset(),
+            baseline=relabeled[0],
+            candidate=relabeled[1],
+        )
 
 
 def test_gate_boundary_tolerates_only_machine_precision_noise() -> None:

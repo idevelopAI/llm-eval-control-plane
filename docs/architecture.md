@@ -20,9 +20,11 @@ workflows without weakening the provider-neutral application ports.
 target-independent `EvaluationSuiteVersion` that binds one resolved dataset,
 resolved evaluator identities and metric inventories, declared slices, fixed
 semantic execution settings, and release gates under one canonical digest. It
-also defines create-once suite registration and experiment history as a derived
-view over suite-pinned runs and release decisions rather than a separate mutable
-registry.
+also defines create-once suite registration, snapshot-pinned execution, and
+digest-bound run and release evidence. Experiment history is an indexed,
+metadata-only view over that evidence rather than a separate mutable registry.
+Exact-suite run and decision queries are implemented; dedicated dashboard
+presentation remains outside the current surface.
 
 ## Architectural style
 
@@ -199,12 +201,52 @@ dependency from being removed, detail reads cross-check indexed metadata against
 the canonical document, and collection reads use a bounded keyset-paged metadata
 projection without loading that document.
 
-This registry is currently an application and persistence capability. Suite API
-and CLI contracts, suite-backed run submission and worker execution, durable
-payload pinning, run and decision digest coverage, and suite-aware dashboard
-history remain to be integrated. Existing run and decision evidence remains
-valid and explicitly suite-unpinned rather than receiving an inferred historical
-suite. Registering a suite does not invoke a target or provider.
+`ControlPlaneService.submit_suite_run` resolves one registered revision and
+validates its dataset, execution settings, and evaluator bindings before
+enqueueing a `run-job/v2` payload with the complete suite snapshot and resolved
+target contract. `submit_suite_comparison` derives the policy from the selected
+suite and stores a `comparison-job/v2` snapshot with the exact baseline and
+candidate result digests. An exact semantic idempotency replay returns the
+original job before looking up current dependencies.
+
+Workers consume the snapshot rather than reloading a suite revision or alias.
+Before target invocation, they require the available executor contract to match
+the pinned settings, evaluator identities, and metric inventories. Run evidence
+must match that snapshot. Comparison requires both runs to pin the same complete
+suite reference and applies only the policy compiled from the snapshot;
+unpinned runs, mismatched suite references, and replacement policies are
+configuration errors, not failed release gates.
+
+Pinned evidence uses `run-result/v3` and `release-decision/v3` digest envelopes
+covering the complete suite reference and explicit execution mode. Without a
+suite, the historical v1/v2 digest envelopes and canonical document bytes are
+unchanged. Existing evidence remains explicitly unpinned rather than receiving
+an inferred historical suite.
+
+The local `llm-eval suite` composition root also builds and validates canonical
+suite files, executes pinned offline runs, and compares their immutable evidence.
+It constructs only deterministic local adapters and uses the existing filesystem
+run store; it does not connect to the API or register records in PostgreSQL.
+See the [offline suite workflow](suite-cli.md).
+
+Durable capabilities are exposed through project-authorized suite HTTP routes:
+registration, bounded metadata listing, slash-safe revision detail, and separate
+suite run/comparison submissions. The API requires resolved artifact identities
+and derives the digest itself; it accepts only the credential-free deterministic
+execution contract. Legacy run/comparison endpoints and CLI commands remain
+suite-unpinned. Registering or enqueueing a suite does not invoke a target or
+provider; execution remains worker-owned.
+
+Run and decision detail projections expose an optional resolved `suite`
+reference, omitted for historical unpinned evidence. The generated dashboard
+client validates this bounded metadata while preserving existing fixture and
+live-review behavior. Authenticated experiment-history reads use exact suite
+pins and descending time/ID keysets over bounded relational projections; they
+never select canonical run or decision documents. A local-only dashboard panel
+loads that history on explicit action, validates the selected digest and page
+ordering, and retains at most 100 metadata records per collection. The public
+fixture entry excludes this panel and its API client. The
+[suite API guide](evaluation-suites.md) documents the request and privacy boundary.
 
 Target expectations are never passed through the target port. Target and
 evaluator exceptions are converted to bounded failure codes; remaining cases
