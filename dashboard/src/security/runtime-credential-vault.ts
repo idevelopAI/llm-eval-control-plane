@@ -26,7 +26,8 @@ export type RuntimeCredentialVault = Readonly<{
 }>;
 
 /**
- * Store one read-only browser credential exclusively in a closure. No field on
+ * Store one browser credential exclusively in a closure. Read sessions and
+ * one-request comparison writes use separate vaults. No field on
  * the returned object contains the token, and clearing drops the only retained
  * reference.
  */
