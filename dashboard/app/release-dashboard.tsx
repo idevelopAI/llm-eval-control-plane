@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type Fo
 
 import { ReleaseOverviewView } from './release-overview';
 import { SuiteHistoryPanel } from './suite-history-panel';
+import { createSuiteComparisonClient } from '@/src/api/suite-comparison-client';
 import {
   createControlPlaneClient,
   type ReleaseDecision,
@@ -172,6 +173,7 @@ export default function ReleaseDashboard() {
   );
   const [vault] = useState(() => createRuntimeCredentialVault());
   const [client] = useState(() => createControlPlaneClient(vault.credential));
+  const [comparisons] = useState(() => createSuiteComparisonClient(vault.credential));
   const clearCredential = useCallback(() => {
     vault.clear();
     setLiveProject(null);
@@ -267,6 +269,8 @@ export default function ReleaseDashboard() {
       {sourceMode === 'live' && liveProject != null ? (
         <SuiteHistoryPanel
           client={client}
+          comparisons={comparisons}
+          projectId={liveProject}
           selectedDecisionId={displayedDecision?.decision_id}
           openingDecisionId={
             live.state.kind === 'loading' ? live.state.openingDecisionId : null

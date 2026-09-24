@@ -153,6 +153,8 @@ const applicationChunks = [
 ];
 
 const capabilityMarkers = [
+  ['comparison write interface', /comparison write credential|choose runs to compare/i],
+  ['submission idempotency header', /idempotency-key/i],
   ['control-plane API route', /\/v1\//i],
   ['authorization header', /\bauthorization\b/i],
   ['bearer credential', /\bbearer\b/i],
