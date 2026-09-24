@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed; implementation requires explicit security-review approval before merge.
+Accepted. The owner approved the local write boundary before merge.
 
 ## Context
 
