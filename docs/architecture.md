@@ -23,8 +23,10 @@ semantic execution settings, and release gates under one canonical digest. It
 also defines create-once suite registration, snapshot-pinned execution, and
 digest-bound run and release evidence. Experiment history is an indexed,
 metadata-only view over that evidence rather than a separate mutable registry.
-Exact-suite run and decision queries are implemented; dedicated dashboard
-presentation remains outside the current surface.
+The local dashboard browses exact-suite runs and decisions, filters them by
+complete target identity and directed target pairs, and opens historical gate
+review. A separate explicit comparison form is defined in
+[ADR 0013](adr/0013-local-comparison-submission.md).
 
 ## Architectural style
 
@@ -378,7 +380,7 @@ described below.
 
 ## Privacy-bounded dashboard read flow
 
-The dashboard is a read-only projection over immutable release evidence. It
+The evidence view is a read-only projection over immutable release evidence. It
 does not receive the canonical decision document or either pinned run document.
 The API reconstructs each analytical response from verified stored evidence,
 then discards the underlying samples before serialization.
@@ -423,6 +425,17 @@ an HTTP loopback origin and sent only through the same-origin proxy to an
 explicit loopback API. Hosted builds remain in zero-request fixture mode until a
 server-side session boundary exists. This decision is recorded in
 [ADR 0009](adr/0009-privacy-bounded-dashboard-projections.md).
+
+A separate local form can submit a comparison of two explicitly selected suite
+runs through the existing `POST /v1/suite-comparisons` endpoint. It uses a
+one-request write credential, not the read-session vault, and freezes the
+selection and idempotency key for uncertain-response retries. Job refreshes use
+the read credential and require explicit operator action. Before opening a
+completed decision, the form reconciles the suite, dataset, mode, ordered run
+and target identities, and both result digests. This evaluates existing evidence;
+it does not submit evaluations or invoke providers. The form and write client
+are excluded from the public artifact. See
+[ADR 0013](adr/0013-local-comparison-submission.md).
 
 ## Observability boundary
 
@@ -623,8 +636,9 @@ submission remains authoritative on replay.
   Database volumes and backups are sensitive and require access controls.
 - The local dashboard accepts a read-only credential only on an HTTP loopback
   origin, retains it in volatile closure state, rejects redirects and unexpected
-  response fields, and clears it on disconnect or authorization failure. Hosted
-  browser bearer entry is unsupported.
+  response fields, and clears it on disconnect or authorization failure. Explicit
+  comparison submission uses a separate same-project write credential for one
+  request, then clears its vault. Hosted browser bearer entry is unsupported.
 - `Idempotency-Key` is an opaque retry identifier, not a secret container. It
   must never contain credentials, prompts, customer identifiers, or other
   sensitive content.

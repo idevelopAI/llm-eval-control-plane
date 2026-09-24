@@ -149,6 +149,12 @@ selected suite digest and descending ordering across pages. See the
 and authorization boundary. The offline CLI remains file-based and does not
 query the server's experiment history.
 
+The local dashboard also offers a separate [explicit comparison
+form](../dashboard/README.md#create-a-comparison-locally). Operators choose both
+run IDs and supply a one-request write credential; browsing alone never selects
+a baseline or submits work. The form uses the same pinned comparison endpoint
+described above and is absent from the hosted fixture.
+
 An explicit **Review gates** action opens any loaded historical decision through
 the existing ID-based detail routes, even outside the newest-decision page. The
 client verifies the entire selected decision identity and suite pin before

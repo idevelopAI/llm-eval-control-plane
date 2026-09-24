@@ -9,6 +9,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- Explicit local baseline/candidate selection from suite history, a separate
+  one-request write credential for comparison submission, same-key retries,
+  manual job refresh, and result-provenance checks before detailed gate review.
+  The read-only session and hosted fixture remain separate from this capability.
+
 - Reproducible Python development environment with a committed `uv.lock`.
 - Immutable artifact references and evaluation specifications.
 - Target-independent, content-addressed evaluation suite versions that bind a
