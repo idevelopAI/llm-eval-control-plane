@@ -29,7 +29,8 @@ control-plane instances.
 - PostgreSQL contents, named volumes, logical backups, and transaction logs.
 - API authentication material, provider credentials, database credentials, and
   private worker lease tokens.
-- The local dashboard's volatile read-only credential and redacted in-memory
+- The local dashboard's volatile read-only credential, separate one-request
+  comparison write credential, and redacted in-memory
   decision evidence.
 - Idempotency keys and request digests used for durable submission coordination.
 - Source, dependency locks, container definitions, migrations, and release-gate
@@ -69,7 +70,13 @@ development boundary: both the rendered credential form and the proxy target
 require HTTP loopback. The credential is scoped to reads, held in a
 component-local closure, sent only to the dashboard origin, and cleared on
 disconnect or authorization failure. Redirects are rejected and responses are
-not cached. Hosted live browser access is unsupported.
+not cached. An explicit local comparison form accepts a separate same-project
+write credential for one submission, clears the password field immediately, and
+discards the write vault after the request. The API still enforces scopes and
+canonical evidence validation. That write scope is broader than comparisons;
+the browser's endpoint restriction is not a server-side capability boundary.
+Hosted live browser access is unsupported, and comparison controls are excluded
+from the public build. See [ADR 0013](../adr/0013-local-comparison-submission.md).
 
 Every successful response is checked against a strict runtime allowlist and then
 reconciled across list, detail, case, and distribution documents. Aborted and

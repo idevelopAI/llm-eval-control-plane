@@ -28,6 +28,8 @@ Live mode supports:
 - explicitly opened suite history for a selected immutable protocol revision,
   showing completed run metadata and release decisions pinned to its digest;
 - independent exact-target and directed baseline/candidate-pair history filters;
+- explicit comparison of existing compatible suite runs with a separate,
+  one-request write credential and manual job-status refresh;
 - transition filters over redacted case evidence;
 - cursor-based case pagination, bounded to 100 cases per request and 500 cases
   retained by the browser view;
@@ -43,7 +45,8 @@ Live mode supports:
 After connecting to the local API, select **Browse suite history**. Select a
 registered **Suite revision** to inspect its exact digest, execution mode, gate
 count, evaluated target revisions, and baseline/candidate run IDs. The panel
-does not fetch case content, execute evaluations, or select a baseline.
+does not fetch case content, execute evaluations, or automatically select a
+baseline. A separate explicit comparison form is available below the history.
 
 Catalog, run, and decision pages load 20 records at a time and retain at most 100
 records each. Use **Load more suites**, **Load older runs**, or **Load older
@@ -137,6 +140,59 @@ allowlists before it reaches the view model.
 Hosted live access is intentionally unsupported in the public example. A later
 hosted version requires the stateless, platform-authenticated backend-for-frontend
 boundary described below; do not enable browser bearer entry on a public origin.
+
+## Create a comparison locally
+
+1. Connect the loopback dashboard with a `control-plane:read` credential and
+   browse an exact suite revision. Use **All targets** and load any older runs
+   needed before selecting; only the bounded history already loaded is offered.
+2. Choose **Choose runs to compare**, then explicitly select **Baseline run**
+   and **Candidate run**. The form checks the exact suite pin, dataset revision,
+   and execution mode; identical run IDs and non-offline suites are rejected.
+   Runs with case failures are allowed because coverage gates must evaluate
+   them rather than silently hiding failures.
+3. Review both run IDs, target pins, result digests, direction, and project.
+   Enter a separate same-project credential with `control-plane:write` and
+   choose **Submit comparison**. This calls only the existing
+   `POST /v1/suite-comparisons`; it does not invoke a target, submit evaluations,
+   cancel jobs, register suites, or change permissions. The server independently
+   validates the canonical evidence and applies the pinned suite policy.
+4. Use **Refresh comparison status** explicitly. Job reads use the original
+   read-only credential, not the write credential. There is no polling.
+5. When the job succeeds, choose **Review comparison gates**. Before delegating
+   to detailed gate review, the dashboard verifies the decision's job resource,
+   suite pin, dataset, mode, baseline/candidate IDs, targets, and result digests.
+   A successful job can correctly produce a blocked release.
+
+The password field is replaced immediately after submit and the separate write
+vault is cleared when the request settles, when history changes, or on unmount.
+Neither credential enters React state, browser storage, logs, URLs, or screenshots.
+The browser cannot verify a credential's scopes; the API enforces authorization.
+Any `401`/`403` clears the entire local session. Requests reject redirects and
+cookies, use the exact loopback origin, and bound comparison responses to 2 MiB
+and 30 seconds. Error bodies and exception text are never displayed.
+
+After a lost or invalid response, **Retry same comparison** reuses the same
+idempotency key and immutable inputs; re-enter the write credential. An uncertain
+response does not prove that submission failed. Once a job is known, refresh
+that job rather than submitting again. Its ID/resource identity and immutable
+fields must stay consistent across refreshes.
+
+Refreshing, paging, filtering, selecting another suite, or disconnecting closes
+the comparison form and aborts browser requests. This does **not** cancel a
+durable job already accepted by the API. The in-memory submission key is lost
+when the form/tab closes; use persisted history or the local job API to recover
+evidence before starting another comparison. No background recovery or storage
+of submission state is implemented.
+
+These controls and their write client are excluded from the hosted build. See
+[ADR 0013](../docs/adr/0013-local-comparison-submission.md) for the boundary.
+
+![Explicit local baseline and candidate selection with an empty write-credential field](../docs/assets/suite-comparison.png)
+
+_Captured from the local dashboard with intercepted synthetic test responses,
+before entering the test write credential. No real credential, provider, or
+hosted API is involved._
 
 ## Hosted build boundary
 

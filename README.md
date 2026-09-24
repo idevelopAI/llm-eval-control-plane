@@ -34,6 +34,14 @@ separate bounded pages; changing a filter resets history cursors and cancels
 superseded reads. Gate review also verifies the selected target pair before
 loading case or distribution evidence.
 
+The local dashboard can also compare two explicitly selected, compatible suite
+runs. Submission requires a separate, one-request write credential; the normal
+read-only session is not upgraded. Retries retain the same idempotency key and
+inputs, job status refresh is manual, and completed decisions open only after
+their suite, targets, and run-result digests match the selected evidence.
+No evaluation run or provider request is triggered by this comparison workflow.
+See the [local comparison walkthrough and screenshot](dashboard/README.md#create-a-comparison-locally).
+
 ![Deterministic release evidence dashboard showing a blocked release, failed gate, and redacted scoring evidence](docs/assets/release-dashboard-fixture.jpg)
 
 [Open the public synthetic release-evidence dashboard](https://llm-eval-control-plane.nick0ne.chatgpt.site/)
@@ -91,7 +99,9 @@ the resolved `suite` reference when pinned; historical unpinned responses remain
 unchanged. See the [evaluation-suite API guide](docs/evaluation-suites.md) for
 the exact inputs, permissions, replay behavior, and compatibility boundary.
 The local dashboard can browse this metadata after an explicit operator action;
-it does not create runs, select baselines, or contact a provider. Legacy
+it does not create runs or contact a provider. Manual baseline/candidate
+selection and comparison submission are a separate local-only, explicitly
+authorized workflow. Legacy
 run/comparison endpoints and CLI commands remain unpinned and cannot replace
 suite policy.
 
