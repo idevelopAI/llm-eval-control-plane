@@ -177,6 +177,46 @@
   font-size: 0.875rem;
   color: #476657;
 }
+.comparison {
+  margin-top: 1.5rem;
+  padding: 1.25rem;
+  border: 1px solid #adc3b5;
+  border-radius: 0.875rem;
+  background: #f6f9f7;
+}
+.comparison .note {
+  margin-top: 0.5rem;
+}
+.selection,
+.writeForm {
+  display: grid;
+  gap: 0.625rem;
+  min-width: 0;
+}
+.selection select {
+  width: 100%;
+  min-width: 0;
+}
+.writeForm {
+  margin-top: 1rem;
+}
+.writeForm input {
+  padding: 0.75rem;
+  min-width: 0;
+  width: 100%;
+  border: 1px solid #adc3b5;
+  border-radius: 0.625rem;
+  background: #fff;
+  color: #18392d;
+  font: inherit;
+}
+.writeForm input:focus-visible {
+  outline: 3px solid #24754c;
+  outline-offset: 3px;
+}
+.writeForm small {
+  color: #476657;
+}
 @media (max-width: 760px) {
   .panel {
     margin: 0.75rem;
