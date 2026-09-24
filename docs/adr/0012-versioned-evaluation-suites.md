@@ -139,8 +139,10 @@ and directed target-pair discovery now derives groups from persisted suite runs
 and decision-to-run joins. Exact target filters bind name, revision, and digest
 into history cursors without introducing mutable experiment records or new
 schema projections. Group discovery uses bytewise identity ordering, while
-filtered evidence remains newest-first. Dashboard group selection remains a
-follow-up; the authenticated API is available locally.
+filtered evidence remains newest-first. The local dashboard implements separate
+run-target and directed target-pair selectors, bounded group pagination, history
+cursor resets, and exact pair verification before historical gate review. These
+controls remain outside the hosted fixture build.
 
 ### Registration is create-once; jobs pin complete snapshots
 
