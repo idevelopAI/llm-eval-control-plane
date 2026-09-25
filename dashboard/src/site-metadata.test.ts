@@ -14,10 +14,10 @@ import {
 describe('hosted Site metadata', () => {
   it('pins canonical and social URLs to the trusted deployment origin', () => {
     expect(SITE_ORIGIN.toString()).toBe(
-      'https://llm-eval-control-plane.nick0ne.chatgpt.site/',
+      'https://llm-eval-control-plane-idevelopai.vercel.app/',
     );
     expect(SOCIAL_PREVIEW_URL).toBe(
-      'https://llm-eval-control-plane.nick0ne.chatgpt.site/og.png',
+      'https://llm-eval-control-plane-idevelopai.vercel.app/og.png',
     );
     expect(SITE_METADATA).toMatchObject({
       alternates: { canonical: SITE_ORIGIN },

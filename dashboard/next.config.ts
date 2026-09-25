@@ -5,8 +5,12 @@ import {
   PRODUCTION_SECURITY_HEADERS,
 } from './src/security/production-headers';
 
+const staticExport = process.env.CONTROL_PLANE_STATIC_EXPORT === '1';
+
 const nextConfig: NextConfig = {
-  async headers() {
+  ...(staticExport ? { output: 'export', images: { unoptimized: true } } : {}),
+  // Static exports receive these policies from the host's routing config.
+  ...(staticExport ? {} : { async headers() {
     return [
       {
         headers: [...PRODUCTION_SECURITY_HEADERS],
@@ -27,7 +31,7 @@ const nextConfig: NextConfig = {
         source: '/api/:path*',
       },
     ];
-  },
+  } }),
 };
 
 export default nextConfig;
