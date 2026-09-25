@@ -1,0 +1,12 @@
+{
+  "name": "starter/echo",
+  "revision": 1,
+  "cases": [
+    {
+      "case_id": "echo-001",
+      "input": { "scenario": "echo", "value": "hello" },
+      "expected": "hello",
+      "slices": []
+    }
+  ]
+}
