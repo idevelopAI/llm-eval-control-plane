@@ -264,6 +264,18 @@ See [ADR 0014](../docs/adr/0014-local-offline-suite-runs.md) for the boundary.
 
 ## Hosted build boundary
 
+The public Vercel demo uses `pnpm run build:vercel`. This separately produces
+`out/` with a native Next.js static export and a CDN-only `vercel.json` policy.
+The build fails on dynamic routes, server actions, unexpected client entries,
+local write controls, provider endpoints, secret markers, source maps,
+symlinks, gradients, or stale hosting metadata. Only public assets are uploaded;
+`.next/`, repository source, local environment files, and worker output are not.
+The existing response-header policy is applied at Vercel's CDN, with explicit
+API denial and no catch-all homepage fallback. See the
+[deployment and rollback guide](../docs/operations/vercel-static-demo.md).
+
+The existing Sites-compatible build remains available for rollback:
+
 `pnpm run build` runs an artifact verifier after compilation. The verifier fails
 if the live dashboard enters the public module graph; if application chunks
 contain control-plane routes, credential markers, model-provider endpoints, or

@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- A verified static-only Vercel export of the public synthetic dashboard, with
+  CDN security headers, denied API/write routes, no server functions, and
+  deployment instructions that exclude source and local credentials.
+
 - Explicit local offline suite runs with two fixed deterministic target choices,
   one-request write credentials, safe same-key retries, manual job refresh, and
   return to completed suite history. A one-case echo starter and interactive
