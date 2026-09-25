@@ -30,6 +30,13 @@ review. A separate explicit comparison form is defined in
 
 ## Architectural style
 
+The public demo can also be exported as static HTML, JavaScript, CSS, and local
+assets for Vercel. This output contains no Worker, server function, middleware,
+database, runtime environment, or API route. A separate build verifier checks
+the native Next.js export, its fixture-only client references, and its CDN
+header/route policy. Local development still uses the loopback proxy and the
+full control plane. See the [static deployment guide](operations/vercel-static-demo.md).
+
 The project is a modular monolith. The CLI, API, and worker runtimes are
 composition roots: each constructs concrete adapters and passes them into
 application-owned protocol ports.

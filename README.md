@@ -53,9 +53,13 @@ introduced.
 
 ![Deterministic release evidence dashboard showing a blocked release, failed gate, and redacted scoring evidence](docs/assets/release-dashboard-fixture.jpg)
 
-[Open the public synthetic release-evidence dashboard](https://llm-eval-control-plane.nick0ne.chatgpt.site/)
+[Open the public synthetic release-evidence dashboard](https://llm-eval-control-plane-idevelopai.vercel.app/)
 
 _Deterministic fixture mode: no credential or API request is used._
+
+The Vercel deployment serves a verified static export: no server functions,
+database, runtime secrets, or model-provider integration. See the
+[static deployment guide](docs/operations/vercel-static-demo.md).
 
 ![Local suite history with exact target and baseline-to-candidate filters, immutable digests, and direct gate review](docs/assets/suite-target-history.png)
 
