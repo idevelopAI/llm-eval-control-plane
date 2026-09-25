@@ -64,6 +64,12 @@ expectations, outputs, scenario mappings, or raw stored documents.
 
 ## Run and compare
 
+For the smallest local example, the [dashboard operator
+guide](../dashboard/README.md#run-the-smallest-offline-suite) registers a one-case
+echo suite and covers explicit run submission through comparison and gate review.
+The browser offers two fixed offline targets and does not submit scenario or
+policy overrides.
+
 Send `POST /v1/suite-runs` with an `Idempotency-Key` header and a body such as:
 
 ```json

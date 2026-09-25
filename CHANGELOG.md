@@ -9,6 +9,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- Explicit local offline suite runs with two fixed deterministic target choices,
+  one-request write credentials, safe same-key retries, manual job refresh, and
+  return to completed suite history. A one-case echo starter and interactive
+  registration helper complete the run → compare → gate-review walkthrough.
+  No provider integration or hosted write surface is enabled.
+
 - Explicit local baseline/candidate selection from suite history, a separate
   one-request write credential for comparison submission, same-key retries,
   manual job refresh, and result-provenance checks before detailed gate review.

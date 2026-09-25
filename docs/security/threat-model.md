@@ -75,8 +75,14 @@ write credential for one submission, clears the password field immediately, and
 discards the write vault after the request. The API still enforces scopes and
 canonical evidence validation. That write scope is broader than comparisons;
 the browser's endpoint restriction is not a server-side capability boundary.
-Hosted live browser access is unsupported, and comparison controls are excluded
-from the public build. See [ADR 0013](../adr/0013-local-comparison-submission.md).
+Hosted live browser access is unsupported, and write controls are excluded
+from the public build. The local offline run form uses the same boundary with
+two fixed deterministic target choices and no scenario/policy overrides; it
+retains only validated job metadata. The starter registration helper prompts
+for credentials only in an interactive terminal, accepts explicit HTTP loopback
+origins, and rejects redirects and environment proxies. See
+[ADR 0013](../adr/0013-local-comparison-submission.md) and
+[ADR 0014](../adr/0014-local-offline-suite-runs.md).
 
 Every successful response is checked against a strict runtime allowlist and then
 reconciled across list, detail, case, and distribution documents. Aborted and
