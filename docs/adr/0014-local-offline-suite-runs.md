@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed; authenticated run submission requires explicit approval before merge.
+Accepted. The owner approved the local write boundary before merge.
 
 ## Decision
 
