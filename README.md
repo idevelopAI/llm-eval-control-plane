@@ -42,6 +42,15 @@ their suite, targets, and run-result digests match the selected evidence.
 No evaluation run or provider request is triggered by this comparison workflow.
 See the [local comparison walkthrough and screenshot](dashboard/README.md#create-a-comparison-locally).
 
+For a minimal complete workflow, [register the one-case starter suite and launch
+offline runs locally](dashboard/README.md#run-the-smallest-offline-suite).
+Choose either fixed deterministic target, explicitly submit with a one-request
+write credential, refresh job status, then load completed runs for comparison.
+The starter has one echo case, one exact-match evaluator, and one gate. Both
+target identities use the same simulated behavior; this is not a live-model
+benchmark. No provider credential, automatic polling, or hosted write route is
+introduced.
+
 ![Deterministic release evidence dashboard showing a blocked release, failed gate, and redacted scoring evidence](docs/assets/release-dashboard-fixture.jpg)
 
 [Open the public synthetic release-evidence dashboard](https://llm-eval-control-plane.nick0ne.chatgpt.site/)

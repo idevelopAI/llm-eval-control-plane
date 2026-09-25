@@ -28,6 +28,8 @@ Live mode supports:
 - explicitly opened suite history for a selected immutable protocol revision,
   showing completed run metadata and release decisions pinned to its digest;
 - independent exact-target and directed baseline/candidate-pair history filters;
+- explicit offline suite-run submission with fixed deterministic target choices,
+  a one-request write credential, and manual job-status refresh;
 - explicit comparison of existing compatible suite runs with a separate,
   one-request write credential and manual job-status refresh;
 - transition filters over redacted case evidence;
@@ -143,6 +145,9 @@ boundary described below; do not enable browser bearer entry on a public origin.
 
 ## Create a comparison locally
 
+If no completed runs exist yet, start with the [smallest offline
+suite](#run-the-smallest-offline-suite) below.
+
 1. Connect the loopback dashboard with a `control-plane:read` credential and
    browse an exact suite revision. Use **All targets** and load any older runs
    needed before selecting; only the bounded history already loaded is offered.
@@ -193,6 +198,69 @@ These controls and their write client are excluded from the hosted build. See
 _Captured from the local dashboard with intercepted synthetic test responses,
 before entering the test write credential. No real credential, provider, or
 hosted API is involved._
+
+## Run the smallest offline suite
+
+Start the authenticated local API, PostgreSQL database, and worker as described
+in [Run locally](#run-locally). From the repository root, register the public
+synthetic starter fixture in an interactive terminal:
+
+```bash
+uv run python scripts/seed_local_starter.py --project YOUR_LOCAL_PROJECT_ID
+```
+
+Replace the project placeholder with the deployment's configured ID. The script
+prompts for a local `control-plane:write` credential without echoing it; never
+paste it into the command line, environment, Git, or a screenshot. Use
+`--origin http://127.0.0.1:PORT` only when your local API uses a different port.
+Only explicit HTTP loopback origins are accepted. Environment proxies and
+redirects are disabled. The script registers `starter/echo` r1: one synthetic
+echo case, one built-in exact-match evaluator, and one gate requiring score 1.
+It does not create credentials or start jobs. Identical registration replays
+are safe; conflicting immutable revisions fail without overwrite. The two
+registrations are not one transaction: if suite registration fails, the
+successfully registered dataset remains.
+
+1. Connect the local dashboard with a read-only project credential and choose
+   **Browse suite history → Suite revision → starter/echo r1**. The history
+   browser is available even when no release decisions exist.
+2. Choose **Start an offline run**, explicitly select `fake/baseline` r1, and
+   enter the separate same-project write credential. Choose **Submit offline
+   run**. No target is selected or executed automatically.
+3. Use **Refresh run status** to read the accepted job with the original read
+   credential. A worker must be running. No background polling occurs.
+4. Once it succeeds, choose **Show completed runs**. This reloads the same suite
+   with both history filters reset; it does not choose a baseline for you.
+5. Repeat for `fake/candidate` r2, then use **Choose runs to compare** and follow
+   the comparison workflow above. Both fixed targets use identical deterministic
+   behavior with no scenario overrides, so this starter should produce an equal,
+   passing comparison. The names/revisions are identities, not different models.
+
+Run submission uses only the existing `POST /v1/suite-runs` endpoint. The API
+pins and validates the suite snapshot; the UI never replaces the dataset,
+evaluators, gates, execution settings, or scenario map. Run requests share the
+comparison client's loopback, same-project, redirect, response-size, deadline,
+and sanitized-error boundaries. The optional terminal run summary is checked
+for identity, then discarded; completed evidence is loaded through validated
+suite history. A succeeded job can still contain failed cases, and is not itself
+a release decision.
+
+The write field is replaced on submit and its separate vault clears when the
+request settles. Lost responses use **Retry same run**, with identical input and
+idempotency key and a newly entered credential. Closing, paging, refreshing,
+changing suite/filter, or disconnecting discards form state and aborts browser
+requests, but never cancels an accepted durable job. Before starting another run
+after losing the form, recover through the local job API or completed history.
+There is no reload recovery, cancellation UI, suite editor, or provider-backed
+execution in this scope. Any `401`/`403` clears the entire local session.
+
+![Local offline run form with an empty write-credential field](../docs/assets/suite-run.png)
+
+_Captured against a disposable local PostgreSQL/API/worker deployment using only
+the synthetic starter case and test principals, before entering the write
+credential. No provider or hosted API is involved._
+
+See [ADR 0014](../docs/adr/0014-local-offline-suite-runs.md) for the boundary.
 
 ## Hosted build boundary
 

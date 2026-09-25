@@ -437,6 +437,15 @@ it does not submit evaluations or invoke providers. The form and write client
 are excluded from the public artifact. See
 [ADR 0013](adr/0013-local-comparison-submission.md).
 
+The local run form completes the preceding evidence workflow through the
+existing `POST /v1/suite-runs` endpoint. It exposes two fixed deterministic
+target identities, with no scenario or policy override, and uses the same
+bounded job transport and isolated one-request write vault as comparisons.
+Completed runs return to exact-suite history only after explicit refresh;
+comparison inputs are never selected automatically. The production fixture
+excludes both write surfaces. See
+[ADR 0014](adr/0014-local-offline-suite-runs.md).
+
 ## Observability boundary
 
 `Observability` is dependency-injected at the API and worker composition roots.
