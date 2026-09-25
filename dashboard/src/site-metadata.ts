@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 
 export const SITE_ORIGIN = new URL(
-  'https://llm-eval-control-plane.nick0ne.chatgpt.site',
+  'https://llm-eval-control-plane-idevelopai.vercel.app',
 );
 
 export const SITE_TITLE = 'LLM Eval Control Plane';
@@ -22,6 +22,7 @@ export const SITE_METADATA = {
   },
   applicationName: SITE_TITLE,
   description: SITE_DESCRIPTION,
+  icons: { icon: '/favicon.svg' },
   metadataBase: SITE_ORIGIN,
   openGraph: {
     description: SITE_DESCRIPTION,

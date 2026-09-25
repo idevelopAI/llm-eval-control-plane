@@ -11,13 +11,15 @@
     "api:check": "openapi-typescript ../docs/openapi-v1.json --output src/api/generated/schema.ts --alphabetize --check",
     "dev": "vinext dev",
     "build": "vinext build && node scripts/verify-public-build.mjs",
+    "build:vercel": "node scripts/build-static-demo.mjs",
+    "test:static": "node --test scripts/static-demo.checks.mjs",
     "start": "vinext start",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "smoke:public": "node scripts/smoke-public-runtime.mjs",
     "verify:public-build": "node scripts/verify-public-build.mjs",
-    "check": "pnpm run api:check && pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run build && pnpm run smoke:public"
+    "check": "pnpm run api:check && pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run build && pnpm run smoke:public && pnpm run test:static && pnpm run build:vercel"
   },
   "dependencies": {
     "@fontsource-variable/ibm-plex-sans": "5.3.0",
