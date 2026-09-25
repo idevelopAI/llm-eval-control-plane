@@ -23,6 +23,8 @@ import {
 } from '@/src/api/suite-history-validation';
 import styles from './suite-history-panel.module.css';
 import { SuiteComparisonPanel } from './suite-comparison-panel';
+import { SuiteRunPanel } from './suite-run-panel';
+import type { SuiteRunClient } from '@/src/api/suite-run-client';
 import type { SuiteComparisonClient } from '@/src/api/suite-comparison-client';
 import {
   TargetHistoryFilters,
@@ -71,6 +73,7 @@ export function SuiteHistoryPanel({
   selectedDecisionId = null,
   openingDecisionId = null,
   comparisons,
+  runClient,
   projectId,
 }: {
   client: ControlPlaneClient;
@@ -82,6 +85,7 @@ export function SuiteHistoryPanel({
   selectedDecisionId?: string | null;
   openingDecisionId?: string | null;
   comparisons?: SuiteComparisonClient;
+  runClient?: SuiteRunClient;
   projectId?: string;
 }) {
   const [opened, setOpened] = useState(false);
@@ -586,6 +590,12 @@ export function SuiteHistoryPanel({
             Read-only metadata. Queued and canceled jobs are outside this
             history; a blocked release is not a worker failure.
           </p>
+          {runClient && projectId && !busy ? <SuiteRunPanel
+            key={`run:${JSON.stringify([projectId, history.suite.name, history.suite.revision, history.suite.digest, history.filters])}`}
+            suite={history.suite} projectId={projectId} client={runClient}
+            onAuthenticationFailure={onAuthenticationFailure}
+            onShowRuns={() => select(history.suite)}
+          /> : null}
           {comparisons && projectId && !busy ? <SuiteComparisonPanel
             key={JSON.stringify([projectId, history.suite.name, history.suite.revision, history.suite.digest, history.filters])}
             suite={history.suite} runs={history.runs.items} projectId={projectId}
