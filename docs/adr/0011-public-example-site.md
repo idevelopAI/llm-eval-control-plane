@@ -1,9 +1,16 @@
 # ADR 0011: Public synthetic example Site
 
-- Status: accepted
+- Status: superseded for hosting implementation
 - Date: 2026-09-01
 - Accepted: 2026-09-02
 - Supersedes: [ADR 0010](0010-owner-only-hosted-fixture.md)
+- Superseded by: [ADR 0015](0015-native-static-vercel-hosting.md)
+
+This is a historical decision. The former host is now owner-only, and its
+manifest, Worker build path, and unused identity/read prototype are removed.
+The fixture-only, privacy, solid-fill, and no-indexing constraints remain in
+force on Vercel; use ADR 0015 and its deployment guide for current commands,
+artifact checks, CDN behavior, and rollback.
 
 ## Context
 

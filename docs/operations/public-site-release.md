@@ -1,12 +1,18 @@
 # Public Site release record
 
-- Status: accepted
+- Status: historical; public access withdrawn on 2026-09-25
 - Verification date: 2026-09-02
-- Canonical origin: <https://llm-eval-control-plane.nick0ne.chatgpt.site>
+- Former canonical origin: `https://llm-eval-control-plane.nick0ne.chatgpt.site`
 - Reviewed repository commit: `526401f75720194e1781d34f5a158cadde266e18`
 - Hosted version: `4`
 - Hosted source commit: `ae4fa0f6d70b1d5af004b421e16cf63b7be3b9e1`
 - Hosted archive digest: `sha256:71736f748072424d8c42616251c975f9fb196c150eaa30345890a06d9be3ec82`
+
+The current public demo is on Vercel. The former host is owner-only and returned
+401 to an anonymous request after the access change; it is retained privately,
+not deleted. Its toolchain and unused identity/read prototype are no longer in
+the current source. Use the [Vercel deployment guide](vercel-static-demo.md), not
+this historical record, for current deployment and rollback instructions.
 
 This record closes the publication gate in
 [ADR 0011](../adr/0011-public-example-site.md). It records the exact reviewed

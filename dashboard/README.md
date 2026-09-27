@@ -13,13 +13,13 @@ safe for a public example environment and is always labeled as synthetic data.
 The production homepage imports a dedicated fixture-only component. API client,
 credential, live-mode, and loopback-proxy modules are absent from its client and
 server-rendered application chunks. Development resolves the homepage to the
-local live-capable component only while `vinext dev` is running; production
-builds do not use that development substitution.
+local live-capable component only while `next dev --webpack` is running;
+production builds do not use that development substitution.
 
 The **local live** mode is available only when the dashboard itself is served
 over plain HTTP on `localhost`, `127.0.0.1`, or `[::1]`. It connects through the
-same-origin Vite proxy to an explicit loopback control-plane origin. A hosted
-origin never renders the bearer-entry form.
+same-origin Next.js development rewrites to an explicit loopback control-plane
+origin. A hosted origin never renders the bearer-entry form.
 
 Live mode supports:
 
@@ -139,9 +139,9 @@ use `no-store`, redirects are rejected, referrers are suppressed, server error
 messages are discarded, and successful JSON is checked against strict runtime
 allowlists before it reaches the view model.
 
-Hosted live access is intentionally unsupported in the public example. A later
-hosted version requires the stateless, platform-authenticated backend-for-frontend
-boundary described below; do not enable browser bearer entry on a public origin.
+Hosted live access is intentionally unsupported in the public example. Any later
+hosted version needs a new architecture and security review; there is no dormant
+hosting adapter to activate. Do not enable browser bearer entry on a public origin.
 
 ## Create a comparison locally
 
@@ -264,49 +264,33 @@ See [ADR 0014](../docs/adr/0014-local-offline-suite-runs.md) for the boundary.
 
 ## Hosted build boundary
 
-The public Vercel demo uses `pnpm run build:vercel`. This separately produces
+The default `pnpm run build` (also available as `pnpm run build:vercel`) produces
 `out/` with a native Next.js static export and a CDN-only `vercel.json` policy.
-The build fails on dynamic routes, server actions, unexpected client entries,
-local write controls, provider endpoints, secret markers, source maps,
+The build fails on dynamic routes, proxy rewrites, server actions, unexpected
+client entries, local write controls, provider endpoints, secret markers, source maps,
 symlinks, gradients, or stale hosting metadata. Only public assets are uploaded;
-`.next/`, repository source, local environment files, and worker output are not.
+`.next/`, repository source, local environment files, and server output are not.
 The existing response-header policy is applied at Vercel's CDN, with explicit
 API denial and no catch-all homepage fallback. See the
 [deployment and rollback guide](../docs/operations/vercel-static-demo.md).
 
-The existing Sites-compatible build remains available for rollback:
+`pnpm start` previews the verified static output on `127.0.0.1:3000`; it is not
+an API server and never enables local live mode. Set `PORT` to choose another
+loopback port. `pnpm run smoke:public` starts that preview on a temporary port,
+checks hardened headers and non-cacheable HTML, and proves that representative
+`/api` and `/v1` requests resolve to 404 for every tested method. These are local
+artifact checks, not a Vercel emulator: verify the actual CDN separately before
+publishing, including its documented empty `OPTIONS` exceptions.
 
-`pnpm run build` runs an artifact verifier after compilation. The verifier fails
-if the live dashboard enters the public module graph; if application chunks
-contain control-plane routes, credential markers, model-provider endpoints, or
-browser persistence; if the output contains secrets, source maps, credential
-files, gradients, or unexpected runtime bindings; or if a server-only prerender
-secret reaches a client artifact.
+`pnpm run smoke:dev` starts native Next.js development against an ephemeral
+loopback mock API. It verifies the live-capable entry, allowed proxy paths,
+query/body/header forwarding, and absence of API traffic at initial render.
+The test uses no real credential, database, or provider.
 
-`pnpm run smoke:public` starts the built runtime on a temporary loopback port,
-checks the hardened response and non-cacheable fixture HTML, and proves that
-GET, POST, HEAD, and OPTIONS requests against representative paths below `/api`
-and `/v1` all resolve to 404. Together with the generated route-manifest check,
-these gates verify the shipped artifact rather than relying only on source-level
-origin checks. The accepted public-access and rollback policy is recorded in
-[ADR 0011](../docs/adr/0011-public-example-site.md), with the exact deployed
-artifact and unauthenticated review captured in the
-[public Site release record](../docs/operations/public-site-release.md).
-
-## Implemented disabled foundation
-
-Tested server-only helpers now define the future hosted read boundary: platform
-owner identity, private configuration, same-origin request provenance, four
-allowlisted GET operations, bounded JSON reads, and strict response projection.
-They are not connected to a runtime binding or application route, and no Site
-secret is configured. The hosted dashboard remains a zero-request synthetic
-example with no live behavior change.
-
-Enabling these helpers requires verified server-only secret binding and request
-dispatch in the production Worker runtime, a separately provisioned read-only
-service token, withdrawal of public fixture access followed by reverified
-owner-only private access, and explicit route adapters that deny every non-GET
-method (including `HEAD` and `OPTIONS`).
+The retired hosting plugin, manifest, Worker toolchain, and unused platform
+identity/read adapter have been removed. See
+[ADR 0015](../docs/adr/0015-native-static-vercel-hosting.md) for the current
+deployment boundary. Historical decision records are not current setup instructions.
 
 ## Run locally
 
@@ -336,12 +320,15 @@ pnpm run api:check
 pnpm run lint
 pnpm run typecheck
 pnpm run test
+pnpm run test:static
 pnpm run build
 pnpm run smoke:public
+pnpm run smoke:dev
 ```
 
 The test suite includes runtime-contract rejection, credential non-persistence,
 origin restrictions, stale-response cancellation, authorization clearing,
 decision identity checks, isolated projection recovery, pagination boundaries,
 automated accessibility checks for the major UI states, a solid-fill visual
-contract, production artifact inspection, and built-runtime route probes.
+contract, production artifact inspection, static-preview route probes, and
+native development proxy checks. `pnpm run check` runs the full sequence above.

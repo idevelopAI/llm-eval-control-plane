@@ -15,8 +15,8 @@ trace every decision to bounded evidence.
 > **Current scope:** Deterministic release evidence, baseline comparison, policy
 > gates, immutable evaluation suites with snapshot-pinned execution and evidence,
 > durable workers, project authorization, privacy-safe observability, fenced
-> PostgreSQL recovery, and the DataBridge evaluation. The hosted example is a
-> synthetic, request-free build with no API or model calls.
+> PostgreSQL recovery, and the DataBridge evaluation. The public Vercel demo is
+> a synthetic static export with no API or model calls.
 
 ## Release evidence dashboard
 
@@ -64,7 +64,7 @@ database, runtime secrets, or model-provider integration. See the
 ![Local suite history with exact target and baseline-to-candidate filters, immutable digests, and direct gate review](docs/assets/suite-target-history.png)
 
 _Local-only grouped history, captured using intercepted synthetic test data.
-These controls are not present on the hosted fixture Site._
+These controls are not present on the public static demo._
 
 Raw evaluation content is outside the dashboard contract. Case reads expose
 only IDs, slice labels, score status, pass state, numeric score, delta, and change
@@ -75,15 +75,16 @@ never enter tracked configuration or browser persistence, and a hosted origin
 cannot render the local bearer-entry form.
 
 See the [dashboard operator guide](dashboard/README.md) for its trust boundary,
-local workflow, and validation commands. The hosted build uses a dedicated
-fixture-only entry: CI rejects control-plane routes, credential UI, model
-endpoints, browser persistence, unexpected runtime bindings, secrets, and
-gradients in the production artifact. A built-runtime probe also verifies
-restrictive response headers and representative fail-closed `/api` and `/v1`
-requests; the generated route manifest independently rejects application route
-handlers. Hosted live access remains disabled until a separately reviewed,
-stateless server boundary can keep its fixed read-only identity outside the
-browser.
+local workflow, and validation commands. The default production build uses a
+dedicated fixture-only entry: CI rejects control-plane routes, credential UI, model
+endpoints, browser persistence, secrets, and gradients in the static artifact.
+Native Next.js development serves the local workflow on loopback; production
+exports contain no proxy rewrites, server actions, or application route handlers.
+Static-preview probes verify response headers and fail-closed `/api` and `/v1`
+requests, while a separate development smoke test checks the loopback proxy.
+Actual Vercel CDN behavior is verified during deployment, including its empty
+`OPTIONS` response exceptions. Hosted live access is unsupported; there is no
+hosted authentication adapter or backend to configure.
 
 ## Durable HTTP control plane
 
@@ -663,9 +664,8 @@ uv run llm-eval validate examples/evaluation-spec.json
 - [Architecture](docs/architecture.md)
 - [Domain model](docs/domain-model.md)
 - [Architecture decisions](docs/adr/)
-- [Superseded owner-only Site decision](docs/adr/0010-owner-only-hosted-fixture.md)
-- [Accepted public synthetic Site decision](docs/adr/0011-public-example-site.md)
-- [Public Site release record](docs/operations/public-site-release.md)
+- [Static Vercel hosting decision](docs/adr/0015-native-static-vercel-hosting.md)
+- [Vercel deployment and release record](docs/operations/vercel-static-demo.md)
 - [Threat model](docs/security/threat-model.md)
 - [Incident and recovery runbook](docs/operations/recovery.md)
 

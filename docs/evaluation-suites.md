@@ -24,7 +24,7 @@ configuration, not command arguments, source files, logs, or screenshots.
 | `GET /v1/suite-targets` | `control-plane:read` | Distinct exact targets observed in persisted suite runs |
 | `GET /v1/suite-target-pairs` | `control-plane:read` | Distinct directed baseline/candidate target pairs observed in suite decisions |
 
-These are local control-plane endpoints. They are not added to the public Site,
+These are local control-plane endpoints. They are not added to the public demo,
 which remains a synthetic, request-free build.
 
 ## Register a protocol
@@ -221,7 +221,7 @@ The local dashboard offers independent exact-target and directed-pair selectors
 with bounded group pagination and complete identity checks. Filter changes reset
 history cursors; detailed gate review verifies the selected pair before reading
 case or distribution evidence. See the [operator workflow](../dashboard/README.md#filter-history-by-target).
-The hosted synthetic Site does not expose any of these authenticated routes or
+The hosted synthetic demo does not expose any of these authenticated routes or
 controls.
 
 ### Database maintenance
