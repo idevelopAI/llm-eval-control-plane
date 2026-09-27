@@ -2,14 +2,8 @@ allowBuilds:
   esbuild: true
   sharp: false
   unrs-resolver: true
-  workerd: true
 # Security floors for transitive dependencies pinned by upstream packages.
 # GHSA-rgj7-g3m4-5g8c and GHSA-2883-xcg3-v3hh; keep the audit gate enabled.
 overrides:
   'sharp@>=0.35.0 <0.35.4': 0.35.4
   'js-yaml@>=4.0.0 <4.3.2': 4.3.2
-minimumReleaseAgeExclude:
-  - '@cloudflare/vite-plugin@1.54.0'
-  - '@cloudflare/workers-types@5.20260826.1'
-  - miniflare@5.20260825.0-alpha
-  - wrangler@4.126.0

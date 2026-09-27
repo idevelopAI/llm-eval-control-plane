@@ -39,7 +39,6 @@ def _list_items(group: str, key: str) -> set[str]:
             {
                 "react",
                 "react-dom",
-                "react-server-dom-webpack",
                 "@types/react",
                 "@types/react-dom",
             },
@@ -77,13 +76,7 @@ def test_build_tooling_does_not_fall_into_the_general_development_group() -> Non
     config = CONFIG.read_text(encoding="utf-8")
     group = _group(config, "dashboard-build-tooling")
 
-    assert _list_items(group, "patterns") == {
-        "vite",
-        "vinext",
-        "@vitejs/*",
-        "@cloudflare/*",
-        "wrangler",
-    }
+    assert _list_items(group, "patterns") == {"vite"}
     assert config.index("      dashboard-build-tooling:") < config.index(
         "      dashboard-development-dependencies:"
     )

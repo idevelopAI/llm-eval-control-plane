@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
-import { extname, join, relative, sep } from 'node:path';
+import { extname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SITE_ORIGIN, SOCIAL_PREVIEW_URL } from '../src/site-metadata.ts';
 import { assertPublicPath, assertPublicText, parseClientManifest, staticHostingConfig } from './static-demo-policy.mjs';
@@ -11,6 +11,9 @@ const json = async (path) => JSON.parse(await readFile(join(root, path), 'utf8')
 export async function verifyStaticDemo() {
   const config = await json('.next/required-server-files.json');
   assert.equal(config.config.output, 'export', 'Deployment must be a static export');
+  const routing = await json('.next/routes-manifest.json');
+  const rewrites = routing.rewrites;
+  assert.ok(Array.isArray(rewrites) ? rewrites.length === 0 : Object.values(rewrites).every((rules) => rules.length === 0), 'No development proxy may enter production');
   const routes = await json('.next/server/app-paths-manifest.json');
   assert.deepEqual(Object.keys(routes).sort(), ['/_global-error/page', '/_not-found/page', '/page']);
   const prerender = await json('.next/prerender-manifest.json');
@@ -50,4 +53,8 @@ export async function verifyStaticDemo() {
   assert.ok(html.includes(SOCIAL_PREVIEW_URL), 'Wrong social image origin');
   assert.ok(bytes < 100 * 1024 * 1024, 'Static deployment exceeds the Hobby file allowance');
   console.log(`Static demo verified: ${count} files, ${bytes} bytes; fixture-only, no functions or secrets, no gradients.`);
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await verifyStaticDemo();
 }
