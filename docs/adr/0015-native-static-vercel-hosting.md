@@ -1,7 +1,8 @@
 # ADR 0015: Native static Vercel hosting
 
-- Status: proposed; pending security review and merge
+- Status: accepted
 - Date: 2026-09-27
+- Accepted: 2026-09-27
 - Supersedes: the hosting implementation in [ADR 0011](0011-public-example-site.md)
 
 ## Context
