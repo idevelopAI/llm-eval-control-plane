@@ -27,13 +27,14 @@ export function parseClientManifest(text) {
 
 const privateCapabilities = /run write credential|start an offline run|comparison write credential|choose runs to compare|idempotency-key|\/v1\/|x-project-id|\bcpk_|read-only access token|use local live data|api\.(?:openai|anthropic)\.com|generativelanguage\.googleapis\.com/i;
 const secret = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\bsk-[A-Za-z0-9_-]{20,}|\b(?:ghp|github_pat)_[A-Za-z0-9_]{20,}|\bAKIA[0-9A-Z]{16}|\b(?:postgres(?:ql)?|mysql):\/\/[A-Za-z0-9]/i;
-const request = /\bfetch\s*\(|\bXMLHttpRequest\b|\bWebSocket\b|\bEventSource\b|\bsendBeacon\b|\blocalStorage\b|\bsessionStorage\b|\bindexedDB\b|document\.cookie|["'`]form["'`]/;
+const request = /\bfetch\s*\(|\bXMLHttpRequest\b|\bWebSocket\b|\bEventSource\b|\bsendBeacon\b|\blocalStorage\b|\bsessionStorage\b|\bindexedDB\b|document\.cookie|["'`]form["'`]|\bnew\s+Image\s*\(|document\.createElement\(["'`]img["'`]\)/;
+const applicationCapability = /\bauthorization\b|\bbearer\b|submit offline run|(?:openai|anthropic)[-_/](?:sdk|client)|@(?:anthropic-ai|google)\//i;
 
 export function assertPublicText(path, text, applicationChunk = false) {
   if (secret.test(text) || privateCapabilities.test(text)) throw new Error(`Private capability or credential marker in ${path}`);
   if (/(?:linear|radial|conic)-gradient\s*\(|<(?:linearGradient|radialGradient)\b/i.test(text)) throw new Error(`Gradient in ${path}`);
   if (/chatgpt\.site/i.test(text)) throw new Error(`Old hosting origin in ${path}`);
-  if (applicationChunk && request.test(text)) throw new Error(`Request or persistence capability in ${path}`);
+  if (applicationChunk && (request.test(text) || applicationCapability.test(text))) throw new Error(`Private, request or persistence capability in ${path}`);
 }
 
 export function assertPublicPath(path) {

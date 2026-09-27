@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import nextConfig from '../../next.config';
+import { staticHostingConfig } from '../../scripts/static-demo-policy.mjs';
 import {
   PRIVATE_RESPONSE_HEADERS,
   PRODUCTION_SECURITY_HEADERS,
@@ -11,7 +11,7 @@ function headerMap(headers: readonly { key: string; value: string }[]) {
 }
 
 describe('production response headers', () => {
-  it('confines scripts, connections, forms, and framing to the Site', () => {
+  it('confines scripts, connections, forms, and framing to the static origin', () => {
     const headers = headerMap(PRODUCTION_SECURITY_HEADERS);
     const policy = headers.get('content-security-policy');
 
@@ -56,24 +56,9 @@ describe('production response headers', () => {
     );
   });
 
-  it('wires the defenses into every route and adds no-store at private surfaces', async () => {
-    expect(nextConfig.headers).toBeTypeOf('function');
-
-    const routes = await nextConfig.headers?.();
-
-    expect(routes).toEqual([
-      {
-        headers: [...PRODUCTION_SECURITY_HEADERS],
-        source: '/:path*',
-      },
-      {
-        headers: [...PRODUCTION_SECURITY_HEADERS, ...PRIVATE_RESPONSE_HEADERS],
-        source: '/',
-      },
-      {
-        headers: [...PRODUCTION_SECURITY_HEADERS, ...PRIVATE_RESPONSE_HEADERS],
-        source: '/api/:path*',
-      },
-    ]);
+  it('wires defenses into CDN routes and keeps documents and denied APIs private', () => {
+    const { routes } = staticHostingConfig();
+    expect(routes[0]).toEqual({ src: '/.*', headers: Object.fromEntries(PRODUCTION_SECURITY_HEADERS.map(({ key, value }) => [key, value])), continue: true });
+    for (const index of [1, 3]) expect(routes[index].headers).toEqual(Object.fromEntries(PRIVATE_RESPONSE_HEADERS.map(({ key, value }) => [key, value])));
   });
 });

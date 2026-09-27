@@ -14,7 +14,6 @@
 
 # next.js
 /.next/
-/.vinext/
 /out/
 
 # misc
@@ -35,6 +34,9 @@ yarn-error.log*
 next-env.d.ts
 *.tsbuildinfo
 /dist/
-/.wrangler/
 /outputs/
 /work/
+
+# Stale generated caches from the retired hosting toolchain, never source.
+/.vinext/
+/.wrangler/

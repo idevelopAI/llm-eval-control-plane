@@ -26,7 +26,7 @@ test('rejects old hosting metadata and gradients', () => {
   for (const text of ['https://example.chatgpt.site', 'linear-gradient(red, blue)', '<radialGradient>']) assert.throws(() => assertPublicText('index.html', text));
 });
 test('application chunks cannot request data or persist browser state', () => {
-  for (const text of ['fetch("/something")', 'new WebSocket()', 'localStorage.setItem()', 'document.cookie', 'sendBeacon()', '"form"']) assert.throws(() => assertPublicText('page.js', text, true));
+  for (const text of ['fetch("/something")', 'new WebSocket()', 'localStorage.setItem()', 'document.cookie', 'sendBeacon()', '"form"', 'new Image()', 'document.createElement("img")', 'Authorization', 'Bearer', 'submit offline run', '@anthropic-ai/sdk']) assert.throws(() => assertPublicText('page.js', text, true));
   assertPublicText('page.js', 'Synthetic release evidence', true);
 });
 test('client manifest is parsed as data, never evaluated', () => {

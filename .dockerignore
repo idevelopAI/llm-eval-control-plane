@@ -19,6 +19,10 @@ dist
 coverage.xml
 htmlcov
 dashboard/node_modules
+dashboard/.next
+dashboard/out
+dashboard/.vercel
+# Ignore stale generated caches from older checkouts too.
 dashboard/.vinext
 dashboard/.wrangler
 dashboard/coverage

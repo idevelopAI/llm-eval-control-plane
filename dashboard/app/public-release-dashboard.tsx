@@ -9,12 +9,12 @@ import {
 } from '@/src/features/release-decisions/demo-release';
 
 /**
- * Public Site entry point.
+ * Public static-demo entry point.
  *
  * This module intentionally has no API client, credential, storage, or live-mode
  * imports. The homepage imports this component directly for production, while a
  * development-only resolver substitutes the loopback live component during
- * `vinext dev`.
+ * `next dev --webpack`.
  */
 export default function PublicReleaseDashboard() {
   const [model, setModel] = useState(demoDashboardModel);

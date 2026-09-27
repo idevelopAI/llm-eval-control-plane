@@ -11,7 +11,7 @@ import {
   SOCIAL_PREVIEW_URL,
 } from './site-metadata';
 
-describe('hosted Site metadata', () => {
+describe('static demo metadata', () => {
   it('pins canonical and social URLs to the trusted deployment origin', () => {
     expect(SITE_ORIGIN.toString()).toBe(
       'https://llm-eval-control-plane-idevelopai.vercel.app/',

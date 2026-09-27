@@ -7,7 +7,6 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DASHBOARD_ROOT = PROJECT_ROOT / "dashboard"
 APP_ROOT = DASHBOARD_ROOT / "app"
-HOSTING_CONFIG = DASHBOARD_ROOT / ".openai" / "hosting.json"
 
 _ROUTE_HANDLER_SUFFIXES = {
     ".cjs",
@@ -20,12 +19,6 @@ _ROUTE_HANDLER_SUFFIXES = {
     ".tsx",
 }
 _PUBLIC_ENV_NAME = re.compile(r"\b(?:NEXT_PUBLIC|VITE)_[A-Z0-9_]+\b")
-_SERVER_ONLY_MODULES = (
-    DASHBOARD_ROOT / "src" / "server" / "dashboard-read-executor.ts",
-    DASHBOARD_ROOT / "src" / "server" / "hosted-config.ts",
-    DASHBOARD_ROOT / "src" / "server" / "hosted-read-handler.ts",
-    DASHBOARD_ROOT / "src" / "server" / "hosted-read-response.ts",
-)
 _CREDENTIAL_PATTERNS = (
     re.compile(r"sk-[A-Za-z0-9]{20,}"),
     re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
@@ -50,9 +43,8 @@ def _production_source_files() -> tuple[Path, ...]:
     sources.extend(
         path
         for path in (
-            HOSTING_CONFIG,
             DASHBOARD_ROOT / "next.config.ts",
-            DASHBOARD_ROOT / "vite.config.ts",
+            DASHBOARD_ROOT / "scripts" / "static-demo-policy.mjs",
         )
         if path.is_file()
     )
@@ -69,9 +61,24 @@ def test_hosted_control_plane_boundary_remains_disabled() -> None:
         f"Hosted route handlers activate the boundary: {route_handlers}"
     )
 
-    hosting = json.loads(HOSTING_CONFIG.read_text(encoding="utf-8"))
-    assert hosting["d1"] is None
-    assert hosting["r2"] is None
+    assert not (DASHBOARD_ROOT / ".openai" / "hosting.json").exists()
+    assert not (DASHBOARD_ROOT / "vite.config.ts").exists()
+    package = json.loads((DASHBOARD_ROOT / "package.json").read_text(encoding="utf-8"))
+    dependencies = package["dependencies"] | package["devDependencies"]
+    assert not any(
+        name.startswith(("@openai/", "@cloudflare/"))
+        or name in {"vinext", "wrangler", "workerd", "miniflare"}
+        for name in dependencies
+    )
+    assert package["scripts"]["build"] == "node scripts/build-static-demo.mjs"
+    assert package["scripts"]["dev"] == "next dev --webpack --hostname 127.0.0.1"
+
+    lockfile = (DASHBOARD_ROOT / "pnpm-lock.yaml").read_text(encoding="utf-8")
+    assert not re.search(
+        r"^\s+(?:['\"]?@(?:openai|cloudflare)/|(?:vinext|wrangler|workerd|miniflare)@)",
+        lockfile,
+        re.MULTILINE,
+    )
 
     public_names: dict[str, list[str]] = {}
     for path in _production_source_files():
@@ -82,13 +89,8 @@ def test_hosted_control_plane_boundary_remains_disabled() -> None:
         f"Public dashboard configuration is forbidden: {public_names}"
     )
 
-    for module in _SERVER_ONLY_MODULES:
-        assert module.read_text(encoding="utf-8").startswith(
-            "import 'server-only';\n"
-        ), (
-            f"Private hosted module lost its server-only marker: "
-            f"{module.relative_to(PROJECT_ROOT)}"
-        )
+    for path in _production_source_files():
+        assert "oai-authenticated-user-id" not in path.read_text(encoding="utf-8")
 
 
 def test_hosted_dashboard_production_sources_have_no_credentials() -> None:

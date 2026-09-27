@@ -1,137 +1,39 @@
-import { spawn } from 'node:child_process';
+import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { createServer } from 'node:net';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { startStaticDemoServer } from './serve-static-demo.mjs';
+import { PRODUCTION_SECURITY_HEADERS, PRIVATE_RESPONSE_HEADERS } from '../src/security/production-headers.ts';
 
-const dashboardRoot = fileURLToPath(new URL('..', import.meta.url));
-const vinextCli = join(
-  dashboardRoot,
-  'node_modules',
-  'vinext',
-  'dist',
-  'cli.js',
-);
-
-function assert(condition, message) {
-  if (!condition) throw new Error(message);
-}
-
-function fetchWithTimeout(input, init = {}, timeoutMs = 2_000) {
-  return fetch(input, {
-    ...init,
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-}
-
-async function reservePort() {
-  const server = createServer();
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  const address = server.address();
-  assert(address && typeof address === 'object', 'Could not reserve a port.');
-  const port = address.port;
-  server.close();
-  await once(server, 'close');
-  return port;
-}
-
-async function waitForRuntime(origin, processExited) {
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    if (processExited()) throw new Error('Production runtime exited before readiness.');
-    try {
-      const response = await fetchWithTimeout(
-        origin,
-        { redirect: 'manual' },
-        750,
-      );
-      if (response.status === 200) return response;
-    } catch {
-      // The server has not opened its listener yet.
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+const server = await startStaticDemoServer(0);
+const origin = `http://127.0.0.1:${server.address().port}`;
+const request = async (path, method = 'GET') => {
+  const response = await fetch(origin + path, { method, redirect: 'manual', signal: AbortSignal.timeout(2_000) });
+  for (const { key, value } of [...PRODUCTION_SECURITY_HEADERS, ...PRIVATE_RESPONSE_HEADERS]) {
+    assert.equal(response.headers.get(key), value, `${method} ${path}: ${key}`);
   }
-  throw new Error('Production runtime did not become ready within 15 seconds.');
-}
-
-const expectedCsp =
-  "default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; manifest-src 'self'; object-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; worker-src 'self'; upgrade-insecure-requests";
-
-const port = await reservePort();
-const origin = `http://127.0.0.1:${port}/`;
-let output = '';
-let exitCode;
-const child = spawn(
-  process.execPath,
-  [vinextCli, 'start', '--hostname', '127.0.0.1', '--port', String(port)],
-  {
-    cwd: dashboardRoot,
-    env: { ...process.env, NODE_ENV: 'production' },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  },
-);
-child.stdout.on('data', (chunk) => {
-  output += chunk.toString();
-});
-child.stderr.on('data', (chunk) => {
-  output += chunk.toString();
-});
-child.on('exit', (code) => {
-  exitCode = code ?? 1;
-});
-
+  assert.equal(response.headers.get('set-cookie'), null);
+  assert.equal(response.headers.get('access-control-allow-origin'), null);
+  return response;
+};
 try {
-  const root = await waitForRuntime(origin, () => exitCode !== undefined);
+  const root = await request('/');
+  assert.equal(root.status, 200);
   const html = await root.text();
-  const csp = root.headers.get('content-security-policy') ?? '';
-  const cacheControl = root.headers.get('cache-control') ?? '';
-
-  assert(html.includes('Public example environment'), 'Public fixture copy is missing.');
-  assert(!html.includes('Use local live data'), 'Local live UI reached production HTML.');
-  assert(!html.includes('Read-only access token'), 'Credential UI reached production HTML.');
-  const cacheTokens = cacheControl
-    .split(',')
-    .map((token) => token.trim().toLowerCase())
-    .filter(Boolean)
-    .sort();
-  assert(
-    cacheTokens.join(',') === ['max-age=0', 'no-store', 'private'].sort().join(','),
-    `Unexpected root Cache-Control policy: ${cacheControl}`,
-  );
-  assert(csp === expectedCsp, `Unexpected Content-Security-Policy: ${csp}`);
-  assert(root.headers.get('x-frame-options') === 'DENY', 'Frame denial is missing.');
-  assert(
-    root.headers.get('x-content-type-options') === 'nosniff',
-    'MIME-sniffing protection is missing.',
-  );
-  assert(
-    root.headers.get('referrer-policy') === 'no-referrer',
-    'Referrer suppression is missing.',
-  );
-
-  const methods = ['GET', 'POST', 'HEAD', 'OPTIONS'];
-  const paths = ['/api/public-build-probe', '/v1/public-build-probe'];
-  for (const path of paths) {
-    for (const method of methods) {
-      const response = await fetchWithTimeout(new URL(path, origin), {
-        method,
-        redirect: 'manual',
-      });
-      assert(
-        response.status === 404,
-        `${method} ${path} unexpectedly returned ${response.status}.`,
-      );
+  assert.ok(html.includes('Public example environment'));
+  assert.ok(!/Use local live data|Read-only access token|Run write credential/.test(html));
+  for (const path of ['/api', '/api/probe', '/v1', '/v1/probe']) {
+    for (const method of ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']) {
+      assert.equal((await request(path, method)).status, 404, `${method} ${path}`);
     }
   }
-
-  console.log(
-    'Public runtime verified: hardened fixture HTML and representative /api and /v1 probes fail closed.',
-  );
-} catch (error) {
-  if (output.trim()) console.error(output.trim());
-  throw error;
+  for (const method of ['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) assert.equal((await request('/', method)).status, 405);
+  for (const path of ['/missing', '/.env', '/vercel.json', '/_next/static/%2e%2e%2f%2e%2e%2fpackage.json', '/_next/static/%5cpackage.json']) assert.equal((await request(path)).status, 404, path);
+  assert.equal((await request('/%ZZ')).status, 400);
+  const assets = [...new Set([...html.matchAll(/(?:src|href)="([^"#]+)"/g)].map((match) => match[1]).filter((path) => path.startsWith('/_next/') || path === '/favicon.svg'))];
+  for (const path of [...assets, '/og.png']) assert.equal((await request(path)).status, 200, path);
+  assert.equal(await (await request('/', 'HEAD')).text(), '');
+  console.log('Static preview verified: fixture HTML, security headers, assets, denied APIs/writes, and no path traversal. Vercel CDN behavior is checked separately.');
 } finally {
-  if (exitCode === undefined) child.kill('SIGTERM');
-  if (exitCode === undefined) await once(child, 'exit');
+  const closed = once(server, 'close');
+  server.close(); server.closeAllConnections();
+  await closed;
 }

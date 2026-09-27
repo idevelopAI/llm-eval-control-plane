@@ -26,12 +26,11 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     groups:
-      # Renderers require matching React versions, across dependency types.
+      # React and its types update together, across dependency types.
       react-runtime:
         patterns:
           - react
           - react-dom
-          - react-server-dom-webpack
           - "@types/react"
           - "@types/react-dom"
       next-framework:
@@ -42,10 +41,6 @@ updates:
         dependency-type: development
         patterns:
           - vite
-          - vinext
-          - "@vitejs/*"
-          - "@cloudflare/*"
-          - wrangler
         update-types:
           - minor
           - patch
