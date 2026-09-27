@@ -223,7 +223,7 @@ metric inventories, slices, and gate values remain sensitive metadata available
 only through the existing project-bound authorization boundary. Caller-controlled
 suite fields must not become metric labels or unreviewed telemetry attributes.
 
-The public Site remains a synthetic, request-free fixture. Suite registration
+The public demo remains a synthetic, request-free fixture. Suite registration
 and execution add no hosted API route, bearer flow, model invocation, runtime
 binding, or application secret. Any synthetic suite presentation added to that
 artifact remains subject to ADR 0011 and its build and runtime acceptance gates.

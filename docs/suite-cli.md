@@ -103,4 +103,4 @@ or another protected location. Report output files are create-only. Without
 | `2` | Invalid input, dependency/integrity mismatch, unsupported options, or storage failure |
 
 The existing unpinned `llm-eval run` / `compare` workflow is unchanged. These
-commands do not register suites remotely or change the public Site.
+commands do not register suites remotely or change the public demo.

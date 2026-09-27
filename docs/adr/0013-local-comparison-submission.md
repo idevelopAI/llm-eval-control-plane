@@ -42,7 +42,7 @@ read-only browser session or introduce a hosted write path.
   verification before fetching case/distribution evidence.
 - Keep all write controls/client code out of the public fixture graph. Extend
   public artifact checks for comparison credential UI and idempotency markers.
-  No public route, runtime binding, provider request, or Site deployment changes.
+  No public route, runtime binding, provider request, or demo deployment changes.
 
 ## Consequences and limits
 

@@ -3,7 +3,7 @@
 ## System objective
 
 LLM Eval Control Plane turns AI application behavior into reproducible evidence.
-The implemented system combines a public production-hosted synthetic fixture
+The implemented system combines a public Vercel-hosted static synthetic fixture
 with privacy-bounded analytical reads and a loopback-only release-review
 dashboard. The hosted artifact is a request-free fixture build with no
 operational control-plane or model path. The control plane registers immutable
@@ -30,12 +30,15 @@ review. A separate explicit comparison form is defined in
 
 ## Architectural style
 
-The public demo can also be exported as static HTML, JavaScript, CSS, and local
-assets for Vercel. This output contains no Worker, server function, middleware,
-database, runtime environment, or API route. A separate build verifier checks
-the native Next.js export, its fixture-only client references, and its CDN
-header/route policy. Local development still uses the loopback proxy and the
-full control plane. See the [static deployment guide](operations/vercel-static-demo.md).
+The default production build exports static HTML, JavaScript, CSS, and local
+assets for Vercel. This output contains no server function, middleware,
+database, runtime environment, or API route. The build verifier checks
+the native Next.js export, its fixture-only client references, absent proxy
+rewrites and server actions, and its CDN header/route policy. Native Next.js
+development binds to loopback and uses development-only rewrites to the local
+control plane. No hosted authentication adapter is retained. See
+[ADR 0015](adr/0015-native-static-vercel-hosting.md) and the
+[static deployment guide](operations/vercel-static-demo.md).
 
 The project is a modular monolith. The CLI, API, and worker runtimes are
 composition roots: each constructs concrete adapters and passes them into
@@ -47,8 +50,8 @@ flowchart LR
     CLI --> COMPARE["Comparison + gate service"]
     CLI --> ADAPTERS["Concrete adapters"]
     API["FastAPI composition root"] --> CONTROL["Control-plane service"]
-    DASHBOARD["React release dashboard"] -->|loopback same-origin proxy| API
-    HOSTED["Public synthetic Site"] -->|zero-request deterministic evidence| DASHBOARD
+    DASHBOARD["Local React dashboard / Next.js dev"] -->|loopback same-origin proxy| API
+    HOSTED["Vercel static assets"] --> FIXTURE["Public synthetic dashboard / no API requests"]
     API --> ANALYTICS["Bounded dashboard analytics"]
     API --> DB["PostgreSQL repository"]
     API --> AUTH["Project-bound authorizer"]
@@ -132,15 +135,15 @@ migrations/                # Alembic environment and versioned PostgreSQL DDL
 
 ```text
 dashboard/
-├── .openai/hosting.json    # non-secret Site identity; no runtime secrets
 ├── app/                    # source control, live controller, accessible views
 ├── public/og.png           # 1200 by 630 social preview
-├── next.config.ts          # production response-header policy
+├── next.config.ts          # static export; loopback rewrites only in development
+├── scripts/                # static build, artifact/CDN policy, preview + smoke checks
 ├── src/api/                # generated client, strict validators, safe errors
 ├── src/features/           # requests and cross-response view-model checks
 ├── src/security/           # loopback policy, volatile vault, hosted headers
-├── src/site-metadata.ts    # canonical and social URLs on a trusted origin
-└── vite.config.ts          # explicit loopback-only development proxy
+├── src/site-metadata.ts    # canonical and social URLs on the Vercel origin
+└── vitest.config.ts        # test runner; not a hosting build configuration
 ```
 
 ## Evaluation and release flow

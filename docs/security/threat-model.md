@@ -4,8 +4,8 @@
 
 This document covers the FastAPI control plane, local release dashboard, leased
 workers, PostgreSQL repository, deterministic evaluation paths, DataBridge
-adapter, local artifact store, Compose deployment, and continuous-integration
-supply chain.
+adapter, static Vercel demo, local artifact store, Compose deployment, and
+continuous-integration supply chain.
 
 The security objective is to preserve the confidentiality and integrity of
 evaluation inputs and evidence while ensuring that only authenticated,
@@ -42,6 +42,25 @@ Content digests provide integrity evidence; they do not encrypt data or prove
 who submitted it.
 
 ## Trust boundaries
+
+### Public static demo
+
+Only the verified native Next.js static export crosses into Vercel. Source,
+local credentials, databases, environment files, server functions, and API
+routes are not uploaded. The default production build has no development proxy
+rewrites, server actions, live controls, request-capable application code, or
+browser persistence. The unused former-host identity/read adapter is removed;
+there is no dormant hosted authentication path to configure.
+
+Artifact checks enforce the client-entry allowlist, exact CDN policy, secret
+markers, trusted metadata origin, and solid-fill styles. These are defense in
+depth, not proof against arbitrary malicious source or unrecognized secrets.
+Local preview checks do not prove edge behavior: publication separately verifies
+all deployed files and response headers against the artifact. Vercel may return
+empty `OPTIONS` responses without granting cross-origin access; this must not
+expose application data or a backend. The deployment guide records the verified
+exceptions. Public indexing remains disabled. See
+[ADR 0015](../adr/0015-native-static-vercel-hosting.md).
 
 ### Client to API
 
@@ -90,6 +109,12 @@ superseded requests cannot update the selected evidence. Redacted case IDs,
 slices, metrics, timestamps, digests, and aggregate values are still sensitive
 metadata. A script executing in the connected local page could read the
 credential; loopback restrictions do not protect a compromised browser or host.
+
+Native `next dev --webpack` binds to `127.0.0.1`. Only development configuration
+substitutes the live-capable entry and proxies `/health`, `/openapi.json`, and
+`/v1` to a validated explicit loopback HTTP origin. Other phases always export
+the public fixture, even if a development-origin environment value is set.
+Proxy smoke tests use a disposable local mock, never operational credentials.
 
 ### API and workers to PostgreSQL
 

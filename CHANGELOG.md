@@ -7,6 +7,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Removed
+
+- Retired Sites hosting metadata, plugin and Worker dependencies, the alternate
+  Vinext build, and the unused platform-authenticated hosted-read prototype.
+  The Vercel static export is now the default production build, while native
+  Next.js development retains the loopback-only local workflow. Build and proxy
+  regression checks replace the obsolete runtime checks. Current documentation
+  describes Vercel; former-host records are explicitly historical.
+
 ### Added
 
 - A verified static-only Vercel export of the public synthetic dashboard, with

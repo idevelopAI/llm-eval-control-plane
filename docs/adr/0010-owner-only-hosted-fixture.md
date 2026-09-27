@@ -4,7 +4,10 @@
 - Date: 2026-08-29
 - Superseded by: [ADR 0011](0011-public-example-site.md) on 2026-09-02
 
-This decision remains the historical owner-only baseline and rollback posture.
+This decision records the historical owner-only baseline, not current setup or
+rollback instructions. The old host is privately retained; its build toolchain
+and unused read prototype have been removed. Current hosting is defined in
+[ADR 0015](0015-native-static-vercel-hosting.md).
 ADR 0011 superseded it only after the synthetic Site's public audience and
 unauthenticated behavior were independently verified.
 

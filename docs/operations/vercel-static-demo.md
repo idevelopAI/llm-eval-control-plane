@@ -13,10 +13,12 @@ pnpm install --frozen-lockfile
 pnpm run check
 ```
 
-The final check runs `pnpm run build:vercel`, generating a native Next.js static
-export in `out/` plus its reviewed `vercel.json`. The artifact verifier requires
-static routes, no server actions, only the public fixture client entry, and the
-exact CDN policy. It rejects symlinks, unexpected file types, source maps,
+The check runs the default `pnpm run build`, generating a native Next.js static
+export in `out/` plus its reviewed `vercel.json`, followed by static-preview and
+local-development smoke tests. `build:vercel` is an alias for the same build.
+The artifact verifier requires static routes, no proxy rewrites or server
+actions, only the public fixture client entry, and the exact CDN policy.
+It rejects symlinks, unexpected file types, source maps,
 credential markers, local write controls, provider endpoints, stale metadata,
 and gradients. Application chunks must contain no data requests or browser
 persistence. Generated artifacts remain ignored by Git.
@@ -73,11 +75,12 @@ Before changing the public README link, verify the assigned production URL:
 - Compare every public file with the local verified export, including JavaScript;
   a host-injected toolbar must not silently bypass the artifact checks.
 
-Keep the preceding Site available until this verification succeeds. If the
-Vercel deployment fails its boundary checks, do not cut over the README link;
-retain the previous deployment and repair the artifact. The historical release
-record and existing Sites-compatible build are preserved, not rewritten as a
-Vercel deployment record.
+If a candidate fails these checks, retain the last verified Vercel deployment
+and repair the artifact. Roll back an unsafe deployment to the preceding verified
+Vercel version, or withdraw public access if no safe version is available, then
+repeat artifact and live-origin verification. The old host is not a public
+fallback, and its retired build path is no longer maintained. See
+[ADR 0015](../adr/0015-native-static-vercel-hosting.md).
 
 ## Release record
 
@@ -107,5 +110,19 @@ Verified on **2026-09-25**:
   typecheck, both production builds and their verifiers, and the existing public
   response smoke test. A full-history redacted secret scan found no leaks.
 
-The preceding Site remains available as a fallback. This record does not claim
-that the old host has been retired.
+### Former host access withdrawal
+
+On **2026-09-25**, after the Vercel checks above, the former Site was changed to
+owner-only access with explicit approval. It had no additional allowed users or
+groups, and an anonymous request returned 401. It remains privately recoverable;
+it was not deleted. The [former release record](public-site-release.md) describes
+historical evidence only and is not an active deployment or rollback guide.
+
+### Source cleanup
+
+The current source uses only native Next.js development and static export.
+Legacy hosting metadata, plugin dependencies, Worker build configuration, and
+the unused platform-authenticated read prototype have been removed. This cleanup
+does not itself redeploy Vercel or change the former host's access setting. The
+artifact sizes, test counts, and deployment identifiers above describe the
+September 25 release, not a new deployment of the cleanup.
