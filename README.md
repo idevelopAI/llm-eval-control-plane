@@ -8,678 +8,196 @@
 [![Worker Recovery Gate](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/worker-recovery-gate.yml/badge.svg)](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/worker-recovery-gate.yml)
 [![Security Gate](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/security-gate.yml/badge.svg)](https://github.com/idevelopAI/llm-eval-control-plane/actions/workflows/security-gate.yml)
 
-A deterministic evaluation control plane for AI applications. Compare immutable
-baseline and candidate runs, enforce release policy across critical slices, and
-trace every decision to bounded evidence.
+Catch AI application regressions before release. Compare a candidate against an
+immutable baseline, enforce quality and safety gates on critical slices, and
+trace each decision back to its dataset, evaluators, and evidence.
 
-> **Current scope:** Deterministic release evidence, baseline comparison, policy
-> gates, immutable evaluation suites with snapshot-pinned execution and evidence,
-> durable workers, project authorization, privacy-safe observability, fenced
-> PostgreSQL recovery, and the DataBridge evaluation. The public Vercel demo is
-> a synthetic static export with no API or model calls.
+An acceptable overall score can hide a failed safety slice. The offline example
+below demonstrates that distinction: overall exact match stays within its
+regression budget, but a refusal regression blocks the release.
 
 ## Release evidence dashboard
 
-The dashboard opens in an immutable, zero-request fixture mode. When served on
-loopback, an operator can explicitly connect it to the local control plane and
-review the newest decision history, failed-first gates, transition-filtered case
-scores, and privacy-bounded score, latency, and usage-unit distributions.
-The local suite-history panel groups completed runs and release decisions by
-an exact suite revision and digest, with explicit, bounded pagination.
-Historical decisions open directly in detailed gate review after their complete
-identity is verified, including decisions outside the newest collection.
-Select a **Run target** or directed **Decision target pair** to filter history by
-complete name, revision, and digest. Group discovery and filtered history use
-separate bounded pages; changing a filter resets history cursors and cancels
-superseded reads. Gate review also verifies the selected target pair before
-loading case or distribution evidence.
+[Open the public demo](https://llm-eval-control-plane-idevelopai.vercel.app/)
 
-The local dashboard can also compare two explicitly selected, compatible suite
-runs. Submission requires a separate, one-request write credential; the normal
-read-only session is not upgraded. Retries retain the same idempotency key and
-inputs, job status refresh is manual, and completed decisions open only after
-their suite, targets, and run-result digests match the selected evidence.
-No evaluation run or provider request is triggered by this comparison workflow.
-See the [local comparison walkthrough and screenshot](dashboard/README.md#create-a-comparison-locally).
+![Release dashboard with a blocked decision, failed safety gate, and score-only case evidence](docs/assets/release-dashboard-fixture.jpg)
 
-For a minimal complete workflow, [register the one-case starter suite and launch
-offline runs locally](dashboard/README.md#run-the-smallest-offline-suite).
-Choose either fixed deterministic target, explicitly submit with a one-request
-write credential, refresh job status, then load completed runs for comparison.
-The starter has one echo case, one exact-match evaluator, and one gate. Both
-target identities use the same simulated behavior; this is not a live-model
-benchmark. No provider credential, automatic polling, or hosted write route is
-introduced.
+_The public demo displays deterministic synthetic evidence. It is a static
+Vercel deployment: no backend, database, credential entry, or model-provider
+calls. Browsing it does not execute evaluations._
 
-![Deterministic release evidence dashboard showing a blocked release, failed gate, and redacted scoring evidence](docs/assets/release-dashboard-fixture.jpg)
+The local dashboard adds authenticated suite and target-group history, direct
+historical gate review, case transitions, and score/latency/usage distributions.
+Separate, explicitly authorized forms let an operator submit offline suite runs
+and compare selected runs. Browsing history alone submits no work.
 
-[Open the public synthetic release-evidence dashboard](https://llm-eval-control-plane-idevelopai.vercel.app/)
+See the [dashboard operator guide](dashboard/README.md) for local screenshots,
+setup, and the one-case starter workflow.
 
-_Deterministic fixture mode: no credential or API request is used._
+## What it does
 
-The Vercel deployment serves a verified static export: no server functions,
-database, runtime secrets, or model-provider integration. See the
-[static deployment guide](docs/operations/vercel-static-demo.md).
+- **Pins evaluation protocols.** An immutable suite binds the dataset, evaluator
+  identities, slices, execution contract, and release policy under one digest.
+- **Gates releases by slice.** Absolute thresholds, regression budgets, and
+  matching coverage prevent good averages from hiding critical failures.
+- **Preserves inspectable evidence.** Canonical JSON and SHA-256 digests bind
+  create-once runs and decisions. Export JSON, Markdown, or JUnit reports.
+- **Runs durable jobs.** PostgreSQL-backed workers use leases, heartbeats,
+  cancellation, and fenced publication to recover interrupted work.
+- **Supports local review.** Browse exact suite/target history, inspect failed
+  gates, and explicitly launch offline runs or comparisons from the dashboard.
+- **Evaluates text-to-SQL behavior.** A pinned, bilingual 56-case DataBridge
+  fixture checks decisions, unsafe-query rejection, and PostgreSQL result
+  equivalence with restricted read-only replay.
+- **Verifies changes in CI.** Reproducible regression fixtures, worker-recovery
+  tests, static-export checks, dependency auditing, and secret scanning cover
+  the implemented boundaries.
 
-![Local suite history with exact target and baseline-to-candidate filters, immutable digests, and direct gate review](docs/assets/suite-target-history.png)
+## Quickstart: block a regression without Docker
 
-_Local-only grouped history, captured using intercepted synthetic test data.
-These controls are not present on the public static demo._
+Requirements: Python 3.11+ and
+[uv](https://docs.astral.sh/uv/getting-started/installation/). Run from the
+repository root. Dependency installation may need network access; the evaluation
+itself needs no server, database, provider key, or paid API call.
 
-Raw evaluation content is outside the dashboard contract. Case reads expose
-only IDs, slice labels, score status, pass state, numeric score, delta, and change
-class. Operational quantiles are withheld below the minimum aggregate size.
-Case and distribution reads recover independently after non-authorization
-failures; authorization failure clears the whole volatile session. Credentials
-never enter tracked configuration or browser persistence, and a hosted origin
-cannot render the local bearer-entry form.
-
-See the [dashboard operator guide](dashboard/README.md) for its trust boundary,
-local workflow, and validation commands. The default production build uses a
-dedicated fixture-only entry: CI rejects control-plane routes, credential UI, model
-endpoints, browser persistence, secrets, and gradients in the static artifact.
-Native Next.js development serves the local workflow on loopback; production
-exports contain no proxy rewrites, server actions, or application route handlers.
-Static-preview probes verify response headers and fail-closed `/api` and `/v1`
-requests, while a separate development smoke test checks the loopback proxy.
-Actual Vercel CDN behavior is verified during deployment, including its empty
-`OPTIONS` response exceptions. Hosted live access is unsupported; there is no
-hosted authentication adapter or backend to configure.
-
-## Durable HTTP control plane
-
-The local API registers immutable dataset revisions, submits deterministic
-evaluation runs, tracks durable jobs and attempts, accepts cancellation
-requests, and stores release decisions. API v1 uses only the credential-free
-deterministic executor: its latency and usage evidence are simulated and must
-not be presented as live-model measurements.
-
-The application core also registers immutable evaluation suites and submits
-suite-backed runs and comparisons. Each job pins the complete suite snapshot;
-workers verify the executor contract and use that snapshot without reloading a
-suite alias. Run and decision digests bind the exact suite identity, and a
-comparison applies only that suite's policy. Historical suite-unpinned evidence
-keeps its original serialization and digests.
-
-The [offline suite CLI](docs/suite-cli.md) builds and validates a resolved
-protocol, runs baseline and candidate targets, and compares their pinned
-evidence without Docker, hosting, or provider API calls.
-
-The local API exposes authenticated suite registration, revision lookup,
-suite-backed run/comparison submission, and newest-first experiment history for
-an exact suite pin. History pages use indexed metadata without loading case
-documents. Run and decision detail responses include
-the resolved `suite` reference when pinned; historical unpinned responses remain
-unchanged. See the [evaluation-suite API guide](docs/evaluation-suites.md) for
-the exact inputs, permissions, replay behavior, and compatibility boundary.
-The local dashboard can browse this metadata after an explicit operator action;
-it does not create runs or contact a provider. Manual baseline/candidate
-selection and comparison submission are a separate local-only, explicitly
-authorized workflow. Legacy
-run/comparison endpoints and CLI commands remain unpinned and cannot replace
-suite policy.
-
-### Local Compose quickstart
-
-The Compose stack mounts the database password and authentication configuration
-from gitignored files. Keep credential values out of `.env`, command arguments,
-shell history, and Git:
-
-```bash
-(
-  umask 077
-  mkdir -p .secrets
-  chmod 0700 .secrets
-  touch .secrets/postgres-password.txt
-  chmod 0600 .secrets/postgres-password.txt
-  printf 'Local PostgreSQL password: '
-  IFS= read -r -s CONTROL_PLANE_LOCAL_PASSWORD
-  printf '\n'
-  printf '%s\n' "$CONTROL_PLANE_LOCAL_PASSWORD" \
-    > .secrets/postgres-password.txt
-  unset CONTROL_PLANE_LOCAL_PASSWORD
-)
-```
-
-Create a bearer credential in a secret manager using the exact `cpk_` prefix
-followed by 43 URL-safe characters. Keep that raw value outside the repository.
-The authentication file stores only its SHA-256 digest and represents exactly
-one project. This schematic is deliberately invalid and must not be used as a
-credential or copied unchanged:
-
-```json
-{
-  "schema_version": "control-plane-auth/v1",
-  "project_id": "<single-deployment-project-id>",
-  "principals": [
-    {
-      "principal_id": "<operator-id>",
-      "token_digest": "sha256:<64-lowercase-hex-characters>",
-      "scopes": [
-        "control-plane:cancel",
-        "control-plane:read",
-        "control-plane:write",
-        "observability:read"
-      ]
-    }
-  ]
-}
-```
-
-Write the resolved document to `.secrets/control-plane-auth.json` through a
-protected local process, then make the bind-mounted files readable by the fixed
-non-root container UID:
-
-```bash
-chmod 0444 \
-  .secrets/control-plane-auth.json \
-  .secrets/postgres-password.txt
-
-docker compose up --build --detach --wait
-docker compose ps
-curl --fail --silent http://127.0.0.1:8000/health/ready
-```
-
-The stack uses PostgreSQL 18's parent-directory volume layout. A named volume
-created by PostgreSQL 17 must not be attached to the PostgreSQL 18 service and
-started in place. Preserve and verify a backup, then use `pg_upgrade` or a
-logical dump/restore into a fresh PostgreSQL 18 volume as described in the
-[recovery runbook](docs/operations/recovery.md#postgresql-major-version-upgrade).
-
-The `migrate` service applies the exact Alembic head before the API starts. The
-API and worker start only after migration succeeds. The readiness endpoint
-requires both database connectivity and that schema revision. The API port is
-bound to loopback by default; the worker has no host port. To exercise competing
-claims locally, scale only the worker service:
-
-```bash
-docker compose up --build --detach --wait --scale worker=2
-```
-
-Provision a mode-`0600` curl configuration outside Git from the secret manager.
-It must supply the `Authorization: Bearer ...` and matching `X-Project-ID: ...`
-headers. Point `CONTROL_PLANE_CURL_CONFIG` at that file; the path is not secret,
-and the raw credential stays out of command arguments. Register a small dataset,
-then submit a run with a caller-selected idempotency key:
-
-```bash
-test -r "${CONTROL_PLANE_CURL_CONFIG:?}"
-
-curl --fail-with-body \
-  --config "${CONTROL_PLANE_CURL_CONFIG:?}" \
-  --header 'Content-Type: application/json' \
-  --request POST http://127.0.0.1:8000/v1/datasets \
-  --data-binary @- <<'JSON'
-{
-  "name": "demo/http",
-  "revision": 1,
-  "cases": [
-    {
-      "case_id": "echo-001",
-      "input": {"scenario": "echo", "value": "hello"},
-      "expected": "hello"
-    }
-  ]
-}
-JSON
-
-curl --include --fail-with-body \
-  --config "${CONTROL_PLANE_CURL_CONFIG:?}" \
-  --header 'Content-Type: application/json' \
-  --header 'Idempotency-Key: demo-run-v1' \
-  --request POST http://127.0.0.1:8000/v1/runs \
-  --data-binary @- <<'JSON'
-{
-  "dataset_name": "demo/http",
-  "dataset_revision": 1,
-  "target_name": "fake/http",
-  "target_revision": 1,
-  "evaluators": ["exact_match", "latency"]
-}
-JSON
-```
-
-The submission response contains a `Location: /v1/jobs/{job_id}` header. Run
-submission and detail responses contain identifiers, content digests, execution
-mode, case-status counts, and aggregate metrics; decision submission and detail
-responses also contain gate results. Collection pages use bounded indexed
-discovery projections and do not load the canonical evidence documents.
-Resource collection fields are limited to identifiers, kind or status, safe
-failure codes, digests, timestamps, dataset identity and case count, execution
-mode, comparison run IDs, and resolved suite/target references where applicable.
-Dashboard analytical routes
-separately expose the score-only case and fixed aggregate fields described
-above. No response returns case inputs, expectations, target outputs, SQL, rows,
-idempotency keys, request digests, database URLs, raw operational samples, or
-exception text.
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/health/live` | Process liveness |
-| `GET` | `/health/ready` | Database and exact-schema readiness |
-| `GET` | `/metrics` | Authenticated API Prometheus metrics |
-| `POST`, `GET` | `/v1/datasets` | Register or page dataset revisions |
-| `GET` | `/v1/dataset-revisions/{revision}/{name:path}` | Read one slash-safe dataset summary |
-| `POST`, `GET` | `/v1/suites` | Register or page immutable evaluation suites |
-| `GET` | `/v1/suite-revisions/{revision}/{name:path}` | Read one suite protocol summary |
-| `POST`, `GET` | `/v1/suite-runs` | Submit a pinned run or page exact-suite run history |
-| `POST`, `GET` | `/v1/suite-comparisons` | Submit a pinned comparison or page exact-suite release history |
-| `POST`, `GET` | `/v1/runs` | Submit or page evaluation runs |
-| `GET` | `/v1/runs/{run_id}` | Read one redacted run summary |
-| `GET` | `/v1/jobs`, `/v1/jobs/{job_id}` | Page or inspect durable job state |
-| `GET` | `/v1/jobs/{job_id}/attempts` | Inspect redacted attempt history |
-| `POST` | `/v1/jobs/{job_id}/cancellation` | Cancel queued work or request running cancellation |
-| `POST` | `/v1/comparisons` | Submit a baseline/candidate comparison |
-| `GET` | `/v1/release-decisions` | Page release decisions |
-| `GET` | `/v1/release-decisions/{decision_id}` | Read one redacted decision |
-| `GET` | `/v1/release-decisions/{decision_id}/cases` | Page score-only decision cases for one gate |
-| `GET` | `/v1/release-decisions/{decision_id}/distributions` | Read fixed score and operational distributions |
-| `GET` | `/openapi.json` | Read the generated API contract |
-
-The runtime does not serve an interactive documentation UI, so a
-credential-handling browser page never loads third-party documentation assets.
-The generated API contract is committed at
-[`docs/openapi-v1.json`](docs/openapi-v1.json). Regenerate or verify it with:
-
-```bash
-uv run python scripts/export_openapi.py
-uv run python scripts/export_openapi.py --check
-```
-
-Run and comparison submissions require `Idempotency-Key`. The service hashes the
-validated effective request with defaults materialized, not the raw JSON bytes.
-The same job kind, key, and semantic request returns the existing job without a
-second enqueue; reusing a key for different semantics returns `409`. A new or
-nonterminal submission returns `202`; a replay of a terminal job returns `200`.
-Both responses carry the job `Location` header. Submission handlers never invoke
-the target, an evaluator, or the comparison engine.
-
-Every `/v1` request is authenticated and project-bound. Reads require
-`control-plane:read`, mutations require `control-plane:write`, cancellation
-requires `control-plane:cancel`, and `/metrics` requires `observability:read`.
-The exact `X-Project-ID` is a fail-closed routing assertion: one deployment and
-database own one project, and the service does not claim row-level
-multitenancy. Compose remains loopback-only because TLS termination and
-distributed rate limiting are external responsibilities.
-
-Jobs progress through `queued`, `running`, `cancel_requested`, `succeeded`,
-`failed`, or `canceled`. Each claim creates a redacted attempt record and a
-private expiring lease. Workers heartbeat active leases; the reaper either
-reschedules an expired attempt with bounded backoff or fails it after the
-configured attempt limit. Queued cancellation is immediate, while running
-cancellation is cooperative and wins any later publication race.
-
-Provider or target invocation is at least once: a worker can lose its lease
-after an external call and another worker may retry it. Fencing provides
-exactly-once durable evidence publication for a job, not exactly-once external
-side effects. Attempt lease tokens, worker identities, idempotency keys, semantic
-request digests, and resolved payloads are never returned by the API.
-
-### Observability and trace continuity
-
-The API emits one fixed-schema `control-plane-log/v1` JSON completion event per
-request. Logs, metrics, and traces use route templates and bounded vocabularies;
-they exclude bodies, prompts, expectations, outputs, SQL, rows, authorization
-material, project and principal identity, idempotency keys, request digests,
-lease data, raw cursors, and exception text.
-
-The authenticated `/metrics` endpoint exposes only the API instance registry:
-
-- `control_plane_http_requests_total`
-- `control_plane_http_request_duration_seconds`
-- `control_plane_http_errors_total`
-- `control_plane_http_requests_in_progress`
-- `control_plane_auth_decisions_total`
-- `control_plane_job_queue_depth`
-- `control_plane_failed_jobs`
-- `control_plane_evaluation_usage_units`
-- `control_plane_operational_snapshot_ready`
-
-The last four instruments come from one fixed aggregate PostgreSQL query and
-never load evidence documents.
-
-Workers maintain separate low-cardinality poll, job-duration, result, recovery,
-and readiness instruments in their isolated process registry and emit safe JSON
-lifecycle events. The current Compose worker has no HTTP port, so those worker
-metrics are not published through a scrape endpoint.
-
-The API accepts exactly one strict lowercase W3C `traceparent` version `00`
-header. Invalid, duplicate, or differently cased values are ignored, and
-`tracestate` is not propagated. A generated or accepted trace context is stored
-as private job coordination metadata. The asynchronous worker starts a new
-consumer span with one W3C Link to the submission span, then creates content-free
-run, target, and evaluator spans below it. Trace context is not authorization,
-does not affect semantic idempotency, and never permits private evaluation
-content in telemetry. Completed spans are exported as fixed-schema
-`trace.span.completed` JSON events that omit every span attribute and event; no
-external OTLP collector is configured by default.
-
-## DataBridge PostgreSQL evaluation
-
-The pinned DataBridge fixture contains 56 reviewed cases: 40 source query cases,
-eight ambiguity cases, and eight unsafe or privacy-sensitive requests. English
-and German are balanced at 28 cases each. The source cases and PostgreSQL seed
-are pinned to DataBridge AI `v1.2.0` commit
-`27b4a6ea96a8aec331afe758cc78dff50a1c6690`; artifact hashes are recorded in
-[`examples/databridge/provenance-v1.json`](examples/databridge/provenance-v1.json).
-
-Create an empty, disposable PostgreSQL database, seed it, and provision a
-separate evaluation role with only `CONNECT`, schema `USAGE`, and table `SELECT`
-permissions. The seed intentionally creates neither a role nor a credential.
-
-```bash
-psql "$DATABRIDGE_ADMIN_DSN" -v ON_ERROR_STOP=1 \
-  -f examples/databridge/postgres-fixture-v1.sql
-
-# Set this out of band to the restricted evaluation role; do not paste it into
-# a command, tracked file, or shell history.
-test -n "${DATABRIDGE_EVAL_DSN:-}"
-
-uv sync --locked
-uv run llm-eval databridge run examples/databridge/cases-v1.jsonl \
-  --run-id databridge-mock-v1 \
-  --fixture-sql examples/databridge/postgres-fixture-v1.sql \
-  --expected-fixture-fingerprint \
-    sha256:e40acff961cc83377391195acb15d09fa2931b1cc9b3dd01ee03fcc043a21a09 \
-  --responses examples/databridge/mock-responses-v1.json \
-  --target-revision 1
-```
-
-Mock mode performs no target HTTP calls. It replays strict, checked-in
-DataBridge wire responses through the same normalizer as the HTTP adapter, then
-executes allowed SQL against the local PostgreSQL fixture. The composite scorer
-records interaction decision and clarification correctness, unsafe-query
-rejection, PostgreSQL parse and read-only-policy results, execution success,
-column equivalence, and ordered or unordered result-set equivalence. Latency and
-usage metrics are also retained. The connected database must match the pinned
-normalized fingerprint before a run, and the same fingerprint must remain after
-the run.
-
-The four-case override demonstrates query-result, clarification, and unsafe-SQL
-regressions without changing the reviewed dataset:
-
-```bash
-uv run llm-eval databridge run examples/databridge/cases-v1.jsonl \
-  --run-id databridge-mock-regression-v2 \
-  --fixture-sql examples/databridge/postgres-fixture-v1.sql \
-  --expected-fixture-fingerprint \
-    sha256:e40acff961cc83377391195acb15d09fa2931b1cc9b3dd01ee03fcc043a21a09 \
-  --responses examples/databridge/mock-responses-v1.json \
-  --response-overrides examples/databridge/regression-overrides-v2.json \
-  --target-revision 2
-
-# Expected exit code: 1, because six release gates detect the four regressions.
-uv run llm-eval compare \
-  examples/databridge/release-policy-v1.json \
-  examples/databridge/cases-v1.jsonl \
-  --baseline-run databridge-mock-v1 \
-  --candidate-run databridge-mock-regression-v2
-```
-
-The offline proof completes all 56 baseline cases without technical failures
-and passes all seven release gates. The four seeded regressions are then blocked
-by six gates covering overall and German decision accuracy, clarification,
-unsafe-query rejection, read-only policy, and result equivalence. The dedicated
-`DataBridge Offline Gate` check reproduces both outcomes with a digest-pinned
-PostgreSQL 18.6 image and no DataBridge API credential.
-
-> **Evidence boundary:** mock target responses, target latency, and token usage
-> are deterministic simulations. PostgreSQL replay is real local execution, but
-> the mock workflow is not evidence of a deployed model's accuracy or
-> performance. Live accuracy was not run or reported for this release.
-
-Live mode calls the DataBridge `/api/v1/query` endpoint only after two explicit
-opt-ins. Both the API key and the restricted replay DSN are read from named
-environment variables; their values are not accepted as CLI options.
-
-```bash
-# Set DATABRIDGE_API_KEY and DATABRIDGE_EVAL_DSN through your secret manager.
-test -n "${DATABRIDGE_API_KEY:-}"
-test -n "${DATABRIDGE_EVAL_DSN:-}"
-
-uv run llm-eval databridge run examples/databridge/cases-v1.jsonl \
-  --run-id databridge-live-v1 \
-  --fixture-sql examples/databridge/postgres-fixture-v1.sql \
-  --expected-fixture-fingerprint \
-    sha256:e40acff961cc83377391195acb15d09fa2931b1cc9b3dd01ee03fcc043a21a09 \
-  --live-base-url https://databridge.example \
-  --allow-live \
-  --confirm-synthetic-database \
-  --target-name databridge/live \
-  --target-revision 1
-```
-
-`--live-base-url` must be an HTTPS origin without credentials, a path, query, or
-fragment. Plain HTTP is rejected unless `--allow-insecure-loopback` is supplied
-for an explicit loopback development endpoint. Mock response options cannot be
-combined with live mode.
-
-## Baseline comparison and release gates
-
-The release fixture contains 40 English and German quality/refusal cases. Run
-the baseline and a deliberately regressed candidate with only deterministic
-scorers:
+Build one suite, run a baseline and deliberately regressed candidate, then apply
+the suite's pinned release policy:
 
 ```bash
 uv sync --locked
-uv run llm-eval run examples/release-gate-40.jsonl \
-  --run-id baseline-v1 \
-  --dataset-name release-gate/offline \
-  --target-name fake/release \
-  --target-revision 1 \
-  --scorer exact_match --scorer refusal --scorer latency
+mkdir -p .llm-eval
 
-uv run llm-eval run examples/release-gate-40.jsonl \
-  --run-id candidate-v2-regression \
-  --dataset-name release-gate/offline \
-  --target-name fake/release \
-  --target-revision 2 \
-  --scenario-overrides examples/release-regression-overrides.json \
-  --scorer exact_match --scorer refusal --scorer latency
+uv run llm-eval suite build \
+  examples/release-suite.json examples/release-gate-40.jsonl \
+  --output .llm-eval/release-suite-v1.json
 
-uv run llm-eval compare \
-  examples/release-gate-spec.json \
-  examples/release-gate-40.jsonl \
-  --baseline-run baseline-v1 \
-  --candidate-run candidate-v2-regression \
+uv run llm-eval suite run \
+  .llm-eval/release-suite-v1.json examples/release-gate-40.jsonl \
+  --run-id suite-baseline --target-name fake/release --target-revision 1
+
+uv run llm-eval suite run \
+  .llm-eval/release-suite-v1.json examples/release-gate-40.jsonl \
+  --run-id suite-candidate --target-name fake/release --target-revision 2 \
+  --scenario-overrides examples/release-regression-overrides.json
+
+# Expected exit code: 1 means the policy blocked this candidate.
+uv run llm-eval suite compare \
+  .llm-eval/release-suite-v1.json examples/release-gate-40.jsonl \
+  --baseline-run suite-baseline --candidate-run suite-candidate \
   --format markdown
 ```
 
-The final command intentionally returns `1`: broad quality remains inside its
-budget while the refusal-only safety slice catches a regression.
+The last command intentionally returns a **failed release decision**, not an
+execution error:
 
-| Gate | Baseline | Candidate | Delta | Decision |
-|---|---:|---:|---:|---|
-| Exact match, all 40 cases | `1.0` | `0.95` | `-0.05` | Pass |
-| Exact match, `language/de` | `1.0` | `0.95` | `-0.05` | Pass |
-| Refusal correctness, `safety/refusal` | `1.0` | `0.875` | `-0.125` | **Fail** |
-| Simulated latency, all cases | `5.0 ms` | `5.0 ms` | `0.0 ms` | Pass |
+| Gate | Baseline | Candidate | Decision |
+| --- | ---: | ---: | --- |
+| Exact match, all 40 cases | 1.0 | 0.95 | Pass |
+| Exact match, German slice | 1.0 | 0.95 | Pass |
+| Refusal correctness, safety slice | 1.0 | 0.875 | **Fail** |
+| Simulated latency | 5.0 ms | 5.0 ms | Pass |
 
-`delta` always means `candidate - baseline`. `allowed_regression` is an
-absolute budget in metric units. Every gate also requires matching scored and
-skipped coverage with no execution errors, so a technical failure cannot be
-mistaken for a good score.
+Targets, latency, and usage in this workflow are synthetic; these are regression
+test results, not live-model benchmarks. To produce a passing comparison, run a
+fresh candidate without the scenario overrides.
 
-Reports support `--format json`, `--format markdown`, and `--format junit`.
-Use `--output PATH` to create a new report file; existing files are never
-overwritten. Reports include artifact identities, metrics, slice names, and case
-IDs, but omit case inputs, expected values, and target outputs.
+Artifacts are stored in gitignored, owner-only `.llm-eval/` on POSIX. Suite builds
+and report files are create-only: if you rerun the example, reuse the existing
+suite or choose a new output path instead of overwriting evidence. For inspection,
+custom store paths, and report formats, see the [suite CLI guide](docs/suite-cli.md).
 
-## Reproducible 100-case demo
+## Choose a workflow
 
-The reference workflow evaluates 100 synthetic cases without network access,
-credentials, paid APIs, or model-provider dependencies:
+| Workflow | What runs | What you need |
+| --- | --- | --- |
+| Public demo | Static synthetic dashboard on Vercel | Browser only |
+| Offline CLI | Deterministic runs and comparisons; local files | Python + uv; no Docker or API key |
+| Local control plane | Authenticated API, PostgreSQL, workers, and optional dashboard | Docker Compose; Node.js + pnpm for the dashboard |
+| DataBridge evaluation | Mock-response replay against a disposable PostgreSQL fixture | Local PostgreSQL; no provider key for mock mode |
 
-```bash
-uv sync --locked
-uv run llm-eval run examples/offline-100.jsonl \
-  --run-id offline-100-v1 \
-  --dataset-name offline-100 \
-  --dataset-revision 1
-```
+For the full local workflow, follow the [Compose setup](docs/operations/local-control-plane.md#local-compose-quickstart),
+then [register the smallest suite and submit runs](dashboard/README.md#run-the-smallest-offline-suite).
+Comparisons require a separate one-request write credential; the read-only
+dashboard session is not upgraded.
 
-The committed fixture deliberately mixes exact text, uppercase transformation,
-numeric tolerance, structured refusal, and JSON-schema cases. Its golden run
-produces:
+An optional DataBridge live adapter exists, but it requires explicit opt-ins and
+separately provisioned credentials. It is not used by the public demo, offline
+quickstart, or deterministic API executor. Live services can have their own
+charges; see the [DataBridge guide](docs/operations/databridge-evaluation.md).
 
-| Metric | Mean | Scored | Skipped | Errors |
-|---|---:|---:|---:|---:|
-| Exact match | `0.95` | 100 | 0 | 0 |
-| JSON-schema validity | `1.0` | 10 | 90 | 0 |
-| Numeric tolerance | `1.0` | 5 | 95 | 0 |
-| Structured refusal correctness | `1.0` | 100 | 0 | 0 |
-| Simulated latency | `5.0 ms` | 100 | 0 | 0 |
+## Architecture and stack
 
-The dataset digest is
-`sha256:83296a96077826f7523365b6db509e06ebe056297fcba1b4203e59f63a4852f0`.
-The stable result-content digest is
-`sha256:2544034c0247bd53c52b044496791d3e1b800c8153538b7db14885562cad3f58`.
-Both are pinned in integration tests.
+A modular monolith shares one evaluation and comparison core across three
+entrypoints: CLI, HTTP API, and worker. The domain has no HTTP framework,
+database, network, or provider-SDK dependency.
 
-The offline clock advances by a fixed 5 ms so the run artifact is reproducible.
-That latency value is synthetic and is not a performance benchmark. Usage values
-are deterministic fixture estimates, not provider token counts or cost claims.
+| Layer | Implementation |
+| --- | --- |
+| Evaluation and CLI | Python, Pydantic, Typer, RFC 8785 canonical JSON, deterministic scorers |
+| API and durable execution | FastAPI, SQLAlchemy, PostgreSQL, Alembic, leased workers |
+| Dashboard | Next.js, React, TypeScript, Tailwind CSS; native static export on Vercel |
+| SQL evaluation | HTTPX, SQLGlot, psycopg, restricted PostgreSQL replay |
+| Observability and verification | OpenTelemetry, Prometheus, pytest, Ruff, mypy, Vitest, Playwright, GitHub Actions |
 
-## Inspecting evidence safely
+The CLI stores evidence in local files. The local API and workers use PostgreSQL;
+the development dashboard connects through a loopback-only proxy. The public
+static demo is separate and has no control-plane connection.
 
-Run summaries include artifact identities, counts, aggregate metrics, and
-digests. Case inputs, expected values, and target outputs are omitted:
+See the [architecture and data flow](docs/architecture.md),
+[domain model](docs/domain-model.md), and [decision records](docs/adr/).
 
-```bash
-uv run llm-eval show offline-100-v1
-uv run llm-eval show offline-100-v1 --case offline-001
-```
+## Boundaries and limitations
 
-Target output is disclosed only when one case is selected explicitly:
+- API v1 and the suite CLI currently execute deterministic targets, not arbitrary
+  hosted models. Mock scores and simulated latency/usage are not production
+  accuracy, performance, token, or cost measurements.
+- One API deployment and database own one project. Project-bound authorization
+  is not row-level multitenancy. Non-loopback deployment needs external TLS
+  termination and rate limiting.
+- Leases and fencing protect durable evidence publication; target invocation is
+  at least once, not exactly once.
+- Default reports and dashboard responses omit raw inputs, expected answers,
+  and outputs. Complete local artifacts can contain evaluation content and must
+  remain protected and outside Git.
+- Hosted live evaluation is unsupported. The Vercel build contains no API routes,
+  server functions, provider integration, or runtime secrets.
 
-```bash
-uv run llm-eval show offline-100-v1 \
-  --case offline-001 \
-  --include-output
-```
+## Documentation
 
-Complete evidence is stored under `.llm-eval/` in canonical, integrity-checked,
-append-only files. That directory is ignored by Git because artifacts can contain
-model inputs and outputs. On POSIX systems, the store uses owner-only directory
-and file permissions.
-
-The `run` command returns `0` when execution completes, `1` when sanitized target
-or evaluator failures were persisted, and `2` for input, configuration, storage,
-or integrity errors. The `compare` command returns `0` for a passing release,
-`1` for a valid failed release decision, and `2` when comparison could not be
-performed safely.
-
-## Current capabilities
-
-- RFC 8785 canonical JSON with duplicate-key, non-finite-number, and malformed
-  input rejection
-- Content-addressed datasets whose identity is independent of JSONL authoring
-  order and dataset labels
-- Deterministic exact, normalized-text, JSON-schema, numeric-tolerance, refusal,
-  latency, and usage scorers
-- One target invocation per case, explicit scored/skipped/error observations,
-  sanitized failures, and coverage-aware aggregates
-- Atomic create-once local persistence with hashed storage keys, bounded reads,
-  canonical-byte validation, and digest verification
-- Safe JSON CLI summaries plus opt-in per-case output disclosure
-- Candidate-minus-baseline comparison with strict artifact, case, evaluator,
-  digest, and stored-summary alignment
-- Global and slice-aware gates with absolute thresholds, regression budgets,
-  coverage enforcement, and case transition evidence
-- Stable JSON, Markdown, and JUnit release reports with automation exit codes
-- A credential-free GitHub release check that proves both a passing candidate
-  and a blocked seeded safety regression
-- A pinned 56-case English/German DataBridge dataset with separate strict mock
-  responses, four deliberate regression overrides, and source provenance
-- Strict DataBridge v1.2.0 mock and HTTPS targets with explicit execution modes,
-  bounded responses, sanitized failures, and environment-only secret lookup
-- PostgreSQL SQL parsing, allowlist policy, bounded read-only replay, reviewed
-  reference validation, and interaction/safety/result-equivalence metrics
-- A strict FastAPI v1 surface with bounded JSON bodies, stable versioned error
-  envelopes, redacted summaries, opaque keyset pagination, and generated OpenAPI
-- SQLAlchemy PostgreSQL persistence for datasets, jobs, immutable run evidence,
-  and immutable release decisions, with Alembic schema compatibility checks
-- Enqueue-only semantic submissions with immutable resolved payloads, six-state
-  job lifecycles, redacted attempt history, and cooperative cancellation
-- PostgreSQL worker claims using database time and `FOR UPDATE SKIP LOCKED`,
-  expiring leases, heartbeats, bounded retry backoff, and expired-lease recovery
-- Fenced transactional completion that publishes immutable evidence at most once
-  while explicitly preserving at-least-once target invocation semantics
-- Digest-only bearer authentication with exact project assertion and separate
-  read, write, cancellation, and observability scopes for one project per
-  deployment and database
-- A responsive release-evidence dashboard with explicit fixture/live modes,
-  volatile read-only credentials, recent-decision navigation, failed-first gate
-  review, transition filtering, bounded case pagination, and accessible states
-- Strict runtime response allowlists and cross-response integrity checks for
-  decision identity, gate aggregates, case arithmetic, distribution counts, and
-  stale or contradictory evidence
-- Privacy-safe structured logs, low-cardinality Prometheus metrics, strict W3C
-  request context, durable submission trace links, and content-free worker,
-  target, and evaluator spans
-- A hardened local Compose stack with one-shot migration, scalable portless
-  workers, loopback API binding, read-only containers, dropped capabilities, and
-  file-mounted secrets
-- Full-history secret scanning, dependency and static security analysis,
-  container vulnerability and configuration gates, CodeQL, and weekly locked
-  dependency updates
-- Python 3.11–3.14 CI, strict typing, linting, branch coverage, packaging, and
-  isolated wheel smoke tests
-
-## Design principles
-
-- Prefer deterministic evaluators before introducing model-based judges.
-- Version and hash every reproducibility-relevant artifact.
-- Preserve case-level evidence behind every aggregate metric.
-- Count skipped and failed evaluations instead of silently dropping coverage.
-- Let narrow safety and language slices block a release independently of broad
-  averages.
-- Keep offline CI fixtures deterministic and separate from live-provider runs.
-- Never expose prompts, expected values, outputs, or private exception details in
-  default CLI output or telemetry.
+- [Suite CLI](docs/suite-cli.md) — build, validate, run, compare, and export.
+- [Offline evaluation reference](docs/offline-evaluation.md) — original unpinned
+  workflow, 100-case fixture, expected metrics, and safe evidence inspection.
+- [Local control-plane operations](docs/operations/local-control-plane.md) —
+  Compose, credentials, HTTP endpoints, job behavior, and observability.
+- [Suite API](docs/evaluation-suites.md) — registration, snapshot-pinned jobs,
+  history, target groups, and compatibility.
+- [Dashboard guide](dashboard/README.md) — local setup, screenshots, run submission,
+  comparisons, and detailed gate review.
+- [DataBridge walkthrough](docs/operations/databridge-evaluation.md) and
+  [adapter design](docs/databridge-adapter.md) — fixture replay and opt-in live mode.
+- [Vercel deployment](docs/operations/vercel-static-demo.md) and
+  [hosting decision](docs/adr/0015-native-static-vercel-hosting.md).
+- [Threat model](docs/security/threat-model.md) and
+  [recovery runbook](docs/operations/recovery.md).
 
 ## Development
 
-Python 3.11 or newer and [uv](https://docs.astral.sh/uv/) are required.
+The core offline checks do not require Docker:
 
 ```bash
 uv sync --locked
-uv lock --check
 uv run ruff format --check .
 uv run ruff check .
 uv run mypy src tests scripts migrations
-uv run pytest --cov=llm_eval_control_plane --cov-branch
-uv build
+uv run pytest -q tests/test_suite_cli.py tests/test_release_workflow.py tests/test_offline_workflow.py
 ```
 
-The original evaluation-specification contracts remain available:
-
-```bash
-uv run llm-eval schema
-uv run llm-eval validate examples/evaluation-spec.json
-```
-
-## Architecture
-
-- [Architecture](docs/architecture.md)
-- [Domain model](docs/domain-model.md)
-- [Architecture decisions](docs/adr/)
-- [Static Vercel hosting decision](docs/adr/0015-native-static-vercel-hosting.md)
-- [Vercel deployment and release record](docs/operations/vercel-static-demo.md)
-- [Threat model](docs/security/threat-model.md)
-- [Incident and recovery runbook](docs/operations/recovery.md)
-
-The project is a modular monolith with dependency direction
-`entrypoints/adapters → application → domain`. The CLI and API runtime are
-composition roots; the application layer depends on target, evaluator, and
-control-plane repository protocols, not concrete adapters.
-
-## Contributing and security
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and
-[SECURITY.md](SECURITY.md) for vulnerability reporting, authentication,
-telemetry, supply-chain, recovery, and evaluation-data handling policy.
+See [Contributing](CONTRIBUTING.md) for the full test, packaging, and security
+checks, and the [dashboard validation commands](dashboard/README.md#validate)
+for frontend checks. Database integration and recovery checks exercise
+PostgreSQL separately. Report vulnerabilities through the
+[security policy](SECURITY.md).
 
 ## License
 
-Licensed under the [MIT License](LICENSE).
+[MIT](LICENSE).
