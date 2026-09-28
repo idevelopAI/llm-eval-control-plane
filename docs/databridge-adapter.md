@@ -2,11 +2,14 @@
 
 ## Scope
 
-Phase 3 evaluates the public DataBridge AI v1.2.0 text-to-SQL behavior against a
+The adapter evaluates the public DataBridge AI v1.2.0 text-to-SQL behavior against a
 synthetic company database. The checked-in source fixture is derived from
 [`idevelopAI/databridge-ai` v1.2.0](https://github.com/idevelopAI/databridge-ai/tree/27b4a6ea96a8aec331afe758cc78dff50a1c6690)
 and records its source commit and transformed-file digests in
 `examples/databridge/provenance-v1.json`.
+
+For setup, fixture seeding, regression commands, and opt-in live execution, see
+the [DataBridge evaluation walkthrough](operations/databridge-evaluation.md).
 
 The reviewed dataset contains 56 cases:
 

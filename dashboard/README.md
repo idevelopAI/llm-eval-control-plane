@@ -294,9 +294,9 @@ deployment boundary. Historical decision records are not current setup instructi
 
 ## Run locally
 
-Start the control-plane Compose stack first, including its project-bound
-authentication configuration. Then install the locked frontend dependencies and
-start the development server:
+Start the [control-plane Compose stack](../docs/operations/local-control-plane.md#local-compose-quickstart)
+first, including its project-bound authentication configuration. Then install
+the locked frontend dependencies and start the development server:
 
 ```bash
 cd dashboard
