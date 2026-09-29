@@ -23,12 +23,27 @@ credential markers, local write controls, provider endpoints, stale metadata,
 and gradients. Application chunks must contain no data requests or browser
 persistence. Generated artifacts remain ignored by Git.
 
-Upload **only the contents of `dashboard/out/`**, either as a folder or as a ZIP
-whose root contains `index.html` and `vercel.json`, using
-[Vercel Drop](https://vercel.com/drop). Select the existing Hobby workspace and
-the project name `llm-eval-control-plane-idevelopai`. Do not upload the repository
-root, `.next/`, `.env` files, backend source, or local evidence. Do not select a
-framework, build command, Pro trial, runtime secret, integration, or paid add-on.
+Upload **only the contents of `dashboard/out/`** to the existing Hobby project
+`llm-eval-control-plane-idevelopai`. With the authenticated Vercel CLI, run from
+`dashboard/`, replacing `YOUR_EXISTING_HOBBY_WORKSPACE` with the project's actual
+workspace slug:
+
+```bash
+# Inspect the upload boundary without creating a deployment.
+vercel deploy --cwd out --project llm-eval-control-plane-idevelopai \
+  --scope YOUR_EXISTING_HOBBY_WORKSPACE --dry --json
+
+# Publish only after reviewing the dry run and passing the checks above.
+vercel deploy --cwd out --project llm-eval-control-plane-idevelopai \
+  --scope YOUR_EXISTING_HOBBY_WORKSPACE --prod
+```
+
+The dry run must identify the `Other` framework and list only the verified static
+export and `vercel.json`. CLI authentication stays outside the artifact. Do not
+upload the repository root, `.next/`, `.env` files, backend source, or local
+evidence. Do not select a framework, build command, Pro trial, runtime secret,
+integration, or paid add-on. Do not use `--prebuilt`: a Next.js `out/` directory
+is a static export, not Vercel's separate Build Output API format.
 
 In Project Settings → General → Vercel Toolbar, set both production and
 pre-production overrides to **Off**. Apply this before deployment when possible;
@@ -36,10 +51,10 @@ otherwise redeploy the same source with the updated settings. This avoids
 Vercel appending a toolbar loader to an otherwise byte-identical static asset.
 Leave Web Analytics and Speed Insights disabled.
 
-The new-project Drop flow creates a project; it does not set up automatic Git
-deployments. Do not repeat that flow for updates. Use an upload explicitly scoped
-to the existing project, Vercel's authenticated CLI, or a deliberately connected
-reviewed Git repository, preserving the static-only build and upload boundary.
+The [new-project Drop flow](https://vercel.com/drop) creates a project; it does
+not set up automatic Git deployments. Do not repeat that flow for updates. An
+alternative upload must be explicitly scoped to the existing project, with
+`index.html` and `vercel.json` at its root, preserving the static-only boundary.
 The deployment's **Redeploy** action reuses the same source with current project
 settings; it does not upload changed local files.
 
