@@ -85,8 +85,17 @@ Before changing the public README link, verify the assigned production URL:
   responses despite the configured 404/405. It must not expose a backend, return
   application data, or grant cross-origin preflight permission. An empty 204 is
   not evidence of an available API.
+- Vercel may add `Access-Control-Allow-Origin: *` to public static HTML and
+  static error responses. Verify that those bodies still match the public
+  export, that preflight responses do not grant permission, and that no response
+  sets `Access-Control-Allow-Credentials`, `Access-Control-Allow-Methods`, or
+  `Access-Control-Allow-Headers`. Do not confuse this CDN behavior with the
+  local preview, which emits no CORS allowance.
 - Assets load, gate selection and filters work, and no local credential controls
   appear. The deployment has static assets only, with no server functions.
+- At phone, tablet, and laptop widths, check that every gate's scores, delta,
+  coverage, and outcome remain inside its card. The compact layout follows the
+  ledger's available width, not just the viewport width.
 - Compare every public file with the local verified export, including JavaScript;
   a host-injected toolbar must not silently bypass the artifact checks.
 
@@ -98,6 +107,49 @@ fallback, and its retired build path is no longer maintained. See
 [ADR 0015](../adr/0015-native-static-vercel-hosting.md).
 
 ## Release record
+
+### Current release — 2026-09-29
+
+- Production URL: <https://llm-eval-control-plane-idevelopai.vercel.app/>.
+- Dashboard source revision: `5fbfc0b02856a12f87dc4fe960f9ecb561ac6ab0`.
+  Subsequent README and release-record changes do not alter the export.
+- Deployment: `dpl_C9uF75ButNjLpm7d2baCDQSbUYKK`, Ready / Production.
+  Published with Vercel CLI 60.1.3 to the existing Hobby project, uploading only
+  the reviewed static export after an upload dry run.
+- Artifact: 59 regular files / 2,384,965 bytes, including `vercel.json`.
+  Vercel serves 58 static assets; no server functions are deployed.
+- All 58 public files matched the local export byte-for-byte, including CSS,
+  JavaScript, HTML, and images. Public-file manifest SHA-256:
+  `3f76b6ac19faf3b34a979b9f86a721e6cd1d2fc92307c361da6a6df95f2aa6a1`.
+  This hashes sorted records of `path`, a NUL separator, the file's SHA-256,
+  and a newline; the host-only `vercel.json` is excluded.
+- 53 unauthenticated method/path checks passed. `/api`, `/api/probe`, `/v1`,
+  and `/v1/probe` denied reads and writes with 404; root/index writes returned
+  405. Unknown reads and `/.env`, `/.git/config`, `/package.json`, and
+  `/vercel.json` returned 404. Security headers, canonical/social metadata,
+  `noindex`, and private/no-store HTML caching matched the expected policy.
+- The four empty-204 `OPTIONS` exceptions remained `/`, `/index.html`, `/v1`,
+  and `/v1/probe`. Synthetic preflights requested `POST` with authorization and
+  content-type headers; no response granted preflight permission. Some public
+  HTML and error responses carried the CDN's wildcard origin header, but their
+  bodies matched the public export. No credential allowance, allowed-method or
+  allowed-header grant, or cookie was present.
+- Gate filters, the empty state, failed-gate navigation, score expansion, and
+  bounded distributions worked in the browser. A laptop-width overflow found
+  during verification was fixed by sizing the compact gate layout against its
+  panel. All four gate rows fit at 320, 390, 768, 1024, 1280, 1440, and 1920px
+  viewport widths in the local production export; the corrected layout was
+  also visually verified on the public deployment.
+- Local validation passed: 294 tests across 23 files, 6 static-boundary tests,
+  generated API types, lint, typecheck, native static build, artifact verifier,
+  public-preview smoke test, and loopback-only development smoke test.
+  The locked dependency audit reported no known vulnerabilities.
+- No account upgrade, paid add-on, backend, database, runtime credential, or
+  model-provider integration was introduced. Toolbar injection remains off;
+  Web Analytics and Speed Insights remain disabled. Static delivery and
+  deployment still consume the existing Hobby allowances.
+
+### Previous release — 2026-09-25
 
 Verified on **2026-09-25**:
 
@@ -137,7 +189,8 @@ historical evidence only and is not an active deployment or rollback guide.
 
 The current source uses only native Next.js development and static export.
 Legacy hosting metadata, plugin dependencies, Worker build configuration, and
-the unused platform-authenticated read prototype have been removed. This cleanup
-does not itself redeploy Vercel or change the former host's access setting. The
-artifact sizes, test counts, and deployment identifiers above describe the
-September 25 release, not a new deployment of the cleanup.
+the unused platform-authenticated read prototype have been removed. The
+September 29 release deploys this cleaned source and the subsequent dependency
+and responsive-layout updates. The September 25 record is retained as historical
+evidence, not the current artifact. Neither the cleanup nor the new Vercel
+deployment changes the former host's owner-only access setting.
