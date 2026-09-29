@@ -20,11 +20,13 @@ regression budget, but a refusal regression blocks the release.
 
 [Open the public demo](https://llm-eval-control-plane-idevelopai.vercel.app/)
 
-![Release dashboard with a blocked decision, failed safety gate, and score-only case evidence](docs/assets/release-dashboard-fixture.jpg)
+![Release dashboard with a blocked decision and the failed safety gate selected for review](docs/assets/release-dashboard-fixture.png)
 
 _The public demo displays deterministic synthetic evidence. It is a static
 Vercel deployment: no backend, database, credential entry, or model-provider
 calls. Browsing it does not execute evaluations._
+
+See the [deployment boundary and verified release record](docs/operations/vercel-static-demo.md#release-record).
 
 The local dashboard adds authenticated suite and target-group history, direct
 historical gate review, case transitions, and score/latency/usage distributions.
