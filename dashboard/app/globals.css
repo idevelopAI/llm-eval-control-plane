@@ -599,6 +599,11 @@ h1 {
   background: rgba(255, 253, 247, 0.94);
 }
 
+.ledger-panel {
+  min-width: 0;
+  container: gate-ledger / inline-size;
+}
+
 .panel-heading {
   display: flex;
   min-height: 76px;
@@ -1250,14 +1255,6 @@ h1 {
   .primary-action {
     margin: 0;
   }
-
-  .gate-row {
-    grid-template-columns: 28px minmax(160px, 1.2fr) minmax(185px, 1fr) 75px minmax(125px, 0.8fr);
-  }
-
-  .coverage-cell {
-    display: none;
-  }
 }
 
 @media (max-width: 700px) {
@@ -1347,11 +1344,20 @@ h1 {
     min-height: 44px;
   }
 
-  .gate-row,
-  .gate-row.is-failed {
+  .case-list {
+    grid-template-columns: 1fr;
+  }
+
+  .case-evidence dl {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* The sidebar and evidence panel reduce usable width even on wide screens. */
+@container gate-ledger (max-width: 900px) {
+  .gate-row {
     grid-template-columns: 30px minmax(0, 1fr) auto;
     gap: 10px;
-    background: transparent;
   }
 
   .gate-identity {
@@ -1374,22 +1380,10 @@ h1 {
     text-align: right;
   }
 
-  .coverage-cell {
-    display: block;
-  }
-
   .gate-outcome {
     padding: 8px 0 0;
     border-top: 1px solid var(--line);
     border-left: 0;
-  }
-
-  .case-list {
-    grid-template-columns: 1fr;
-  }
-
-  .case-evidence dl {
-    grid-template-columns: 1fr;
   }
 }
 
