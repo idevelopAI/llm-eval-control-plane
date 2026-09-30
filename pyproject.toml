@@ -58,6 +58,8 @@ security = [
 
 [tool.uv]
 build-constraint-dependencies = ["hatchling==1.27.0"]
+# Security floor for the audit tooling's transitive HTTP client; no runtime extra.
+constraint-dependencies = ["urllib3>=2.8.0,<3"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/llm_eval_control_plane"]
