@@ -7,3 +7,8 @@ allowBuilds:
 overrides:
   'sharp@>=0.35.0 <0.35.4': 0.35.4
   'js-yaml@>=4.0.0 <4.3.2': 4.3.2
+  # GHSA-qhr7-859c-m2p7, GHSA-6j4f-fj2g-mc7p, and GHSA-q2hr-2g5m-vwhr.
+  # Preserve each installed major while requiring the complete set of fixes.
+  'brace-expansion@>=1.0.0 <1.1.21': 1.1.21
+  'brace-expansion@>=2.0.0 <2.1.7': 2.1.7
+  'brace-expansion@>=5.0.0 <5.0.12': 5.0.12
