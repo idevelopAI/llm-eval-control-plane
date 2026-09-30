@@ -1645,7 +1645,7 @@ def test_multi_worker_batch_publishes_every_job_once(
     assert sum(calls for _results, calls in outcomes) == len(jobs)
 
     with postgres_engine.connect() as connection:
-        stored_run_ids = set(
+        stored_run_ids: set[str] = set(
             connection.execute(
                 select(runs_table.c.run_id).where(
                     runs_table.c.run_id.in_(tuple(job.resource_id for job in jobs))
