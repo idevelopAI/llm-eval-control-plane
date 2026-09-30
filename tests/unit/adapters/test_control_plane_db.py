@@ -1274,7 +1274,7 @@ def test_suite_document_must_remain_canonical_and_valid(
     repository.put_dataset(DatasetRecord(dataset=data, created_at=NOW))
     repository.put_suite(SuiteRecord(suite=evaluation_suite(data), created_at=NOW))
     with engine.connect() as connection:
-        document = connection.execute(select(suites_table.c.document)).scalar_one()
+        document: str = connection.execute(select(suites_table.c.document)).scalar_one()
 
     with engine.begin() as connection:
         connection.execute(update(suites_table).values(document=f" {document}"))
@@ -1714,7 +1714,7 @@ def test_private_payload_read_path_rejects_canonical_and_index_corruption(
     for record in records:
         repository.begin_job(record, payload)
     with engine.connect() as connection:
-        document = connection.execute(
+        document: str = connection.execute(
             select(job_payloads_table.c.document).where(
                 job_payloads_table.c.job_id == records[0].job_id
             )
@@ -2095,7 +2095,7 @@ def test_valid_canonical_document_cannot_be_swapped_under_another_key(
     repository.put_dataset(first)
     repository.put_dataset(second)
     with engine.begin() as connection:
-        first_document = connection.execute(
+        first_document: str = connection.execute(
             select(datasets_table.c.document).where(datasets_table.c.name == "first")
         ).scalar_one()
         connection.execute(
