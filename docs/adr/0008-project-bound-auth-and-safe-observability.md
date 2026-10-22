@@ -64,6 +64,13 @@ neither runtime mutates global providers. Telemetry failures are suppressed at
 the instrumentation boundary and cannot change request, job, recovery, or
 evidence behavior.
 
+The API explicitly disables FastAPI's native tracing, metrics, logs, operation
+spans, and automatic exporter configuration. Global OpenTelemetry providers or
+`FASTAPI_OTEL_AUTO_CONFIGURE=true` must not enable a second, unfiltered collection
+path. Regression tests exercise successful requests, validation failures, and
+server errors with in-memory global providers while verifying that injected
+allowlisted telemetry still works.
+
 API metrics use fixed methods, route templates, status classes, error codes,
 authorization outcomes, and persisted queue, failure, and aggregate usage
 values from one fixed-cardinality query. Worker metrics use fixed poll outcomes, job kinds,

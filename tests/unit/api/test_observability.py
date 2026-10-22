@@ -6,14 +6,25 @@ from typing import Never, cast
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.telemetry import _runtime as fastapi_telemetry_runtime
 from fastapi.testclient import TestClient
+from opentelemetry import _logs, metrics, trace
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk._logs.export import (
+    InMemoryLogRecordExporter,
+    SimpleLogRecordProcessor,
+)
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
+from pytest import MonkeyPatch
 
+from llm_eval_control_plane.api.app import create_app
 from llm_eval_control_plane.api.middleware import ApiBoundaryMiddleware
 from llm_eval_control_plane.api.observability import (
     ApiObservabilityMiddleware,
@@ -21,7 +32,7 @@ from llm_eval_control_plane.api.observability import (
 )
 from llm_eval_control_plane.observability import Observability
 
-from .conftest import AUTH_HEADERS, build_authorizer
+from .conftest import AUTH_HEADERS, ApiHarness, build_authorizer
 
 NOW = datetime(2026, 8, 25, 12, 34, 56, 789_000, tzinfo=UTC)
 TRACE_ID = "1234567890abcdef1234567890abcdef"
@@ -102,6 +113,92 @@ def _app(
 
 def _finished(exporter: InMemorySpanExporter) -> tuple[ReadableSpan, ...]:
     return tuple(exporter.get_finished_spans())
+
+
+def test_production_app_does_not_export_native_framework_telemetry(
+    api_harness: ApiHarness,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Global providers and exporter opt-in cannot bypass the safe envelope."""
+    telemetry, lines, safe_spans, safe_provider = _telemetry()
+    global_spans = InMemorySpanExporter()
+    global_tracer = TracerProvider(resource=Resource({}))
+    global_tracer.add_span_processor(SimpleSpanProcessor(global_spans))
+    # The SDK's in-memory exporter omits only its constructor's return annotation.
+    global_logs = InMemoryLogRecordExporter()  # type: ignore[no-untyped-call]
+    global_logger = LoggerProvider(resource=Resource({}))
+    global_logger.add_log_record_processor(SimpleLogRecordProcessor(global_logs))
+    global_reader = InMemoryMetricReader()
+    global_meter = MeterProvider(resource=Resource({}), metric_readers=[global_reader])
+    monkeypatch.setattr(trace, "get_tracer_provider", lambda: global_tracer)
+    monkeypatch.setattr(_logs, "get_logger_provider", lambda: global_logger)
+    monkeypatch.setattr(metrics, "get_meter_provider", lambda: global_meter)
+    monkeypatch.setenv("FASTAPI_OTEL_AUTO_CONFIGURE", "true")
+    monkeypatch.delenv("OTEL_SDK_DISABLED", raising=False)
+    exporter_lookups: list[str] = []
+
+    def capture_exporter_lookup(signal: str) -> None:
+        # Trap automatic setup before any exporter or network client is created.
+        exporter_lookups.append(signal)
+
+    def fail_get_job(_job_id: str) -> Never:
+        raise RuntimeError("private-exception-sentinel")
+
+    monkeypatch.setattr(
+        fastapi_telemetry_runtime, "_export_endpoint", capture_exporter_lookup
+    )
+    monkeypatch.setattr(api_harness.repository, "get_job", fail_get_job)
+    app = create_app(
+        service=api_harness.service,
+        authorizer=build_authorizer(),
+        telemetry=telemetry,
+    )
+    try:
+        with TestClient(
+            app, headers=AUTH_HEADERS, raise_server_exceptions=False
+        ) as client:
+            healthy = client.get("/health/live")
+            invalid = client.post(
+                "/v1/datasets?token=private-query-sentinel",
+                json={"name": "private-body-sentinel", "revision": "not-an-integer"},
+            )
+            failed = client.get("/v1/jobs/private-path-sentinel")
+
+        assert [healthy.status_code, invalid.status_code, failed.status_code] == [
+            200,
+            422,
+            500,
+        ]
+        assert global_spans.get_finished_spans() == ()
+        assert global_logs.get_finished_logs() == ()
+        assert global_reader.get_metrics_data() is None
+        assert exporter_lookups == []
+        # Operation spans must stay off even if a future change enables tracing.
+        assert app._telemetry["operation_spans"] is False
+        assert app._telemetry["auto_configure"] is False
+        events = [json.loads(line) for line in lines]
+        assert [event["http_status"] for event in events] == [200, 422, 500]
+        assert events[-1]["error_code"] == "internal_error"
+        spans = _finished(safe_spans)
+        assert len(spans) == 3
+        assert all(not span.events for span in spans)
+        captured = (
+            "".join(lines)
+            + telemetry.render_metrics().body.decode()
+            + "".join(span.to_json() for span in spans)
+        )
+        for sentinel in (
+            "private-query-sentinel",
+            "private-body-sentinel",
+            "private-path-sentinel",
+            "private-exception-sentinel",
+        ):
+            assert sentinel not in captured
+    finally:
+        safe_provider.shutdown()
+        global_tracer.shutdown()
+        global_logger.shutdown()
+        global_meter.shutdown()
 
 
 def test_request_telemetry_uses_only_route_template_and_allowlisted_fields() -> None:
