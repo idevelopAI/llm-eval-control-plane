@@ -240,6 +240,15 @@ def create_app(
         openapi_url="/openapi.json",
         docs_url=None,
         redoc_url=None,
+        # Only the injected, allowlisted telemetry may observe API requests.
+        # Native instrumentation can capture raw input through global providers.
+        telemetry={
+            "tracing": False,
+            "metrics": False,
+            "logs": False,
+            "operation_spans": False,
+            "auto_configure": False,
+        },
     )
     app.add_middleware(
         ApiBoundaryMiddleware,
