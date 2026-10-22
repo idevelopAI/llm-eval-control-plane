@@ -58,8 +58,13 @@ security = [
 
 [tool.uv]
 build-constraint-dependencies = ["hatchling==1.27.0"]
-# Security floors for transitive HTTP clients and their certificate trust store.
-constraint-dependencies = ["urllib3>=2.8.0,<3", "certifi>=2026.10.19"]
+# Security floors for transitive HTTP clients, trust roots, and migration templates.
+constraint-dependencies = [
+  "urllib3>=2.8.0,<3",
+  "certifi>=2026.10.19",
+  # GHSA-5639-2j2p-m4mx: Windows drive-letter template path traversal.
+  "mako>=1.4.2,<2",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/llm_eval_control_plane"]
