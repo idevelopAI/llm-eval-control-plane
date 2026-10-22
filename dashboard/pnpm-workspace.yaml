@@ -3,10 +3,14 @@ allowBuilds:
   sharp: false
   unrs-resolver: true
 # Security floors for transitive dependencies pinned by upstream packages.
-# GHSA-rgj7-g3m4-5g8c and GHSA-2883-xcg3-v3hh; keep the audit gate enabled.
+# Keep the audit gate enabled; floors also cover transitive upstream pins.
 overrides:
-  'sharp@>=0.35.0 <0.35.4': 0.35.4
+  # GHSA-rgj7-g3m4-5g8c and GHSA-wq5f-xc86-pv6w.
+  'sharp@>=0.35.0 <0.35.5': 0.35.5
+  # GHSA-2883-xcg3-v3hh.
   'js-yaml@>=4.0.0 <4.3.2': 4.3.2
+  # GHSA-68fv-2mgg-jv7q.
+  'source-map-js@>=1.0.0 <1.2.2': 1.2.2
   # GHSA-qhr7-859c-m2p7, GHSA-6j4f-fj2g-mc7p, and GHSA-q2hr-2g5m-vwhr.
   # Preserve each installed major while requiring the complete set of fixes.
   'brace-expansion@>=1.0.0 <1.1.21': 1.1.21
