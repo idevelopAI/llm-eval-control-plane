@@ -317,6 +317,7 @@ value must remain an explicit HTTP loopback origin with a port.
 ```bash
 cd dashboard
 pnpm run api:check
+pnpm run test:lint-toolchain
 pnpm run lint
 pnpm run typecheck
 pnpm run test
@@ -332,3 +333,9 @@ decision identity checks, isolated projection recovery, pagination boundaries,
 automated accessibility checks for the major UI states, a solid-fill visual
 contract, production artifact inspection, static-preview route probes, and
 native development proxy checks. `pnpm run check` runs the full sequence above.
+
+The lint toolchain includes an [exact-version single-root Next.js patch](patches/README.md)
+that removes an unused vulnerable glob dependency without disabling lint rules
+or suppressing security advisories. Custom `settings.next.rootDir` configuration
+is intentionally rejected. Review the patch and its regression tests when
+upgrading Next.js; the maintenance guide explains when and how to remove it.

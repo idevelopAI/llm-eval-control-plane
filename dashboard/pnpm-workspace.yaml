@@ -5,6 +5,9 @@ allowBuilds:
 # Security floors for transitive dependencies pinned by upstream packages.
 # Keep the audit gate enabled; floors also cover transitive upstream pins.
 overrides:
+  # The exact-version patch removes optional root globs, not Next lint rules.
+  # Remove this override with that patch once the upstream chain is safe.
+  '@next/eslint-plugin-next@16.4.2>fast-glob': '-'
   # GHSA-rgj7-g3m4-5g8c and GHSA-wq5f-xc86-pv6w.
   'sharp@>=0.35.0 <0.35.5': 0.35.5
   # GHSA-2883-xcg3-v3hh.
@@ -16,3 +19,5 @@ overrides:
   'brace-expansion@>=1.0.0 <1.1.21': 1.1.21
   'brace-expansion@>=2.0.0 <2.1.7': 2.1.7
   'brace-expansion@>=5.0.0 <5.0.12': 5.0.12
+patchedDependencies:
+  '@next/eslint-plugin-next@16.4.2': patches/@next__eslint-plugin-next@16.4.2.patch
