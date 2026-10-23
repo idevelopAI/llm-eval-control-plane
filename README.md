@@ -196,8 +196,9 @@ uv run pytest -q tests/test_suite_cli.py tests/test_release_workflow.py tests/te
 
 See [Contributing](CONTRIBUTING.md) for the full test, packaging, and security
 checks, and the [dashboard validation commands](dashboard/README.md#validate)
-for frontend checks. Database integration and recovery checks exercise
-PostgreSQL separately. Report vulnerabilities through the
+for frontend checks. Use the [disposable test-database setup](docs/operations/local-tests.md)
+for PostgreSQL integration and recovery tests; running without a configured
+database skips those tests. Report vulnerabilities through the
 [security policy](SECURITY.md).
 
 ## License
