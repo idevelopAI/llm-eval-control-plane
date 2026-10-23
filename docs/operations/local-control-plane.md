@@ -42,52 +42,42 @@ suite policy.
 
 The Compose stack mounts the database password and authentication configuration
 from gitignored files. Keep credential values out of `.env`, command arguments,
-shell history, and Git:
+shell history, and Git. These are first-time setup steps, not a password rotation
+procedure. If a secret file or database already exists, preserve it and follow
+the [recovery runbook](recovery.md#postgresql-credential) instead:
 
 ```bash
 (
   umask 077
+  set -C
+  test -t 0 || exit 1
+  test ! -L .secrets || exit 1
+  test ! -e .secrets/postgres-password.txt || exit 1
+  test ! -L .secrets/postgres-password.txt || exit 1
   mkdir -p .secrets
   chmod 0700 .secrets
-  touch .secrets/postgres-password.txt
-  chmod 0600 .secrets/postgres-password.txt
   printf 'Local PostgreSQL password: '
-  IFS= read -r -s CONTROL_PLANE_LOCAL_PASSWORD
+  IFS= read -r -s CONTROL_PLANE_LOCAL_PASSWORD || exit 1
   printf '\n'
+  test -n "$CONTROL_PLANE_LOCAL_PASSWORD" || exit 1
   printf '%s\n' "$CONTROL_PLANE_LOCAL_PASSWORD" \
     > .secrets/postgres-password.txt
   unset CONTROL_PLANE_LOCAL_PASSWORD
 )
 ```
 
-Create a bearer credential in a secret manager using the exact `cpk_` prefix
-followed by 43 URL-safe characters. Keep that raw value outside the repository.
-The authentication file stores only its SHA-256 digest and represents exactly
-one project. This schematic is deliberately invalid and must not be used as a
-credential or copied unchanged:
+For a new deployment, follow the [local credential setup](local-credentials.md)
+to create separate dashboard-reader and operator credentials in your secret
+manager and write `.secrets/control-plane-auth.json` through hidden prompts.
+Only credential digests are stored. Use one exact project ID throughout.
+Existing deployments should preserve their registry and use the
+[rotation procedure](recovery.md#api-authentication-material) instead of replacing
+it with the starter configuration.
 
-```json
-{
-  "schema_version": "control-plane-auth/v1",
-  "project_id": "<single-deployment-project-id>",
-  "principals": [
-    {
-      "principal_id": "<operator-id>",
-      "token_digest": "sha256:<64-lowercase-hex-characters>",
-      "scopes": [
-        "control-plane:cancel",
-        "control-plane:read",
-        "control-plane:write",
-        "observability:read"
-      ]
-    }
-  ]
-}
-```
-
-Write the resolved document to `.secrets/control-plane-auth.json` through a
-protected local process, then make the bind-mounted files readable by the fixed
-non-root container UID:
+The starter reader has only `control-plane:read`; the operator has read and
+write scopes. Cancellation and metrics access are not granted by this setup.
+Then make the bind-mounted files readable by the fixed non-root container UID
+while keeping the enclosing `.secrets/` directory mode `0700`:
 
 ```bash
 chmod 0444 \

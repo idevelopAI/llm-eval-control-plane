@@ -127,6 +127,9 @@ no real credential, provider, or hosted API is involved._
 
 ## Credential boundary
 
+For a new deployment, use the [two-credential setup guide](../docs/operations/local-credentials.md).
+It creates a digest-only registry without echoing or persisting raw credentials.
+
 Use a project credential with only `control-plane:read`. The raw value stays in
 one component-scoped closure for the lifetime of the tab. The dashboard does not
 write it to local storage, session storage, cookies, URLs, React state,
@@ -295,8 +298,8 @@ deployment boundary. Historical decision records are not current setup instructi
 ## Run locally
 
 Start the [control-plane Compose stack](../docs/operations/local-control-plane.md#local-compose-quickstart)
-first, including its project-bound authentication configuration. Then install
-the locked frontend dependencies and start the development server:
+first, including its [separate reader and operator credentials](../docs/operations/local-credentials.md).
+Then install the locked frontend dependencies and start the development server:
 
 ```bash
 cd dashboard
