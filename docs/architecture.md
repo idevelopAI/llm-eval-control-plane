@@ -44,36 +44,71 @@ The project is a modular monolith. The CLI, API, and worker runtimes are
 composition roots: each constructs concrete adapters and passes them into
 application-owned protocol ports.
 
+### Local control-plane runtime
+
+Arrows below show calls, not imports or construction. API and worker are
+separate processes with separate executor and repository instances. They share
+the PostgreSQL database, not an in-memory runner or queue.
+
 ```mermaid
-flowchart LR
-    CLI["CLI composition root"] --> RUNNER["Application runner"]
-    CLI --> COMPARE["Comparison + gate service"]
-    CLI --> ADAPTERS["Concrete adapters"]
-    API["FastAPI composition root"] --> CONTROL["Control-plane service"]
+flowchart TB
     DASHBOARD["Local React dashboard / Next.js dev"] -->|loopback same-origin proxy| API
-    HOSTED["Vercel static assets"] --> FIXTURE["Public synthetic dashboard / no API requests"]
-    API --> ANALYTICS["Bounded dashboard analytics"]
-    API --> DB["PostgreSQL repository"]
-    API --> AUTH["Project-bound authorizer"]
-    API --> TELEMETRY["Isolated metrics + tracing + safe logs"]
-    WORKER["Worker composition root"] --> ORCHESTRATE["Leased worker service"]
-    WORKER --> EXECUTOR["Deterministic executor"]
-    WORKER --> DB
-    WORKER --> TELEMETRY
-    ORCHESTRATE --> RUNNER
-    ORCHESTRATE --> COMPARE
-    ORCHESTRATE --> DB
-    RUNNER --> PORTS["Target / evaluator / repository ports"]
-    RUNNER --> DOMAIN["Immutable domain contracts"]
-    COMPARE --> DOMAIN
-    CONTROL --> PORTS
-    CONTROL --> DOMAIN
-    DB -. implement .-> PORTS
-    ADAPTERS -. implement .-> PORTS
-    ADAPTERS --> DOMAIN
+    subgraph API_PROCESS["API process: authorize, validate, enqueue, read"]
+        API["FastAPI routes + authorization boundary"] --> CONTROL["ControlPlaneService"]
+        CONTROL -->|validate / validate_suite only| VALIDATE["Deterministic executor"]
+        CONTROL --> ANALYTICS["Bounded dashboard analytics"]
+    end
+    CONTROL -->|ControlPlaneRepository| DB["PostgreSQL via process-local repository adapters"]
+    subgraph WORKER_PROCESS["Worker process: claim, execute, publish"]
+        WORKER["WorkerService"] -->|execute / execute_suite| EXECUTOR["Deterministic executor"]
+        EXECUTOR -->|InProcessRunner.run| RUNNER["Application runner"]
+        WORKER -->|comparison jobs| COMPARE["compare_runs + release gates"]
+        RUNNER -->|TargetPort.invoke| TARGET["Deterministic fake target"]
+        RUNNER -->|EvaluatorPort.evaluate| EVALUATORS["Built-in evaluators"]
+    end
+    WORKER -->|claim, heartbeat, load, fenced publish| DB
 ```
 
-The compile-time dependency rule is:
+[`WorkerService`](../src/llm_eval_control_plane/application/worker.py) calls the
+`EvaluationExecutor` protocol, implemented by
+[`DeterministicEvaluationExecutor`](../src/llm_eval_control_plane/api/execution.py).
+That adapter constructs the fake target, evaluators, and deterministic clock,
+then calls [`InProcessRunner.run`](../src/llm_eval_control_plane/application/runner.py)
+outside the worker event loop. The runner invokes the target and evaluators and
+returns a `RunResult`; it does not enqueue jobs or persist evidence.
+`WorkerService` validates and wraps the result, then publishes
+it through the leased repository transaction. Comparison jobs take a separate
+`compare_runs` path and never invoke the executor's execution methods or runner.
+
+The API uses its executor instance only to resolve and validate supported
+contracts. It never calls `execute` or `execute_suite`. Analytics is called by
+`ControlPlaneService` after loading the pinned evidence, not directly by the
+HTTP route. See the [durable submission sequence](#durable-http-submission-flow)
+for job coordination and publication.
+
+### Composition and independent entrypoints
+
+| Composition root | What it wires |
+| --- | --- |
+| [API runtime](../src/llm_eval_control_plane/api/runtime.py) | PostgreSQL repository, validation-only executor use, control-plane service, project authorizer, and API-local observability |
+| [Worker runtime](../src/llm_eval_control_plane/worker.py) | PostgreSQL repository, deterministic executor, leased worker service, polling/recovery loop, and worker-local observability |
+| [CLI](../src/llm_eval_control_plane/cli.py) / [suite CLI](../src/llm_eval_control_plane/suite_cli.py) | Runner, concrete target/evaluators/clock, comparison function, filesystem run repository, and report adapters; no control-plane HTTP submission |
+
+The CLI calls the runner directly and saves its returned result through
+`FilesystemRunRepository`, an implementation of `RunRepository`. That port is
+distinct from the durable API/worker `ControlPlaneRepository`. DataBridge CLI
+runs inject their own mock or explicitly enabled live target and SQL evaluator;
+the durable worker supports only the deterministic fake target shown above.
+The CLI sequences are detailed [below](#evaluation-and-release-flow).
+
+The public Vercel build is independent: static assets render synthetic fixture
+evidence, with no request path to the API, worker, database, or a model provider.
+Authorization and observability are covered in their dedicated sections below;
+they are not additional execution or persistence layers in the runner.
+
+### Source dependency rule
+
+The compile-time dependency rule is separate from those runtime calls:
 
 ```text
 entrypoints and adapters -> application -> domain
@@ -87,6 +122,8 @@ import CLI, persistence, network, telemetry, queue, database, or provider SDKs.
 ```text
 src/llm_eval_control_plane/
 ├── cli.py
+├── cli_support.py        # shared CLI summaries and report handling
+├── suite_cli.py          # local suite build, run, comparison, and export
 ├── observability.py       # isolated metrics, tracing, and safe event schemas
 ├── worker.py             # worker loop, reaper, health, and shutdown
 ├── api/
@@ -102,7 +139,7 @@ src/llm_eval_control_plane/
 │   ├── ports.py           # target, evaluator, and run-repository protocols
 │   ├── runner.py          # serial in-process orchestration and aggregation
 │   ├── comparison.py      # alignment, slice aggregation, and gate decisions
-│   ├── control_plane.py   # enqueue-only submissions and repository protocol
+│   ├── control_plane.py   # enqueue/read service, executor and repository protocols
 │   ├── dashboard.py       # fixed content-free release analytics
 │   └── worker.py          # leased attempt orchestration and fenced publication
 ├── adapters/
@@ -164,10 +201,14 @@ sequenceDiagram
     CLI->>Runner: inject target, evaluators, clock
     loop Every case in canonical order
         Runner->>Target: case ID + input only
-        Target-->>Runner: untrusted response envelope
+        Target-->>Runner: untrusted response or invocation failure
         Runner->>Runner: validate response and measured latency
-        Runner->>Eval: case expectations + validated observation
-        Eval-->>Runner: scored / skipped / error evidence
+        alt valid target observation
+            Runner->>Eval: case expectations + validated observation
+            Eval-->>Runner: scored / skipped / error evidence
+        else target failure or invalid response
+            Runner->>Runner: record bounded failure and skip evaluators for this case
+        end
     end
     Runner->>Runner: aggregate every attempted metric
     Runner-->>CLI: immutable RunResult + result digest
@@ -188,13 +229,16 @@ sequenceDiagram
 
     User->>CLI: compare policy + dataset + two run IDs
     CLI->>Store: load baseline and candidate
+    Store-->>CLI: immutable run evidence
     CLI->>Compare: policy + resolved dataset + run evidence
     Compare->>Compare: verify artifacts, cases, evaluators, stored summaries
     Compare->>Compare: recompute every metric globally and per slice
     Compare->>Compare: apply coverage, threshold, and regression checks
     Compare-->>CLI: content-addressed ReleaseDecision
     CLI->>Report: JSON / Markdown / JUnit
-    Report-->>User: redacted decision + exit 0 or 1
+    Report-->>CLI: rendered release report
+    CLI->>CLI: write requested report
+    CLI-->>User: redacted decision summary + exit 0 or 1
 ```
 
 Comparison never invokes a target or evaluator. A decision is produced only
@@ -284,35 +328,65 @@ sequenceDiagram
     participant Auth as Project authorizer
     participant Service as Control-plane service
     participant Store as PostgreSQL repository
-    participant Worker as Leased worker
-    participant Execute as Executor / comparator
 
     Client->>Boundary: bearer + project + POST + key + optional traceparent
     Boundary->>Boundary: accept one strict W3C parent or start new trace
     Boundary->>Auth: digest credential + exact project + required scope
-    Auth-->>Boundary: allow or content-safe 401/403
-    Boundary->>Boundary: bound body, parse strict JSON, validate model
-    Boundary->>Service: effective request with defaults
-    Service->>Store: resolve and pin every available dependency
-    Service->>Store: insert job + canonical payload atomically
-    alt existing identical submission
-        Store-->>Service: existing job
-        Service-->>Client: 200 terminal or 202 nonterminal
-    else key reused for changed semantics
-        Store-->>Service: idempotency conflict
-        Service-->>Client: 409 api-error/v1
-    else unique insert winner
-        Store-->>Service: queued job + private submission trace link
-        Service-->>Client: 202 job summary + Location
+    Auth-->>Boundary: authorization result
+    alt denied
+        Boundary-->>Client: content-safe 401/403, without parsing body
+    else allowed
+        Boundary->>Boundary: bound body, parse strict JSON, validate model
+        Boundary->>Service: effective request with defaults
+        Service->>Store: look up job by kind + idempotency key
+        Store-->>Service: existing job or not found
+        alt existing identical submission
+            Service-->>Boundary: original job, without re-resolving dependencies
+            Boundary-->>Client: 200 terminal or 202 nonterminal
+        else key reused for changed semantics
+            Service-->>Boundary: idempotency conflict
+            Boundary-->>Client: 409 api-error/v1
+        else new submission, unique insert winner
+            Service->>Store: resolve and pin dependencies
+            Service->>Service: validate execution or comparison contract
+            Service->>Store: atomically insert job + canonical payload
+            Store-->>Service: queued job + private submission trace link
+            Service-->>Boundary: submission result
+            Boundary-->>Client: 202 job summary + Location
+        end
     end
+```
+
+Database uniqueness constraints handle concurrent submissions. After an insert
+loses that race, the repository reloads the winning job and compares its semantic
+digest: it returns that job or reports a conflict. The new-submission branch above
+shows the unique insert winner. Execution happens later in a separate worker
+process. The following sequence shows an available job through fenced completion,
+with heartbeat monitoring alongside its workload:
+
+```mermaid
+sequenceDiagram
+    participant Store as PostgreSQL repository
+    participant Worker as Leased worker
+    participant Execute as Deterministic executor
+    participant Compare as Comparison function
+
     Worker->>Store: claim available job with SKIP LOCKED
     Store-->>Worker: payload + private lease token + attempt number
     Worker->>Worker: start consumer span linked to submission span
     par Until execution finishes
         Worker->>Store: heartbeat and extend lease
     and Execute immutable payload
-        Worker->>Execute: run or compare pinned inputs
-        Execute-->>Worker: RunRecord or ReleaseDecisionRecord
+        Worker->>Store: load snapshot-pinned dataset or run evidence
+        Store-->>Worker: verified dependencies
+        alt run job
+            Worker->>Execute: execute / execute_suite with pinned inputs
+            Execute-->>Worker: RunResult from application runner
+        else comparison job
+            Worker->>Compare: compare_runs with pinned evidence and policy
+            Compare-->>Worker: ReleaseDecision
+        end
+        Worker->>Worker: wrap result in RunRecord or ReleaseDecisionRecord
     end
     Worker->>Store: fenced evidence publication
     Store-->>Worker: succeeded, canceled, or lease lost
@@ -399,7 +473,7 @@ then discards the underlying samples before serialization.
 sequenceDiagram
     participant Operator
     participant Dashboard
-    participant API
+    participant API as API + control-plane service
     participant Store as PostgreSQL repository
 
     Operator->>Dashboard: opt into local live mode
@@ -494,8 +568,12 @@ private coordination values are excluded from every telemetry channel.
 
 ## DataBridge vertical slice
 
+This diagram follows case data rather than composition. The target adapters
+normalize responses; the runner passes that observation and the case expectations
+to the evaluator. Expectations never reach a target.
+
 ```mermaid
-flowchart LR
+flowchart TB
     CASE["Expectation-free case input"] --> TARGET{"Target mode"}
     TARGET -->|offline_mock| MOCK["Strict response fixture"]
     TARGET -->|live + two opt-ins| HTTP["Bounded HTTPS /api/v1/query"]
@@ -503,11 +581,24 @@ flowchart LR
     HTTP --> NORMALIZE
     NORMALIZE --> MINIMAL["Decision + SQL or clarification code + usage"]
     MINIMAL --> SCORE["Composite DataBridge evaluator"]
-    SCORE --> POLICY["PostgreSQL parse + read-only allowlist"]
-    POLICY -->|allowed| REPLAY["Fresh bounded READ ONLY transaction"]
-    REPLAY --> ORACLE["Validate reviewed reference + compare columns/rows"]
-    POLICY -->|rejected| SAFE["Safety evidence; no database execution"]
+    EXPECT["Case expectations, including reviewed SQL and expected results"] --> SCORE
+    SCORE -->|query expectation and query output| POLICY["Check candidate SQL parse + allowlist"]
+    SCORE -->|other decision combinations| NOREPLAY["Interaction, safety, and applicable query evidence; no replay"]
+    POLICY --> REFERENCE["Check policy and read-only replay of reviewed reference"]
+    REFERENCE -->|invalid reference| ERROR["Reference error evidence; no candidate replay"]
+    REFERENCE -->|reference matches expected columns and rows| ALLOWED{"Candidate policy allowed?"}
+    ALLOWED -->|yes| REPLAY["Replay candidate SQL in bounded READ ONLY transactions"]
+    REPLAY --> ORACLE["Compare candidate columns/rows with expectations"]
+    ALLOWED -->|no| SAFE["Policy failure evidence; no candidate replay"]
 ```
+
+The replay branch follows
+[`DataBridgeSqlEvaluator`](../src/llm_eval_control_plane/adapters/databridge_scorer.py):
+it verifies the reviewed reference before replaying any candidate SQL. A rejected
+candidate is never executed, but reference verification can still query the
+read-only fixture; "no candidate replay" does not mean "no database access."
+Non-query combinations are scored without replay, including explicit skips for
+query-only metrics when the expected decision is clarification or refusal.
 
 The 56-case dataset contains only the request fields visible to DataBridge:
 `question`, `chat_history`, and `language`. Query expectations carry reviewed
