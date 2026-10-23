@@ -166,6 +166,7 @@ See the [architecture and data flow](docs/architecture.md),
 
 ## Documentation
 
+- [v0.1.0 release notes](docs/releases/v0.1.0.md) — supported workflows and release boundaries.
 - [Suite CLI](docs/suite-cli.md) — build, validate, run, compare, and export.
 - [Offline evaluation reference](docs/offline-evaluation.md) — original unpinned
   workflow, 100-case fixture, expected metrics, and safe evidence inspection.
