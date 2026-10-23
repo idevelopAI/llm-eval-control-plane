@@ -171,6 +171,8 @@ See the [architecture and data flow](docs/architecture.md),
   workflow, 100-case fixture, expected metrics, and safe evidence inspection.
 - [Local control-plane operations](docs/operations/local-control-plane.md) —
   Compose, credentials, HTTP endpoints, job behavior, and observability.
+- [Local credential setup](docs/operations/local-credentials.md) — separate
+  reader/operator credentials, hidden prompts, and digest-only configuration.
 - [Suite API](docs/evaluation-suites.md) — registration, snapshot-pinned jobs,
   history, target groups, and compatibility.
 - [Dashboard guide](dashboard/README.md) — local setup, screenshots, run submission,
