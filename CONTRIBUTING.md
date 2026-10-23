@@ -17,7 +17,7 @@ The minimum Node versions also apply to the jsdom-backed test environment.
 
 ## Quality checks
 
-Run the same checks used by continuous integration:
+Run these database-free checks from the repository root:
 
 ```bash
 uv lock --check
@@ -25,13 +25,24 @@ uv run ruff format --check .
 uv run ruff check .
 uv run ruff check --select S src scripts migrations
 uv run mypy src tests scripts migrations
-uv run pytest --cov=llm_eval_control_plane --cov-branch --cov-report=term-missing
-uv run pytest -q tests/security/test_deployment_hardening.py
+uv run pytest -q tests/test_suite_cli.py tests/test_release_workflow.py tests/test_offline_workflow.py
 uv sync --locked --group security --no-install-project
 uv run --no-sync pip-audit \
   --local --strict --skip-editable --progress-spinner off --desc off
 uv build
 ```
+
+For the full Python test and coverage command, follow the
+[disposable PostgreSQL test setup](docs/operations/local-tests.md). It supplies
+`CONTROL_PLANE_DATABASE_URL` and applies Alembic migrations before pytest, as
+the CI Python matrix does. Running pytest without that setup skips the
+control-plane PostgreSQL integration tests; an offline pass is not equivalent
+to the database-backed CI run. Never point integration tests at an existing
+development or production database.
+
+DataBridge replay uses a separate restricted-role fixture and
+`DATABRIDGE_EVAL_DSN`; the test setup explains that separate gate and its expected
+skips. Docker Compose is also required for the deployment-configuration tests.
 
 The hosted security gate also performs a checksum-verified, fully redacted scan
 of every reachable commit, scans the built runtime image and deployment
