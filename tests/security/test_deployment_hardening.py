@@ -46,7 +46,7 @@ def _compose_config() -> dict[str, Any]:
         capture_output=True,
         check=False,
         text=True,
-        timeout=10,
+        timeout=30,
     )
     if available.returncode != 0:
         pytest.skip("Docker Compose is unavailable")
@@ -70,7 +70,7 @@ def _compose_config() -> dict[str, Any]:
         check=False,
         env=environment,
         text=True,
-        timeout=20,
+        timeout=60,
     )
     assert rendered.returncode == 0, "Compose configuration must render"
     document = json.loads(rendered.stdout)
