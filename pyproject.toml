@@ -58,12 +58,15 @@ security = [
 
 [tool.uv]
 build-constraint-dependencies = ["hatchling==1.27.0"]
-# Security floors for transitive HTTP clients, trust roots, and migration templates.
+# Security floors for transitive HTTP clients, trust roots, migration templates,
+# and audit tooling caches.
 constraint-dependencies = [
   "urllib3>=2.8.0,<3",
   "certifi>=2026.10.19",
   # GHSA-5639-2j2p-m4mx: Windows drive-letter template path traversal.
   "mako>=1.4.2,<2",
+  # CVE-2026-112907, CVE-2026-112913, CVE-2026-112940: pip-audit cache locking.
+  "filelock>=4.2.1,<5",
 ]
 
 [tool.hatch.build.targets.wheel]
