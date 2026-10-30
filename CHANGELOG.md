@@ -7,6 +7,41 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-30
+
+### Changed
+
+- The dashboard uses a single dark visual system: a black canvas with charcoal
+  cards, a top bar with segmented pill navigation and slice filters, headline
+  metrics as cards, one violet accent, and status colors reserved for pass and
+  fail. One stylesheet replaces the layered base and override themes; markup,
+  class names, and tests are unchanged. The README screenshot shows the new view.
+- The public demo is served at <https://evalcontrol.vercel.app/>. Canonical and
+  social metadata use the short origin; the original project domain still
+  serves the same deployment.
+- Updated FastAPI to 0.162.0, SQLAlchemy to 2.1.6, Alembic to 1.20.1, Ruff to
+  0.17.3, and sqlglot to 30.25.0 (upper bound widened to `<30.26`); Next.js to
+  16.4.3 and Vite to 8.3.5; the `astral-sh/uv` container base image to 0.13.6;
+  and the pinned CodeQL and `setup-uv` Actions.
+
+### Fixed
+
+- Phone-width dashboards no longer clip the operational distribution table or
+  long panel counts, and the verdict card no longer overflows the page between
+  700 and 920px.
+- The deployment-hardening contract allows slow CI runners up to 30 seconds to
+  probe Docker Compose and 60 seconds to render its configuration.
+
+### Security
+
+- Security floors for the audit toolchain require `filelock` 4.2.1
+  (CVE-2026-112907, CVE-2026-112913, CVE-2026-112940) and `msgpack` 1.2.3
+  (CVE-2026-114613); both enter only through `pip-audit`'s cache.
+- The dashboard lint toolchain requires `zod` 4.6.6 (GHSA-mrhx-c7xc-m3w5).
+  Neither the runtime image nor the static demo includes these packages.
+
+## [0.1.0] - 2026-10-23
+
 ### Removed
 
 - Retired Sites hosting metadata, plugin and Worker dependencies, the alternate
@@ -278,3 +313,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - The service still has no TLS termination, distributed request-rate
   enforcement, or row-level multitenancy. Non-loopback use requires an external
   trusted edge and a separately isolated deployment for every project.
+
+[Unreleased]: https://github.com/idevelopAI/llm-eval-control-plane/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/idevelopAI/llm-eval-control-plane/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/idevelopAI/llm-eval-control-plane/releases/tag/v0.1.0
