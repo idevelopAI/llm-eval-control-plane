@@ -18,7 +18,7 @@ regression budget, but a refusal regression blocks the release.
 
 ## Release evidence dashboard
 
-[Open the public demo](https://llm-eval-control-plane-idevelopai.vercel.app/)
+[Open the public demo](https://evalcontrol.vercel.app/)
 
 ![Release dashboard with a blocked decision and the failed safety gate selected for review](docs/assets/release-dashboard-fixture.png)
 

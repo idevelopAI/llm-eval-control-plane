@@ -108,7 +108,43 @@ fallback, and its retired build path is no longer maintained. See
 
 ## Release record
 
-### Current release — 2026-09-29
+### Current release — 2026-10-30
+
+- Production URL: <https://evalcontrol.vercel.app/>, added to the existing
+  project as a second `vercel.app` domain. The original
+  <https://llm-eval-control-plane-idevelopai.vercel.app/> still serves the same
+  deployment; canonical and social metadata now use the short origin.
+- Dashboard source: `main` at `bd49ed9` (dark console redesign and batched
+  dependency updates) plus the site-origin change recorded with this release.
+- Deployment: `dpl_Em2xGGNHxr1tXCZUTPYSqJrg1WXt`, Ready / Production.
+  Published with Vercel CLI 65.8.0 to the existing Hobby project after an upload
+  dry run that listed only the static export and `vercel.json` under the
+  `Other` framework. The preceding verified deployment,
+  `dpl_C9uF75ButNjLpm7d2baCDQSbUYKK`, remains the rollback target.
+- Artifact: 59 regular files / 2,380,775 bytes, including `vercel.json`; the dry
+  run also counts the empty `_next/<build-id>/` directory.
+- All 58 public files matched the local export byte-for-byte on the short
+  origin. Public-file manifest SHA-256:
+  `570001dca90f41310ff06b27dc6c2cc9294e002980e2fee37847073badea65fa`.
+- On both origins: root HTML matched the export with `noindex` and
+  `private, no-store, max-age=0`; the expected security headers were present and
+  no cookie was set. Reads of `/api`, `/v1`, `/v1/probe`, `/.env`,
+  `/package.json`, `/vercel.json`, and unknown paths returned 404; root writes
+  returned 405 and `/v1` writes 404.
+- `OPTIONS` again returned empty 204s on `/`, `/index.html`, `/v1`, and
+  `/v1/probe` and 404 on `/api`. Synthetic `POST` preflights with authorization
+  and content-type headers received no allow-credentials, allow-methods, or
+  allow-headers grant.
+- Toolbar overrides were confirmed Off for production and pre-production before
+  publishing; no toolbar loader appeared on the live page. Slice filters,
+  failed-gate review, and the fixture-only data source worked in the browser,
+  with no credential inputs.
+- Local validation passed: 294 dashboard tests, lint, typecheck, static build,
+  artifact verifier, public-preview smoke test, and loopback-only development
+  smoke test. No account upgrade, paid add-on, Git integration, backend, or
+  runtime credential was introduced.
+
+### Previous release — 2026-09-29
 
 - Production URL: <https://llm-eval-control-plane-idevelopai.vercel.app/>.
 - Dashboard source revision: `5fbfc0b02856a12f87dc4fe960f9ecb561ac6ab0`.
@@ -149,7 +185,7 @@ fallback, and its retired build path is no longer maintained. See
   Web Analytics and Speed Insights remain disabled. Static delivery and
   deployment still consume the existing Hobby allowances.
 
-### Previous release — 2026-09-25
+### Earlier release — 2026-09-25
 
 Verified on **2026-09-25**:
 

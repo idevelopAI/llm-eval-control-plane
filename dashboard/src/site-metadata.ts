@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 
 export const SITE_ORIGIN = new URL(
-  'https://llm-eval-control-plane-idevelopai.vercel.app',
+  'https://evalcontrol.vercel.app',
 );
 
 export const SITE_TITLE = 'LLM Eval Control Plane';
