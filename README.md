@@ -166,6 +166,7 @@ See the [architecture and data flow](docs/architecture.md),
 
 ## Documentation
 
+- [v0.1.1 release notes](docs/releases/v0.1.1.md) — security fixes, dependency updates, and the dark dashboard.
 - [v0.1.0 release notes](docs/releases/v0.1.0.md) — supported workflows and release boundaries.
 - [Suite CLI](docs/suite-cli.md) — build, validate, run, compare, and export.
 - [Offline evaluation reference](docs/offline-evaluation.md) — original unpinned
