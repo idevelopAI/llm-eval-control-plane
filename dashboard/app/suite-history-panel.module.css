@@ -1,11 +1,11 @@
 .panel {
-  margin: 1rem 1.5rem;
+  width: min(1424px, calc(100% - 56px));
+  margin: 1rem auto;
   padding: 1.5rem;
-  border: 1px solid #d8e2dc;
-  border-radius: 1.25rem;
-  background: #fff;
-  color: #18392d;
-  font-size: 1rem;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.875rem;
 }
 .heading {
   display: flex;
@@ -15,32 +15,42 @@
 }
 .panel h2 {
   margin: 0;
-  font-size: 1.5rem;
-  letter-spacing: -0.035em;
+  color: var(--ink-strong);
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
 }
 .panel h3 {
   margin: 0 0 0.75rem;
-  font-size: 1.125rem;
+  color: var(--ink-strong);
+  font-size: 1rem;
+  font-weight: 600;
 }
 .eyebrow {
   margin: 0 0 0.375rem;
-  color: #476657;
+  color: var(--muted);
   text-transform: uppercase;
-  letter-spacing: 0.075em;
-  font-size: 0.875rem;
+  letter-spacing: 0.08em;
+  font-size: 0.6875rem;
+  font-weight: 600;
 }
 .panel button,
 .panel select {
   font: inherit;
-  font-size: 0.875rem;
-  border: 1px solid #adc3b5;
-  padding: 0.625rem 0.875rem;
-  border-radius: 0.625rem;
-  background: #f6f9f7;
-  color: #18392d;
+  font-size: 0.8125rem;
+  border: 1px solid var(--line-strong);
+  padding: 0.5rem 1rem;
+  border-radius: var(--pill);
+  background: var(--raised);
+  color: var(--ink-strong);
 }
 .panel button {
   cursor: pointer;
+  font-weight: 600;
+}
+.panel button:hover:not(:disabled) {
+  border-color: var(--accent-line);
+  color: var(--accent-strong);
 }
 .panel button:disabled {
   cursor: wait;
@@ -48,7 +58,7 @@
 }
 .panel button:focus-visible,
 .panel select:focus-visible {
-  outline: 3px solid #24754c;
+  outline: 3px solid var(--focus);
   outline-offset: 3px;
 }
 .controls {
@@ -59,8 +69,9 @@
   margin: 1rem 0;
 }
 .controls label {
+  color: var(--muted);
   font-weight: 600;
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
 }
 .controls select {
   max-width: 100%;
@@ -71,18 +82,20 @@
   flex-direction: column;
   gap: 0.5rem;
   padding: 1rem;
-  border-radius: 0.75rem;
-  background: #edf4ef;
+  border-radius: var(--radius);
+  background: var(--sunken);
   margin: 1rem 0 1.5rem;
 }
 .protocol span,
 .records span,
 .pagination,
 .note {
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
 }
 .panel code {
-  font-size: 0.8125rem;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 0.75rem;
   overflow-wrap: anywhere;
 }
 .grid {
@@ -95,15 +108,15 @@
   padding: 0;
   margin: 0;
   display: grid;
-  gap: 0.625rem;
+  gap: 0.5rem;
 }
 .records li {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  padding: 1rem;
-  border: 1px solid #e0e7e2;
-  border-radius: 0.75rem;
+  padding: 0.875rem 1rem;
+  border-radius: var(--radius);
+  background: var(--raised);
   overflow-wrap: anywhere;
 }
 .records li > div {
@@ -114,21 +127,25 @@
   gap: 0.5rem;
 }
 .records strong {
-  font-size: 0.9375rem;
+  color: var(--ink-strong);
+  font-size: 0.875rem;
+  font-weight: 600;
 }
 .badge {
-  padding: 0.25rem 0.5rem;
-  border-radius: 0.375rem;
-  background: #edf0ee;
-  color: #344f41;
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  background: var(--overlay);
+  color: var(--ink);
+  font-size: 0.75rem;
+  font-weight: 600;
 }
 .blocked {
-  background: #fff0e7;
-  color: #853918;
+  background: var(--failure-soft);
+  color: var(--failure);
 }
 .passed {
-  background: #e5f3e8;
-  color: #246b3b;
+  background: var(--pass-soft);
+  color: var(--pass);
 }
 .pagination {
   display: flex;
@@ -136,20 +153,20 @@
   align-items: center;
   gap: 0.75rem;
   margin-top: 0.875rem;
+  color: var(--muted);
 }
 .note {
   margin: 1.25rem 0 0;
-  color: #476657;
+  color: var(--muted);
 }
 .error {
-  color: #853918;
+  color: var(--failure);
 }
 .filters {
   margin: 1.25rem 0;
   padding: 1rem;
-  background: #f6f9f7;
-  border: 1px solid #e0e7e2;
-  border-radius: 0.75rem;
+  background: var(--sunken);
+  border-radius: var(--radius);
 }
 .filters > div {
   min-width: 0;
@@ -157,32 +174,31 @@
 .filters label {
   display: block;
   margin-bottom: 0.5rem;
-  font-size: 0.875rem;
+  color: var(--muted);
+  font-size: 0.8125rem;
   font-weight: 600;
 }
 .filters select {
   width: 100%;
   min-width: 0;
-  background: #fff;
 }
 .pin {
   display: grid;
   gap: 0.375rem;
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
   overflow-wrap: anywhere;
 }
 .filterNote {
   grid-column: 1 / -1;
   margin: 0;
-  font-size: 0.875rem;
-  color: #476657;
+  font-size: 0.8125rem;
+  color: var(--muted);
 }
 .comparison {
   margin-top: 1.5rem;
   padding: 1.25rem;
-  border: 1px solid #adc3b5;
-  border-radius: 0.875rem;
-  background: #f6f9f7;
+  border-radius: var(--radius);
+  background: var(--sunken);
 }
 .comparison .note {
   margin-top: 0.5rem;
@@ -201,25 +217,27 @@
   margin-top: 1rem;
 }
 .writeForm input {
-  padding: 0.75rem;
+  padding: 0.625rem 1rem;
   min-width: 0;
   width: 100%;
-  border: 1px solid #adc3b5;
-  border-radius: 0.625rem;
-  background: #fff;
-  color: #18392d;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--pill);
+  background: var(--canvas);
+  color: var(--ink-strong);
   font: inherit;
+  font-family: var(--mono);
 }
 .writeForm input:focus-visible {
-  outline: 3px solid #24754c;
+  outline: 3px solid var(--focus);
   outline-offset: 3px;
 }
 .writeForm small {
-  color: #476657;
+  color: var(--muted);
 }
 @media (max-width: 760px) {
   .panel {
-    margin: 0.75rem;
+    width: calc(100% - 32px);
+    margin: 0.75rem auto;
     padding: 1rem;
   }
   .grid {
