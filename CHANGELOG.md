@@ -7,6 +7,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Gate rows draw zero-based baseline and candidate score bars with a threshold
+  marker and a "Pass at" caption. Scores bounded by one share a 0–1 axis;
+  larger metrics such as latency scale to their own maximum. The bars are
+  decorative for assistive technology, which reads the unchanged values.
+
+### Changed
+
+- The social preview image and README screenshot show the current dashboard.
+
 ## [0.1.1] - 2026-10-30
 
 ### Changed

@@ -38,6 +38,61 @@ function formatDelta(value: number | null | undefined) {
   return `${value > 0 ? '+' : '−'}${Math.abs(value).toFixed(3)}`;
 }
 
+type ScoreScale = Readonly<{ max: number; threshold: number }>;
+
+/**
+ * Bars start at zero so their lengths stay proportional. Scores bounded by one
+ * share a fixed 0–1 axis; larger metrics such as latency get per-gate headroom.
+ */
+function scoreScale(gate: GateView['gate']): ScoreScale {
+  const largest = Math.max(
+    gate.threshold,
+    gate.aggregate.baseline.mean ?? 0,
+    gate.aggregate.candidate.mean ?? 0,
+  );
+  return { max: largest <= 1 ? 1 : largest * 1.1, threshold: gate.threshold };
+}
+
+function scorePercent(value: number, scale: ScoreScale) {
+  const percent = (value / scale.max) * 100;
+  return `${Math.min(100, Math.max(0, percent)).toFixed(2)}%`;
+}
+
+/** Decorative: the adjacent text carries the same values for assistive tech. */
+function ScoreBar({
+  scale,
+  value,
+}: Readonly<{ scale: ScoreScale; value: number | null | undefined }>) {
+  const threshold = scorePercent(scale.threshold, scale);
+  return (
+    <svg
+      aria-hidden="true"
+      className="score-bar"
+      focusable="false"
+      height="12"
+      width="100%"
+    >
+      <rect className="score-bar-track" height="6" rx="3" width="100%" y="3" />
+      {value == null ? null : (
+        <rect
+          className="score-bar-fill"
+          height="6"
+          rx="3"
+          width={scorePercent(value, scale)}
+          y="3"
+        />
+      )}
+      <line
+        className="score-bar-threshold"
+        x1={threshold}
+        x2={threshold}
+        y1="0"
+        y2="12"
+      />
+    </svg>
+  );
+}
+
 function gateScope(gate: GateView) {
   return gate.gate.slice ?? 'all cases';
 }
@@ -442,6 +497,7 @@ export function ReleaseOverviewView({
                   const { aggregate } = item.gate;
                   const isFailed = item.gate.status === 'failed';
                   const isSelected = item.id === model.selectedGateId;
+                  const scale = scoreScale(item.gate);
                   return (
                     <button
                       aria-pressed={isSelected}
@@ -459,17 +515,20 @@ export function ReleaseOverviewView({
                         <small>{gateScope(item)}</small>
                       </span>
                       <span className="score-comparison">
-                        <span>
+                        <span className="score-row">
                           <small>Baseline</small>
+                          <ScoreBar scale={scale} value={aggregate.baseline.mean} />
                           <strong>{formatScore(aggregate.baseline.mean)}</strong>
                         </span>
-                        <span className="score-arrow" aria-hidden="true">
-                          →
-                        </span>
-                        <span>
+                        <span className="score-row is-candidate">
                           <small>Candidate</small>
+                          <ScoreBar scale={scale} value={aggregate.candidate.mean} />
                           <strong>{formatScore(aggregate.candidate.mean)}</strong>
                         </span>
+                        <small className="score-threshold">
+                          Pass at {item.gate.direction === 'higher_is_better' ? '≥' : '≤'}{' '}
+                          {formatScore(item.gate.threshold)}
+                        </small>
                       </span>
                       <span className="delta-cell">
                         <small>Delta</small>

@@ -20,6 +20,7 @@
   --muted: #8c8c8c;
   --ink-muted: var(--muted);
 
+  --bar-baseline: #6f6f6f;
   --accent: #8b6cff;
   --accent-strong: #a993ff;
   --accent-deep: #4c33c9;
@@ -894,7 +895,7 @@ main {
   display: grid;
   width: 100%;
   min-height: 88px;
-  grid-template-columns: 30px minmax(165px, 1.25fr) minmax(190px, 1fr) 78px minmax(142px, 0.8fr) minmax(130px, 0.75fr);
+  grid-template-columns: 30px minmax(165px, 1.1fr) minmax(230px, 1.3fr) 78px minmax(142px, 0.8fr) minmax(130px, 0.75fr);
   align-items: center;
   gap: 14px;
   padding: 14px;
@@ -991,9 +992,40 @@ main {
 
 .score-comparison {
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  gap: 4px;
+}
+
+.score-row {
+  display: grid;
+  grid-template-columns: 60px minmax(0, 1fr) 50px;
   align-items: center;
   gap: 8px;
+}
+
+.score-row strong {
+  text-align: right;
+}
+
+.score-bar {
+  display: block;
+  overflow: visible;
+}
+
+.score-bar-track {
+  fill: var(--overlay);
+}
+
+.score-bar-fill {
+  fill: var(--bar-baseline);
+}
+
+.score-row.is-candidate .score-bar-fill {
+  fill: var(--accent);
+}
+
+.score-bar-threshold {
+  stroke: var(--ink-strong);
+  stroke-width: 2;
 }
 
 .score-comparison small,
@@ -1009,10 +1041,6 @@ main {
   font-size: 15px;
   font-weight: 400;
   font-variant-numeric: tabular-nums;
-}
-
-.score-arrow {
-  color: var(--muted);
 }
 
 .coverage-cell em {
