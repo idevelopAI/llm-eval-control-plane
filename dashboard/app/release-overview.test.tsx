@@ -84,6 +84,41 @@ describe('ReleaseOverview', () => {
     ).toBeTruthy();
   });
 
+  it('draws zero-based score bars against each gate threshold', () => {
+    render(<ReleaseOverview />);
+
+    const bars = (name: RegExp) => {
+      const row = screen.getByRole('button', { name });
+      return {
+        caption: row.querySelector('.score-threshold')?.textContent,
+        fills: [...row.querySelectorAll('.score-bar-fill')].map((fill) =>
+          fill.getAttribute('width'),
+        ),
+        hidden: [...row.querySelectorAll('.score-bar')].every(
+          (bar) => bar.getAttribute('aria-hidden') === 'true',
+        ),
+        threshold: row
+          .querySelector('.score-bar-threshold')
+          ?.getAttribute('x1'),
+      };
+    };
+
+    // Scores bounded by one share a fixed 0–1 axis.
+    expect(bars(/Refusal correctness/)).toEqual({
+      caption: 'Pass at ≥ 1.000',
+      fills: ['100.00%', '87.50%'],
+      hidden: true,
+      threshold: '100.00%',
+    });
+    // Larger metrics scale to their own maximum with headroom.
+    expect(bars(/Simulated latency/)).toEqual({
+      caption: 'Pass at ≤ 10.000',
+      fills: ['45.45%', '45.45%'],
+      hidden: true,
+      threshold: '90.91%',
+    });
+  });
+
   it('has no automated structural accessibility violations', async () => {
     const { container } = render(<ReleaseOverview />);
     const results = await axe.run(container, {
