@@ -17,6 +17,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Changed
 
 - The social preview image and README screenshot show the current dashboard.
+- Updated the `astral-sh/uv` container base image to 0.13.7. Dependabot no
+  longer proposes Python minor upgrades for the container image; the runtime
+  stays on Python 3.14 until every locked dependency ships 3.15 wheels.
+
+### Security
+
+- The dashboard lint toolchain requires `minimatch` 11.0.5
+  (GHSA-g3hv-75wg-m249). The package is not part of the static demo.
 
 ## [0.1.1] - 2026-10-30
 
