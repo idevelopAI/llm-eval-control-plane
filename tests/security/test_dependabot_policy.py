@@ -80,3 +80,16 @@ def test_build_tooling_does_not_fall_into_the_general_development_group() -> Non
     assert config.index("      dashboard-build-tooling:") < config.index(
         "      dashboard-development-dependencies:"
     )
+
+
+def test_container_python_minor_upgrades_are_deliberate() -> None:
+    config = CONFIG.read_text(encoding="utf-8")
+    docker = config[config.index("  - package-ecosystem: docker\n") :]
+    docker = docker[: docker.index("  - package-ecosystem: docker-compose\n")]
+
+    assert (
+        "      - dependency-name: python\n"
+        "        update-types:\n"
+        "          - version-update:semver-minor\n"
+    ) in docker
+    assert _list_items(_group(config, "container-base-images"), "patterns") == {"*"}

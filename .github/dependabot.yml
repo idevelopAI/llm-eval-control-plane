@@ -70,6 +70,12 @@ updates:
       container-base-images:
         patterns:
           - "*"
+    ignore:
+      # A new Python minor needs wheels for every locked dependency and a
+      # matching CI matrix entry, so it is a deliberate change, not a batch.
+      - dependency-name: python
+        update-types:
+          - version-update:semver-minor
 
   - package-ecosystem: docker-compose
     directory: /
