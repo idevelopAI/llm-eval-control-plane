@@ -38,6 +38,9 @@
   --caution-soft: rgba(255, 181, 71, 0.14);
   --focus: #a993ff;
 
+  /* Height of the header that stays pinned while scrolling. */
+  --header-stuck: 76px;
+
   --radius-sm: 10px;
   --radius: 14px;
   --radius-lg: 20px;
@@ -93,7 +96,7 @@ a:focus-visible,
 }
 
 [id] {
-  scroll-margin-top: 16px;
+  scroll-margin-top: calc(var(--header-stuck) + 12px);
 }
 
 h1,
@@ -343,11 +346,23 @@ h1 {
 }
 
 .app-sidebar {
+  position: sticky;
+  z-index: 20;
+  top: 0;
   display: flex;
   min-width: 0;
   align-items: center;
   gap: 16px;
   padding: 16px 0;
+  background: var(--canvas);
+}
+
+/* Rendered above the dashboard shell in live mode, so it carries the gutter. */
+.app-sidebar.is-standalone {
+  width: min(1480px, 100%);
+  margin: 0 auto;
+  padding-right: 28px;
+  padding-left: 28px;
 }
 
 .brand {
@@ -1098,7 +1113,7 @@ main {
 
 .case-panel {
   position: sticky;
-  top: 16px;
+  top: calc(var(--header-stuck) + 12px);
   overflow: hidden;
 }
 
@@ -1505,7 +1520,13 @@ main {
 
 /* Brand, tabs, and resource links stop fitting on one line here. */
 @media (max-width: 1320px) {
+  :root {
+    --header-stuck: 68px;
+  }
+
+  /* Two rows: the brand row scrolls away and only the tab row stays pinned. */
   .app-sidebar {
+    top: -66px;
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     gap: 14px 16px;
@@ -1600,6 +1621,11 @@ main {
 
   .dashboard-shell {
     padding: 0 16px 32px;
+  }
+
+  .app-sidebar.is-standalone {
+    padding-right: 16px;
+    padding-left: 16px;
   }
 
   .brand small,
