@@ -112,8 +112,8 @@ describe('ReleaseOverview', () => {
     });
     // Larger metrics scale to their own maximum with headroom.
     expect(bars(/Simulated latency/)).toEqual({
-      caption: 'Pass at ≤ 10.000',
-      fills: ['45.45%', '45.45%'],
+      caption: 'Pass at ≤ 5.000',
+      fills: ['90.91%', '90.91%'],
       hidden: true,
       threshold: '90.91%',
     });

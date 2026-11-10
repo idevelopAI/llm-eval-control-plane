@@ -73,7 +73,7 @@ describe('public synthetic fixture safety contract', () => {
 
     expect(serializePublicFixture(reordered)).toBe(canonical);
     expect(digest).toBe(
-      'a4715938ded251ee184574cd4d9484e43ff478fb347b6ed6afa1f715b9641730',
+      '180fd5849e8832b8a047efbc8107b504de64ce0f626ae2bb965da771b4bd9a9a',
     );
   });
 

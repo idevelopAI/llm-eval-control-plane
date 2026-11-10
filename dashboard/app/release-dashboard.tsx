@@ -2,7 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
 
-import { ReleaseOverviewView } from './release-overview';
+import {
+  AppHeader,
+  ReleaseOverviewView,
+  useSectionChrome,
+} from './release-overview';
 import { SuiteHistoryPanel } from './suite-history-panel';
 import { createSuiteComparisonClient } from '@/src/api/suite-comparison-client';
 import { createSuiteRunClient } from '@/src/api/suite-run-client';
@@ -164,6 +168,7 @@ function DecisionPicker({
 export default function ReleaseDashboard() {
   const [sourceMode, setSourceMode] = useState<'fixture' | 'live'>('fixture');
   const [fixtureModel, setFixtureModel] = useState(demoDashboardModel);
+  const chrome = useSectionChrome();
   const [credentialError, setCredentialError] = useState<string | null>(null);
   const [liveProject, setLiveProject] = useState<string | null>(null);
   const pendingReviewFocus = useRef<string | null>(null);
@@ -238,6 +243,12 @@ export default function ReleaseDashboard() {
     void live.connect(projectId);
   }
 
+  const liveEvidenceVisible =
+    sourceMode === 'live' &&
+    (live.state.kind === 'ready' ||
+      ((live.state.kind === 'loading' || live.state.kind === 'error') &&
+        live.state.previous != null));
+
   const sourceControl = (
     <>
       <section className="source-control" aria-label="Dashboard data source">
@@ -268,6 +279,14 @@ export default function ReleaseDashboard() {
           </small>
         ) : null}
       </section>
+      {/* Keep this slot in every state so the history panel below never remounts. */}
+      {liveEvidenceVisible ? (
+        <AppHeader
+          activeSection={chrome.activeSection}
+          onNavigate={chrome.setActiveSection}
+          standalone
+        />
+      ) : null}
       {sourceMode === 'live' && liveProject != null ? (
         <SuiteHistoryPanel
           client={client}
@@ -414,6 +433,7 @@ export default function ReleaseDashboard() {
           ready.casePage?.next_cursor != null &&
           ready.casePage.items.length < LIVE_CASE_DISPLAY_LIMIT
         }
+        chrome={chrome}
         distributionEvidenceIssue={ready.distributionIssue}
         model={ready.model}
         onLoadMoreCases={() => void live.loadMoreCases()}

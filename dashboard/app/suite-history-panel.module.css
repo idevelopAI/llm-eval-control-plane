@@ -27,12 +27,10 @@
   font-weight: 600;
 }
 .eyebrow {
-  margin: 0 0 0.375rem;
+  margin: 0 0 0.25rem;
   color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-size: 0.6875rem;
-  font-weight: 600;
+  font-size: 0.8125rem;
+  font-weight: 400;
 }
 .panel button,
 .panel select {
@@ -202,6 +200,14 @@
 }
 .comparison .note {
   margin-top: 0.5rem;
+}
+/* The form is already sunken, so its details box steps back up a level. */
+.comparison .protocol {
+  background: var(--surface);
+}
+.comparison > p:not(.note) {
+  margin: 1rem 0;
+  color: var(--ink);
 }
 .selection,
 .writeForm {
