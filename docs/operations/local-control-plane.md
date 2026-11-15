@@ -226,7 +226,10 @@ request digests, and resolved payloads are never returned by the API.
 ## Observability and trace continuity
 
 The API emits one fixed-schema `control-plane-log/v1` JSON completion event per
-request. Logs, metrics, and traces use route templates and bounded vocabularies;
+request. Successful `/health/live` and `/health/ready` probes are counted in
+metrics but not logged or traced, so container health checks do not crowd out
+real traffic; failed probes are still logged. Logs, metrics, and traces use
+route templates and bounded vocabularies;
 they exclude bodies, prompts, expectations, outputs, SQL, rows, authorization
 material, project and principal identity, idempotency keys, request digests,
 lease data, raw cursors, and exception text.

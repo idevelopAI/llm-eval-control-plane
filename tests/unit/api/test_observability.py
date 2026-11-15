@@ -177,10 +177,11 @@ def test_production_app_does_not_export_native_framework_telemetry(
         assert app._telemetry["operation_spans"] is False
         assert app._telemetry["auto_configure"] is False
         events = [json.loads(line) for line in lines]
-        assert [event["http_status"] for event in events] == [200, 422, 500]
+        # The successful liveness probe is counted but not logged or traced.
+        assert [event["http_status"] for event in events] == [422, 500]
         assert events[-1]["error_code"] == "internal_error"
         spans = _finished(safe_spans)
-        assert len(spans) == 3
+        assert len(spans) == 2
         assert all(not span.events for span in spans)
         captured = (
             "".join(lines)
@@ -575,3 +576,32 @@ def test_configuration_and_clock_fail_closed_without_retaining_values() -> None:
     ):
         assert sentinel not in metrics
     telemetry.shutdown()
+
+
+def test_successful_probes_are_counted_but_failed_probes_are_logged(
+    api_harness: ApiHarness, monkeypatch: MonkeyPatch
+) -> None:
+    telemetry, lines, exporter, provider = _telemetry()
+    app = create_app(
+        service=api_harness.service,
+        authorizer=build_authorizer(),
+        telemetry=telemetry,
+    )
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            assert client.get("/health/live").status_code == 200
+            assert client.get("/health/ready").status_code == 200
+            monkeypatch.setattr(api_harness.service, "ready", lambda: False)
+            assert client.get("/health/ready").status_code == 503
+
+        events = [json.loads(line) for line in lines]
+        assert [(event["http_route"], event["http_status"]) for event in events] == [
+            ("/health/ready", 503)
+        ]
+        assert events[0]["error_code"] == "readiness_unavailable"
+        assert _finished(exporter) == ()
+        metrics_text = telemetry.render_metrics().body.decode()
+        assert 'route="/health/live"' in metrics_text
+        assert 'route="/health/ready"' in metrics_text
+    finally:
+        provider.shutdown()
