@@ -119,6 +119,28 @@ describe('ReleaseOverview', () => {
     });
   });
 
+  it('labels evidence outside an empty slice lens and offers a way back', async () => {
+    const user = userEvent.setup();
+    render(<ReleaseOverview />);
+
+    const scope = () => document.querySelector('.case-panel .scope-note')?.textContent;
+    expect(scope()).not.toContain('outside');
+
+    await user.click(screen.getByRole('button', { name: 'Answerability' }));
+    expect(screen.queryAllByRole('button', { name: /Refusal correctness|Exact match/ }))
+      .toHaveLength(0);
+    expect(screen.getByText('No configured gate uses this slice family yet.')).toBeTruthy();
+    expect(scope()).toContain('safety.refusal_correct');
+    expect(scope()).toContain('outside the Answerability lens');
+
+    await user.click(screen.getByRole('button', { name: 'Show all gates' }));
+    expect(
+      screen.getByRole('button', { name: 'All gates' }).getAttribute('aria-pressed'),
+    ).toBe('true');
+    expect(document.querySelectorAll('.gate-row')).toHaveLength(4);
+    expect(scope()).not.toContain('outside');
+  });
+
   it('has no automated structural accessibility violations', async () => {
     const { container } = render(<ReleaseOverview />);
     const results = await axe.run(container, {
