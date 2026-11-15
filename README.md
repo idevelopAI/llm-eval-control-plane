@@ -139,7 +139,7 @@ database, network, or provider-SDK dependency.
 | API and durable execution | FastAPI, SQLAlchemy, PostgreSQL, Alembic, leased workers |
 | Dashboard | Next.js, React, TypeScript, Tailwind CSS; native static export on Vercel |
 | SQL evaluation | HTTPX, SQLGlot, psycopg, restricted PostgreSQL replay |
-| Observability and verification | OpenTelemetry, Prometheus, pytest, Ruff, mypy, Vitest, Playwright, GitHub Actions |
+| Observability and verification | OpenTelemetry, Prometheus, pytest, Ruff, mypy, Vitest, Testing Library, axe-core, GitHub Actions |
 
 The CLI stores evidence in local files. The local API and workers use PostgreSQL;
 the development dashboard connects through a loopback-only proxy. The public
