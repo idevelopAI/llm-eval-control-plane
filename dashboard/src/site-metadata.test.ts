@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  FAVICON_URL,
   SITE_DESCRIPTION,
   SITE_METADATA,
   SITE_ORIGIN,
@@ -58,7 +59,8 @@ describe('static demo metadata', () => {
   });
 
   it('links a self-contained square SVG favicon', async () => {
-    expect(SITE_METADATA.icons).toEqual({ icon: '/favicon.svg' });
+    expect(FAVICON_URL).toMatch(/^\/favicon\.svg\?v=\d+$/);
+    expect(SITE_METADATA.icons).toEqual({ icon: FAVICON_URL });
     const svg = await readFile(resolve('public/favicon.svg'), 'utf8');
 
     expect(svg.trimStart().startsWith('<svg')).toBe(true);

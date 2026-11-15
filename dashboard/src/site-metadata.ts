@@ -9,6 +9,10 @@ export const SITE_DESCRIPTION =
   'Inspect release gates, regression evidence, and privacy-bounded metrics using synthetic data with zero API or model calls.';
 export const SOCIAL_PREVIEW_URL = new URL('/og.png', SITE_ORIGIN).toString();
 
+// Browsers keep tab icons in their own cache keyed by URL and ignore normal
+// reloads, so bump the version whenever public/favicon.svg changes.
+export const FAVICON_URL = '/favicon.svg?v=2';
+
 const socialPreview = {
   alt: 'LLM Eval Control Plane release evidence dashboard',
   height: 630,
@@ -22,7 +26,7 @@ export const SITE_METADATA = {
   },
   applicationName: SITE_TITLE,
   description: SITE_DESCRIPTION,
-  icons: { icon: '/favicon.svg' },
+  icons: { icon: FAVICON_URL },
   metadataBase: SITE_ORIGIN,
   openGraph: {
     description: SITE_DESCRIPTION,
