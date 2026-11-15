@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, NoReturn
 
 import typer
+from pydantic import ValidationError
 
 from llm_eval_control_plane.adapters import (
     BuiltInEvaluatorKind,
+    DatasetImportError,
     DeterministicFakeTarget,
     DeterministicStepClock,
     FilesystemRunRepository,
@@ -21,6 +23,7 @@ from llm_eval_control_plane.adapters import (
 )
 from llm_eval_control_plane.adapters.suite_files import (
     SuiteDefinition,
+    SuiteFileError,
     read_suite,
     read_suite_definition,
     read_suite_scenarios,
@@ -29,7 +32,11 @@ from llm_eval_control_plane.adapters.suite_files import (
     validate_local_suite,
     write_suite,
 )
-from llm_eval_control_plane.application import InProcessRunner, compare_runs
+from llm_eval_control_plane.application import (
+    ComparisonConfigurationError,
+    InProcessRunner,
+    compare_runs,
+)
 from llm_eval_control_plane.cli_support import (
     create_report,
     print_json,
@@ -39,6 +46,7 @@ from llm_eval_control_plane.domain import (
     DatasetVersion,
     EvaluationSuiteVersion,
     ReleaseStatus,
+    RunResult,
     RunStatus,
 )
 
@@ -57,6 +65,38 @@ _Store = Annotated[
         "--store", file_okay=False, help="Owner-only local run artifact root."
     ),
 ]
+
+
+def _reason(error: Exception) -> str:
+    """Explain a failure using only fixed, content-safe messages."""
+    if isinstance(error, DatasetImportError):
+        location = "" if error.line is None else f" at line {error.line}"
+        return f"dataset import failed ({error.code}){location}"
+    if isinstance(error, SuiteFileError | RunStoreError | ComparisonConfigurationError):
+        return str(error)
+    if isinstance(error, ValidationError):
+        rules = (
+            str(detail["msg"]).removeprefix("Value error, ")
+            for detail in error.errors(include_input=False, include_url=False)
+        )
+        return "; ".join(dict.fromkeys(rules))
+    if isinstance(error, FileExistsError):
+        return "the output path already exists"
+    if isinstance(error, OSError):
+        return "a file could not be read or written"
+    return "the inputs are invalid"
+
+
+def _fail(action: str, error: Exception) -> NoReturn:
+    typer.echo(f"{action}: {_reason(error)}", err=True)
+    raise typer.Exit(code=2) from None
+
+
+def _get_run(repository: FilesystemRunRepository, run_id: str, role: str) -> RunResult:
+    try:
+        return repository.get(run_id)
+    except RunStoreError as error:
+        raise type(error)(f"{role} run: {error}") from error
 
 
 def _load_inputs(
@@ -96,12 +136,8 @@ def build(
         )
         suite = resolve_suite(authored, resolved_dataset)
         write_suite(output, suite)
-    except (OSError, ValueError, RunStoreError):
-        typer.echo(
-            "Suite could not be built; check the inputs and unused output path",
-            err=True,
-        )
-        raise typer.Exit(code=2) from None
+    except (OSError, ValueError, RunStoreError) as error:
+        _fail("Suite could not be built", error)
     print_json(suite_summary(suite))
 
 
@@ -110,9 +146,8 @@ def validate(suite_file: _InputFile, dataset: _InputFile) -> None:
     """Verify digest, exact dataset, slices, and installed evaluator contract."""
     try:
         suite, _ = _load_inputs(suite_file, dataset)
-    except (OSError, ValueError):
-        typer.echo("Suite failed integrity or dependency validation", err=True)
-        raise typer.Exit(code=2) from None
+    except (OSError, ValueError) as error:
+        _fail("Suite failed integrity or dependency validation", error)
     print_json(suite_summary(suite))
 
 
@@ -142,7 +177,7 @@ def run(
         suite, resolved_dataset = _load_inputs(suite_file, dataset)
         overrides = read_suite_scenarios(scenario_overrides)
         if not set(overrides) <= {case.case_id for case in resolved_dataset.cases}:
-            raise ValueError("scenario overrides contain unknown cases")
+            raise SuiteFileError("scenario overrides contain unknown cases")
         result = asyncio.run(
             InProcessRunner(clock=DeterministicStepClock()).run(
                 run_id=run_id,
@@ -160,9 +195,8 @@ def run(
             )
         )
         FilesystemRunRepository(store).save(result)
-    except (OSError, ValueError, RunStoreError):
-        typer.echo("Suite evaluation could not be completed", err=True)
-        raise typer.Exit(code=2) from None
+    except (OSError, ValueError, RunStoreError) as error:
+        _fail("Suite evaluation could not be completed", error)
     print_json(run_summary(result))
     if result.status is RunStatus.COMPLETED_WITH_FAILURES:
         raise typer.Exit(code=1)
@@ -187,8 +221,8 @@ def compare(
             suite_file, dataset, validate_executor=False
         )
         repository = FilesystemRunRepository(store)
-        baseline = repository.get(baseline_run)
-        candidate = repository.get(candidate_run)
+        baseline = _get_run(repository, baseline_run, "baseline")
+        candidate = _get_run(repository, candidate_run, "candidate")
         decision = compare_runs(
             suite=suite,
             spec=suite.to_evaluation_spec(
@@ -204,8 +238,7 @@ def compare(
         else:
             create_report(output, report)
             typer.echo(f"Created {report_format.value} release report")
-    except (OSError, ValueError, RunStoreError):
-        typer.echo("Suite comparison could not be completed", err=True)
-        raise typer.Exit(code=2) from None
+    except (OSError, ValueError, RunStoreError) as error:
+        _fail("Suite comparison could not be completed", error)
     if decision.status is ReleaseStatus.FAILED:
         raise typer.Exit(code=1)
