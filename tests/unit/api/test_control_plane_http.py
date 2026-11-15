@@ -497,6 +497,24 @@ def test_comparison_submission_enqueues_pinned_runs_and_replays(
         assert private_value not in serialized
 
 
+def test_run_and_job_lists_can_be_read_newest_first(
+    api_harness: ApiHarness,
+    dataset_body: dict[str, object],
+    run_body: dict[str, object],
+) -> None:
+    _seed_release_decision(api_harness, dataset_body, run_body)
+
+    for path, key in (("/v1/runs", "run_id"), ("/v1/jobs", "job_id")):
+        oldest = api_harness.client.get(path)
+        newest = api_harness.client.get(path, params={"order": "desc"})
+        assert oldest.status_code == newest.status_code == 200
+        ascending = [item[key] for item in oldest.json()["items"]]
+        assert len(ascending) >= 2
+        assert [item[key] for item in newest.json()["items"]] == ascending[::-1]
+        invalid = api_harness.client.get(path, params={"order": "newest"})
+        assert invalid.status_code == 422
+
+
 def test_release_decision_dashboard_reads_are_bounded_and_redacted(
     api_harness: ApiHarness,
     dataset_body: dict[str, object],

@@ -3699,6 +3699,15 @@
             }
           },
           {
+            "in": "query",
+            "name": "order",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ListOrder",
+              "default": "asc"
+            }
+          },
+          {
             "description": "Configured single-deployment project boundary",
             "in": "header",
             "name": "X-Project-ID",
@@ -5137,6 +5146,15 @@
                 }
               ],
               "title": "Dataset Name"
+            }
+          },
+          {
+            "in": "query",
+            "name": "order",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ListOrder",
+              "default": "asc"
             }
           },
           {

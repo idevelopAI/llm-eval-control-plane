@@ -777,12 +777,14 @@ def create_app(
         cursor: CursorQuery = None,
         kind: JobKindQuery = None,
         status: JobStatusQuery = None,
+        order: ListOrderQuery = ListOrder.ASCENDING,
     ) -> JobPage:
         page = service.list_jobs(
             limit=limit,
             cursor=cursor,
             kind=kind,
             status=status,
+            order=order,
         )
         return JobPage(
             items=tuple(JobResponse.from_record(item) for item in page.items),
@@ -852,11 +854,13 @@ def create_app(
         limit: LimitQuery = 50,
         cursor: CursorQuery = None,
         dataset_name: NameQuery = None,
+        order: ListOrderQuery = ListOrder.ASCENDING,
     ) -> RunPage:
         page = service.list_runs(
             limit=limit,
             cursor=cursor,
             dataset_name=dataset_name,
+            order=order,
         )
         return RunPage(
             items=tuple(RunListItemResponse.from_record(item) for item in page.items),

@@ -230,15 +230,20 @@ class ReadyRepository:
         cursor: str | None = None,
         kind: JobKind | None = None,
         status: JobStatus | None = None,
+        order: ListOrder = ListOrder.ASCENDING,
     ) -> CursorPage[JobRecord]:
         self._validate_cursor(cursor)
-        items = tuple(
-            record
-            for record in self.jobs.values()
-            if (kind is None or record.kind is kind)
-            and (status is None or record.status is status)
+        items = sorted(
+            (
+                record
+                for record in self.jobs.values()
+                if (kind is None or record.kind is kind)
+                and (status is None or record.status is status)
+            ),
+            key=lambda item: (item.created_at, item.job_id),
+            reverse=order is ListOrder.DESCENDING,
         )
-        return CursorPage(items=items[:limit])
+        return CursorPage(items=tuple(items[:limit]))
 
     def transition_job(
         self,
@@ -279,9 +284,10 @@ class ReadyRepository:
         limit: int,
         cursor: str | None = None,
         dataset_name: str | None = None,
+        order: ListOrder = ListOrder.ASCENDING,
     ) -> CursorPage[RunListRecord]:
         self._validate_cursor(cursor)
-        items = tuple(
+        items = [
             RunListRecord(
                 run_id=record.result.run_id,
                 status=record.result.status,
@@ -293,8 +299,12 @@ class ReadyRepository:
             )
             for record in self.runs.values()
             if dataset_name is None or record.result.dataset.name == dataset_name
+        ]
+        items.sort(
+            key=lambda item: (item.created_at, item.run_id),
+            reverse=order is ListOrder.DESCENDING,
         )
-        return CursorPage(items=items[:limit])
+        return CursorPage(items=tuple(items[:limit]))
 
     def list_suite_runs(
         self,

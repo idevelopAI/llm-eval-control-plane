@@ -172,13 +172,13 @@ exception text.
 | `GET` | `/v1/suite-revisions/{revision}/{name:path}` | Read one suite protocol summary |
 | `POST`, `GET` | `/v1/suite-runs` | Submit a pinned run or page exact-suite run history |
 | `POST`, `GET` | `/v1/suite-comparisons` | Submit a pinned comparison or page exact-suite release history |
-| `POST`, `GET` | `/v1/runs` | Submit or page evaluation runs |
+| `POST`, `GET` | `/v1/runs` | Submit or page evaluation runs (`order=desc` for newest first) |
 | `GET` | `/v1/runs/{run_id}` | Read one redacted run summary |
-| `GET` | `/v1/jobs`, `/v1/jobs/{job_id}` | Page or inspect durable job state |
+| `GET` | `/v1/jobs`, `/v1/jobs/{job_id}` | Page (`order=desc` for newest first) or inspect durable job state |
 | `GET` | `/v1/jobs/{job_id}/attempts` | Inspect redacted attempt history |
 | `POST` | `/v1/jobs/{job_id}/cancellation` | Cancel queued work or request running cancellation |
 | `POST` | `/v1/comparisons` | Submit a baseline/candidate comparison |
-| `GET` | `/v1/release-decisions` | Page release decisions |
+| `GET` | `/v1/release-decisions` | Page release decisions (`order=desc` for newest first) |
 | `GET` | `/v1/release-decisions/{decision_id}` | Read one redacted decision |
 | `GET` | `/v1/release-decisions/{decision_id}/cases` | Page score-only decision cases for one gate |
 | `GET` | `/v1/release-decisions/{decision_id}/distributions` | Read fixed score and operational distributions |

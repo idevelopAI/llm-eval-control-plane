@@ -355,7 +355,9 @@ class MemoryRepository:
         cursor: str | None = None,
         kind: JobKind | None = None,
         status: JobStatus | None = None,
+        order: ListOrder = ListOrder.ASCENDING,
     ) -> CursorPage[JobRecord]:
+        del order
         if cursor is not None:
             raise StoreInvalidCursorError("private cursor details")
         items = tuple(
@@ -388,7 +390,9 @@ class MemoryRepository:
         limit: int,
         cursor: str | None = None,
         dataset_name: str | None = None,
+        order: ListOrder = ListOrder.ASCENDING,
     ) -> CursorPage[RunListRecord]:
+        del order
         if cursor is not None:
             raise StoreInvalidCursorError("private cursor details")
         items = tuple(
