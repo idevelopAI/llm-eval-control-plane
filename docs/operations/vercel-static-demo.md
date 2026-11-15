@@ -108,7 +108,38 @@ fallback, and its retired build path is no longer maintained. See
 
 ## Release record
 
-### Current release — 2026-11-15
+### Current release — 2026-11-15 (empty-lens fix)
+
+- Production URL: <https://evalcontrol.vercel.app/>; the original
+  <https://llm-eval-control-plane-idevelopai.vercel.app/> serves the same
+  deployment.
+- Dashboard source: `main` at `ea8fef4` (an empty slice lens labels the
+  selected gate as outside the lens and offers Show all gates).
+- Deployment: `dpl_AwP8sNnSsbBbrynh35qaXVdsd7vB`, Ready / Production.
+  Published with Vercel CLI 65.8.0 after an upload dry run that listed only the
+  static export and `vercel.json` under the `Other` framework. The preceding
+  verified deployment, `dpl_DwkBRvc9yZ9Tb49bhyjVHbupcNk3`, remains the rollback
+  target.
+- Artifact: 59 regular files / 1,545,944 bytes, including `vercel.json`, built
+  from the tree `main` holds.
+- All 58 public files matched the local export byte-for-byte on the short
+  origin. Public-file manifest SHA-256:
+  `442183eeaf12abb0b91e812f290975cbff5cd83c8df3b8c8f7a5e4c77124951a`.
+- On both origins: root HTML matched the export with `noindex` and
+  `private, no-store, max-age=0`; all five security headers were present and no
+  cookie was set. Reads of `/api`, `/v1`, `/v1/probe`, `/.env`, `/package.json`,
+  `/vercel.json`, and unknown paths returned 404; root writes returned 405 and
+  `/v1` writes 404. Synthetic `POST` preflights received no allow-credentials,
+  allow-methods, or allow-headers grant.
+- Toolbar overrides were read through the project API as off for production and
+  pre-production, and the project has no Git link. In the browser, the
+  Answerability lens showed the outside-lens note and Show all gates restored
+  all four gates, with no credential inputs.
+- Local validation passed: 297 dashboard tests, lint, typecheck, static build,
+  artifact verifier, public-preview smoke test, and loopback-only development
+  smoke test. `pnpm audit` reported no vulnerabilities.
+
+### Previous release — 2026-11-15 (pinned header)
 
 - Production URL: <https://evalcontrol.vercel.app/>; the original
   <https://llm-eval-control-plane-idevelopai.vercel.app/> serves the same
@@ -140,7 +171,7 @@ fallback, and its retired build path is no longer maintained. See
   artifact verifier, public-preview smoke test, and loopback-only development
   smoke test. `pnpm audit` reported no vulnerabilities.
 
-### Previous release — 2026-11-09
+### Earlier release — 2026-11-09
 
 - Production URL: <https://evalcontrol.vercel.app/>; the original
   <https://llm-eval-control-plane-idevelopai.vercel.app/> serves the same
