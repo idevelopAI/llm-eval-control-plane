@@ -28,7 +28,7 @@ try {
   for (const method of ['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) assert.equal((await request('/', method)).status, 405);
   for (const path of ['/missing', '/.env', '/vercel.json', '/_next/static/%2e%2e%2f%2e%2e%2fpackage.json', '/_next/static/%5cpackage.json']) assert.equal((await request(path)).status, 404, path);
   assert.equal((await request('/%ZZ')).status, 400);
-  const assets = [...new Set([...html.matchAll(/(?:src|href)="([^"#]+)"/g)].map((match) => match[1]).filter((path) => path.startsWith('/_next/') || path === '/favicon.svg'))];
+  const assets = [...new Set([...html.matchAll(/(?:src|href)="([^"#]+)"/g)].map((match) => match[1]).filter((path) => path.startsWith('/_next/') || /^\/favicon\.svg(?:\?v=\d+)?$/.test(path)))];
   for (const path of [...assets, '/og.png']) assert.equal((await request(path)).status, 200, path);
   assert.equal(await (await request('/', 'HEAD')).text(), '');
   console.log('Static preview verified: fixture HTML, security headers, assets, denied APIs/writes, and no path traversal. Vercel CDN behavior is checked separately.');
