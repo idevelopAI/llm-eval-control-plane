@@ -17,6 +17,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Changed
 
 - The social preview image and README screenshot show the current dashboard.
+- The public demo fixture mirrors the README quickstart's real output: the
+  same thresholds, regression budgets, names, decision digest, case slices, and
+  distribution statistics, with identifiers kept in the synthetic namespaces.
+- The dashboard header stays pinned while scrolling, and in local live mode it
+  renders above the suite history and decision picker. The suite forms and
+  the three operator-guide screenshots use the dark design.
 - Updated the `astral-sh/uv` container base image to 0.13.7. Dependabot no
   longer proposes Python minor upgrades for the container image; the runtime
   stays on Python 3.14 until every locked dependency ships 3.15 wheels.

@@ -125,6 +125,161 @@ const caseChangeOptions: readonly Readonly<{
   { id: 'incomparable', label: 'Incomparable' },
 ];
 
+export type SectionChrome = Readonly<{
+  activeSection: EvidenceSectionId;
+  setActiveSection: (section: EvidenceSectionId) => void;
+}>;
+
+/** Tracks the evidence section named by the URL hash. */
+export function useSectionChrome(): SectionChrome {
+  const [activeSection, setActiveSection] =
+    useState<EvidenceSectionId>('overview');
+
+  useEffect(() => {
+    function syncSectionFromHash() {
+      const hash = window.location.hash?.slice(1) ?? '';
+      setActiveSection(
+        evidenceSectionIds.includes(hash as EvidenceSectionId)
+          ? (hash as EvidenceSectionId)
+          : 'overview',
+      );
+    }
+
+    syncSectionFromHash();
+    window.addEventListener('hashchange', syncSectionFromHash);
+    return () => window.removeEventListener('hashchange', syncSectionFromHash);
+  }, []);
+
+  return useMemo(
+    () => ({ activeSection, setActiveSection }),
+    [activeSection],
+  );
+}
+
+export function AppHeader({
+  activeSection,
+  onNavigate,
+  standalone = false,
+}: Readonly<{
+  activeSection: EvidenceSectionId;
+  onNavigate: (section: EvidenceSectionId) => void;
+  /** Rendered outside the dashboard shell, so it supplies its own page gutter. */
+  standalone?: boolean;
+}>) {
+  const sectionNavRef = useRef<HTMLElement>(null);
+
+  // On narrow screens the tabs scroll sideways; keep the current one in view
+  // without moving the page itself.
+  useEffect(() => {
+    const nav = sectionNavRef.current;
+    const current = nav?.querySelector<HTMLElement>('[aria-current="location"]');
+    if (!nav || !current) return;
+    const bounds = nav.getBoundingClientRect();
+    const tab = current.getBoundingClientRect();
+    if (tab.right > bounds.right) nav.scrollLeft += tab.right - bounds.right + 4;
+    else if (tab.left < bounds.left) nav.scrollLeft -= bounds.left - tab.left + 4;
+  }, [activeSection]);
+
+  return (
+    <>
+      <a className="skip-link" href="#overview">
+        Skip to release evidence
+      </a>
+      <aside
+        aria-label="Product navigation"
+        className={standalone ? 'app-sidebar is-standalone' : 'app-sidebar'}
+      >
+        <a
+          className="brand"
+          href="#overview"
+          aria-label="LLM Eval Control Plane overview"
+          onClick={() => onNavigate('overview')}
+        >
+          <span className="brand-mark" aria-hidden="true">
+            EC
+          </span>
+          <span>
+            <strong>Eval Control</strong>
+            <small>LLM release system</small>
+          </span>
+        </a>
+
+        <nav
+          aria-label="Evidence sections"
+          className="sidebar-nav"
+          ref={sectionNavRef}
+        >
+          <p>Evidence</p>
+          <a
+            aria-current={activeSection === 'overview' ? 'location' : undefined}
+            className={activeSection === 'overview' ? 'is-active' : undefined}
+            href="#overview"
+            onClick={() => onNavigate('overview')}
+          >
+            <span aria-hidden="true">01</span>
+            Overview
+          </a>
+          <a
+            aria-current={activeSection === 'gate-ledger' ? 'location' : undefined}
+            className={activeSection === 'gate-ledger' ? 'is-active' : undefined}
+            href="#gate-ledger"
+            onClick={() => onNavigate('gate-ledger')}
+          >
+            <span aria-hidden="true">02</span>
+            Release gates
+          </a>
+          <a
+            aria-current={activeSection === 'case-evidence' ? 'location' : undefined}
+            className={activeSection === 'case-evidence' ? 'is-active' : undefined}
+            href="#case-evidence"
+            onClick={() => onNavigate('case-evidence')}
+          >
+            <span aria-hidden="true">03</span>
+            Case evidence
+          </a>
+          <a
+            aria-current={
+              activeSection === 'distribution-evidence' ? 'location' : undefined
+            }
+            className={
+              activeSection === 'distribution-evidence' ? 'is-active' : undefined
+            }
+            href="#distribution-evidence"
+            onClick={() => onNavigate('distribution-evidence')}
+          >
+            <span aria-hidden="true">04</span>
+            Distributions
+          </a>
+        </nav>
+
+        <nav className="sidebar-nav sidebar-resources" aria-label="Project resources">
+          <p>Resources</p>
+          <a href={REPOSITORY_URL} rel="noreferrer" target="_blank">
+            <span aria-hidden="true">↗</span>
+            Source code
+          </a>
+          <a href={ARCHITECTURE_URL} rel="noreferrer" target="_blank">
+            <span aria-hidden="true">↗</span>
+            Architecture
+          </a>
+          <a href={SECURITY_URL} rel="noreferrer" target="_blank">
+            <span aria-hidden="true">↗</span>
+            Security model
+          </a>
+        </nav>
+
+        <div className="sidebar-assurance">
+          <span aria-hidden="true">✓</span>
+          <p>
+            <strong>No API or model requests</strong>
+            Synthetic evidence only. No credentials or backend dependency.
+          </p>
+        </div>
+      </aside>
+    </>
+  );
+}
+
 export type ReleaseOverviewViewProps = Readonly<{
   busy?: boolean;
   caseChangeFilter?: ReleaseCaseChangeFilter;
@@ -143,6 +298,11 @@ export type ReleaseOverviewViewProps = Readonly<{
   onRetryCaseEvidence?: () => void;
   onRetryDistributionEvidence?: () => void;
   onSelectCaseChange?: (change: ReleaseCaseChangeFilter) => void;
+  /**
+   * Section state owned by a parent that renders {@link AppHeader} itself, so
+   * the header can sit above controls placed before this view.
+   */
+  chrome?: SectionChrome;
   onSelectGate: (gateId: string) => void;
   sourceLabel: string;
 }>;
@@ -153,6 +313,7 @@ export function ReleaseOverviewView({
   caseDisplayLimitReached = false,
   caseEvidenceIssue = null,
   caseLoadMoreAvailable = false,
+  chrome,
   distributionEvidenceIssue = null,
   model,
   onLoadMoreCases,
@@ -163,25 +324,10 @@ export function ReleaseOverviewView({
   sourceLabel,
 }: ReleaseOverviewViewProps) {
   const [activeFilter, setActiveFilter] = useState<FilterId>('all');
-  const [activeSection, setActiveSection] =
-    useState<EvidenceSectionId>('overview');
+  const ownChrome = useSectionChrome();
+  const { activeSection, setActiveSection } = chrome ?? ownChrome;
   const [expandedCaseId, setExpandedCaseId] = useState<string | null>(null);
   const caseHeadingRef = useRef<HTMLHeadingElement>(null);
-
-  useEffect(() => {
-    function syncSectionFromHash() {
-      const hash = window.location.hash?.slice(1) ?? '';
-      setActiveSection(
-        evidenceSectionIds.includes(hash as EvidenceSectionId)
-          ? (hash as EvidenceSectionId)
-          : 'overview',
-      );
-    }
-
-    syncSectionFromHash();
-    window.addEventListener('hashchange', syncSectionFromHash);
-    return () => window.removeEventListener('hashchange', syncSectionFromHash);
-  }, []);
 
   const visibleGates = useMemo(
     () =>
@@ -237,93 +383,9 @@ export function ReleaseOverviewView({
 
   return (
     <div className="dashboard-shell" aria-busy={busy}>
-      <a className="skip-link" href="#overview">
-        Skip to release evidence
-      </a>
-      <aside className="app-sidebar" aria-label="Product navigation">
-        <a
-          className="brand"
-          href="#overview"
-          aria-label="LLM Eval Control Plane overview"
-          onClick={() => setActiveSection('overview')}
-        >
-          <span className="brand-mark" aria-hidden="true">
-            EC
-          </span>
-          <span>
-            <strong>Eval Control</strong>
-            <small>LLM release system</small>
-          </span>
-        </a>
-
-        <nav className="sidebar-nav" aria-label="Evidence sections">
-          <p>Evidence</p>
-          <a
-            aria-current={activeSection === 'overview' ? 'location' : undefined}
-            className={activeSection === 'overview' ? 'is-active' : undefined}
-            href="#overview"
-            onClick={() => setActiveSection('overview')}
-          >
-            <span aria-hidden="true">01</span>
-            Overview
-          </a>
-          <a
-            aria-current={activeSection === 'gate-ledger' ? 'location' : undefined}
-            className={activeSection === 'gate-ledger' ? 'is-active' : undefined}
-            href="#gate-ledger"
-            onClick={() => setActiveSection('gate-ledger')}
-          >
-            <span aria-hidden="true">02</span>
-            Release gates
-          </a>
-          <a
-            aria-current={activeSection === 'case-evidence' ? 'location' : undefined}
-            className={activeSection === 'case-evidence' ? 'is-active' : undefined}
-            href="#case-evidence"
-            onClick={() => setActiveSection('case-evidence')}
-          >
-            <span aria-hidden="true">03</span>
-            Case evidence
-          </a>
-          <a
-            aria-current={
-              activeSection === 'distribution-evidence' ? 'location' : undefined
-            }
-            className={
-              activeSection === 'distribution-evidence' ? 'is-active' : undefined
-            }
-            href="#distribution-evidence"
-            onClick={() => setActiveSection('distribution-evidence')}
-          >
-            <span aria-hidden="true">04</span>
-            Distributions
-          </a>
-        </nav>
-
-        <nav className="sidebar-nav sidebar-resources" aria-label="Project resources">
-          <p>Resources</p>
-          <a href={REPOSITORY_URL} rel="noreferrer" target="_blank">
-            <span aria-hidden="true">↗</span>
-            Source code
-          </a>
-          <a href={ARCHITECTURE_URL} rel="noreferrer" target="_blank">
-            <span aria-hidden="true">↗</span>
-            Architecture
-          </a>
-          <a href={SECURITY_URL} rel="noreferrer" target="_blank">
-            <span aria-hidden="true">↗</span>
-            Security model
-          </a>
-        </nav>
-
-        <div className="sidebar-assurance">
-          <span aria-hidden="true">✓</span>
-          <p>
-            <strong>No API or model requests</strong>
-            Synthetic evidence only. No credentials or backend dependency.
-          </p>
-        </div>
-      </aside>
+      {chrome ? null : (
+        <AppHeader activeSection={activeSection} onNavigate={setActiveSection} />
+      )}
 
       <div className="dashboard-workspace">
         <header className="masthead">
