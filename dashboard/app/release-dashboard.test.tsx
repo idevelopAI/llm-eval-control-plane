@@ -150,6 +150,29 @@ describe('ReleaseDashboard', () => {
     ).toBeTruthy();
   });
 
+  it('renders one header above the live history controls', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', liveFetch());
+    render(<ReleaseDashboard />);
+
+    await enterLiveMode(user);
+    expect(screen.queryByRole('complementary', { name: 'Product navigation' })).toBeNull();
+    await submitCredential(user);
+    await screen.findByRole('heading', { name: 'Release blocked' });
+
+    const headers = screen.getAllByRole('complementary', { name: 'Product navigation' });
+    expect(headers).toHaveLength(1);
+    const [header] = headers;
+    const history = screen.getByRole('region', { name: 'Live decision history' });
+    const suites = screen.getByRole('heading', { name: 'Suite history' });
+    const precedes = (left: Node, right: Node) =>
+      (left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    expect(precedes(header, suites)).toBe(true);
+    expect(precedes(header, history)).toBe(true);
+    expect(header.classList.contains('is-standalone')).toBe(true);
+    expect(screen.getAllByRole('link', { name: 'Skip to release evidence' })).toHaveLength(1);
+  });
+
   it('clears the whole live session when a suite history read loses authorization', async () => {
     const user = userEvent.setup();
     const releaseFetch = liveFetch();
