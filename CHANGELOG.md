@@ -42,6 +42,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   a way back to all gates.
 - The README stack table lists the dashboard test tools in use (Testing
   Library and axe-core) instead of Playwright.
+- Dependabot's weekly dashboard updates no longer fail. `eslint-config-next`
+  moves to 16.4.5 to match Next.js, and the lint-plugin security patch and its
+  `fast-glob` override are ported to `@next/eslint-plugin-next` 16.4.5, which
+  still pins the affected `fast-glob`. The stale 16.4.2 patch had stopped every
+  dashboard update with `ERR_PNPM_UNUSED_PATCH`.
 
 ### Security
 

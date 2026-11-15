@@ -2,7 +2,7 @@
 
 The dashboard uses one ESLint working directory (`dashboard/`), not Next.js's
 optional `settings.next.rootDir` monorepo discovery. The exact-version patch for
-`@next/eslint-plugin-next@16.4.2` removes that unused glob-discovery code and its
+`@next/eslint-plugin-next@16.4.5` removes that unused glob-discovery code and its
 only `fast-glob` import. The scoped override removes the now-unused dependency,
 including its `micromatch > braces` chain, from the installed graph.
 
@@ -31,7 +31,15 @@ behavior while retaining the lint-diagnostic checks. Regenerate the lockfile,
 perform a fresh frozen installation, and run the full audit and dashboard checks.
 
 If the upstream chain is still affected, explicitly review and port this small
-patch to the new exact plugin version. Never broaden the patch or override to
-all future versions merely to make an upgrade install. Supporting a monorepo
+patch to the new exact plugin version. Version 16.4.5 still pins `fast-glob`
+3.3.1, so the patch was ported unchanged from 16.4.2; pnpm verified that it
+applies, and `test:lint-toolchain` checks the result.
+
+Dependabot cannot do this port. When it tries to move `next` and
+`eslint-config-next` past the patched plugin version, pnpm stops with
+`ERR_PNPM_UNUSED_PATCH` and the dashboard update job fails. Treat that error
+as the signal to port the patch by hand, together with `eslint-config-next`.
+Never broaden the patch or override to all future versions merely to make an
+upgrade install. Supporting a monorepo
 or custom roots also requires a separate reviewed change; do not remove the
 configuration error while retaining an incomplete root-discovery implementation.
