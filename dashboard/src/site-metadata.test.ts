@@ -56,4 +56,15 @@ describe('static demo metadata', () => {
     expect(header.getUint32(16)).toBe(1200);
     expect(header.getUint32(20)).toBe(630);
   });
+
+  it('links a self-contained square SVG favicon', async () => {
+    expect(SITE_METADATA.icons).toEqual({ icon: '/favicon.svg' });
+    const svg = await readFile(resolve('public/favicon.svg'), 'utf8');
+
+    expect(svg.trimStart().startsWith('<svg')).toBe(true);
+    expect(svg).toContain('viewBox="0 0 32 32"');
+    expect(svg).toContain('<title>Eval Control</title>');
+    // No scripts, external references, or embedded images in a public asset.
+    expect(svg).not.toMatch(/<script|href=|url\(|<image/i);
+  });
 });

@@ -19,6 +19,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Changed
 
 - The social preview image and README screenshot show the current dashboard.
+- The favicon matches the dark design: a charcoal tile with a grey baseline
+  bar, a shorter violet candidate bar, and a white threshold line.
 - The public demo fixture mirrors the README quickstart's real output: the
   same thresholds, regression budgets, names, decision digest, case slices, and
   distribution statistics, with identifiers kept in the synthetic namespaces.
