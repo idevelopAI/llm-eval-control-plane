@@ -1387,6 +1387,30 @@ main {
   text-align: center;
 }
 
+.empty-state p {
+  margin: 0;
+}
+
+.empty-state button {
+  min-height: 36px;
+  margin-top: 14px;
+  padding: 0 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--pill);
+  background: transparent;
+  color: var(--ink-strong);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.empty-state button:hover {
+  border-color: var(--muted);
+}
+
+.scope-outside {
+  color: var(--caution);
+}
+
 .evidence-boundary {
   display: flex;
   align-items: flex-start;

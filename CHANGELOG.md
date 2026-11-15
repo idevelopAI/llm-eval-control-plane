@@ -13,6 +13,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   marker and a "Pass at" caption. Scores bounded by one share a 0–1 axis;
   larger metrics such as latency scale to their own maximum. The bars are
   decorative for assistive technology, which reads the unchanged values.
+- `/v1/runs` and `/v1/jobs` accept `order=desc` for newest-first pages, like
+  `/v1/release-decisions`. The default stays ascending.
 
 ### Changed
 
@@ -26,6 +28,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Updated the `astral-sh/uv` container base image to 0.13.7. Dependabot no
   longer proposes Python minor upgrades for the container image; the runtime
   stays on Python 3.14 until every locked dependency ships 3.15 wheels.
+- Successful health probes are counted in metrics but no longer logged or
+  traced; failed probes are still logged.
+- Updated FastAPI to 0.162.2.
+
+### Fixed
+
+- Suite CLI commands name the cause of a failure (missing or invalid run,
+  mismatched dataset, existing output path, identical baseline and candidate)
+  using only fixed messages, instead of one generic line.
+- An empty slice lens no longer presents the previous gate's evidence as its
+  own: the scope note marks it as outside the lens, and the empty ledger offers
+  a way back to all gates.
+- The README stack table lists the dashboard test tools in use (Testing
+  Library and axe-core) instead of Playwright.
 
 ### Security
 

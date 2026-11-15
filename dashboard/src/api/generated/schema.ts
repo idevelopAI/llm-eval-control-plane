@@ -2116,6 +2116,7 @@ export interface operations {
                 cursor?: string | null;
                 kind?: components["schemas"]["JobKind"] | null;
                 limit?: number;
+                order?: components["schemas"]["ListOrder"];
                 status?: components["schemas"]["JobStatus"] | null;
             };
             header: {
@@ -3059,6 +3060,7 @@ export interface operations {
                 cursor?: string | null;
                 dataset_name?: string | null;
                 limit?: number;
+                order?: components["schemas"]["ListOrder"];
             };
             header: {
                 /** @description Configured single-deployment project boundary */

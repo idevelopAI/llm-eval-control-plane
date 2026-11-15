@@ -346,6 +346,13 @@ export function ReleaseOverviewView({
   const selectedGate = model.gates.find(
     (gate) => gate.id === model.selectedGateId,
   );
+  // An empty slice lens leaves the previous gate selected; say so instead of
+  // presenting its evidence as if it belonged to the lens.
+  const selectedGateOutsideLens =
+    selectedGate != null &&
+    !visibleGates.some((gate) => gate.id === selectedGate.id);
+  const activeFilterLabel =
+    filterOptions.find((option) => option.id === activeFilter)?.label ?? '';
   const failedGates = model.gates.filter((gate) => gate.gate.status === 'failed');
   const reviewGate = failedGates[0] ?? model.gates[0];
   const newlyFailingCases =
@@ -624,7 +631,10 @@ export function ReleaseOverviewView({
                 })
               ) : (
                 <div className="empty-state">
-                  No configured gate uses this slice family yet.
+                  <p>No configured gate uses this slice family yet.</p>
+                  <button onClick={() => selectFilter('all')} type="button">
+                    Show all gates
+                  </button>
                 </div>
               )}
             </div>
@@ -653,6 +663,12 @@ export function ReleaseOverviewView({
               <p className="scope-note">
                 Scoped to <strong>{selectedGate.gate.metric}</strong> ·{' '}
                 {gateScope(selectedGate)}
+                {selectedGateOutsideLens ? (
+                  <span className="scope-outside">
+                    {' '}
+                    · outside the {activeFilterLabel} lens
+                  </span>
+                ) : null}
               </p>
             ) : (
               <p className="scope-note">Select a gate to inspect scoring evidence.</p>

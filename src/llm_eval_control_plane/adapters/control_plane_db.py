@@ -1321,12 +1321,15 @@ class SqlAlchemyControlPlaneRepository:
         cursor: str | None = None,
         kind: JobKind | None = None,
         status: JobStatus | None = None,
+        order: ListOrder = ListOrder.ASCENDING,
     ) -> CursorPage[JobRecord]:
         page_limit = _limit(limit)
         filters: dict[str, JsonValue] = {
             "kind": None if kind is None else kind.value,
             "status": None if status is None else status.value,
         }
+        if order is ListOrder.DESCENDING:
+            filters["order"] = order.value
         statement = select(jobs_table)
         if kind is not None:
             statement = statement.where(jobs_table.c.kind == kind.value)
@@ -1337,16 +1340,29 @@ class SqlAlchemyControlPlaneRepository:
             if len(key) != 2 or not isinstance(key[1], str):
                 raise InvalidCursorError("Pagination cursor is invalid")
             created_at = _decoded_cursor_time(key[0])
-            statement = statement.where(
-                (jobs_table.c.created_at > created_at)
-                | and_(
-                    jobs_table.c.created_at == created_at,
-                    jobs_table.c.job_id > key[1],
+            if order is ListOrder.DESCENDING:
+                statement = statement.where(
+                    (jobs_table.c.created_at < created_at)
+                    | and_(
+                        jobs_table.c.created_at == created_at,
+                        jobs_table.c.job_id < key[1],
+                    )
                 )
+            else:
+                statement = statement.where(
+                    (jobs_table.c.created_at > created_at)
+                    | and_(
+                        jobs_table.c.created_at == created_at,
+                        jobs_table.c.job_id > key[1],
+                    )
+                )
+        if order is ListOrder.DESCENDING:
+            statement = statement.order_by(
+                jobs_table.c.created_at.desc(), jobs_table.c.job_id.desc()
             )
-        statement = statement.order_by(
-            jobs_table.c.created_at, jobs_table.c.job_id
-        ).limit(page_limit + 1)
+        else:
+            statement = statement.order_by(jobs_table.c.created_at, jobs_table.c.job_id)
+        statement = statement.limit(page_limit + 1)
         try:
             with self._engine.connect() as connection:
                 rows = connection.execute(statement).mappings().all()
@@ -2563,9 +2579,12 @@ class SqlAlchemyControlPlaneRepository:
         limit: int,
         cursor: str | None = None,
         dataset_name: str | None = None,
+        order: ListOrder = ListOrder.ASCENDING,
     ) -> CursorPage[RunListRecord]:
         page_limit = _limit(limit)
         filters: dict[str, JsonValue] = {"dataset_name": dataset_name}
+        if order is ListOrder.DESCENDING:
+            filters["order"] = order.value
         statement = select(
             runs_table.c.run_id,
             runs_table.c.status,
@@ -2582,16 +2601,29 @@ class SqlAlchemyControlPlaneRepository:
             if len(key) != 2 or not isinstance(key[1], str):
                 raise InvalidCursorError("Pagination cursor is invalid")
             created_at = _decoded_cursor_time(key[0])
-            statement = statement.where(
-                (runs_table.c.created_at > created_at)
-                | and_(
-                    runs_table.c.created_at == created_at,
-                    runs_table.c.run_id > key[1],
+            if order is ListOrder.DESCENDING:
+                statement = statement.where(
+                    (runs_table.c.created_at < created_at)
+                    | and_(
+                        runs_table.c.created_at == created_at,
+                        runs_table.c.run_id < key[1],
+                    )
                 )
+            else:
+                statement = statement.where(
+                    (runs_table.c.created_at > created_at)
+                    | and_(
+                        runs_table.c.created_at == created_at,
+                        runs_table.c.run_id > key[1],
+                    )
+                )
+        if order is ListOrder.DESCENDING:
+            statement = statement.order_by(
+                runs_table.c.created_at.desc(), runs_table.c.run_id.desc()
             )
-        statement = statement.order_by(
-            runs_table.c.created_at, runs_table.c.run_id
-        ).limit(page_limit + 1)
+        else:
+            statement = statement.order_by(runs_table.c.created_at, runs_table.c.run_id)
+        statement = statement.limit(page_limit + 1)
         try:
             with self._engine.connect() as connection:
                 rows = connection.execute(statement).mappings().all()

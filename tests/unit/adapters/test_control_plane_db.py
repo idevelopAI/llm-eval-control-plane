@@ -2211,6 +2211,30 @@ def test_job_run_and_decision_lists_use_filter_bound_keyset_cursors(
     )
     assert [item.run_id for item in remaining_runs.items] == ["run-2"]
 
+    newest_jobs = repository.list_jobs(limit=2, order=ListOrder.DESCENDING)
+    assert [item.job_id for item in newest_jobs.items] == ["job-2", "job-1"]
+    assert newest_jobs.next_cursor is not None
+    assert [
+        item.job_id
+        for item in repository.list_jobs(
+            limit=2, cursor=newest_jobs.next_cursor, order=ListOrder.DESCENDING
+        ).items
+    ] == ["job-0"]
+    newest_runs = repository.list_runs(limit=2, order=ListOrder.DESCENDING)
+    assert [item.run_id for item in newest_runs.items] == ["run-2", "run-1"]
+    assert newest_runs.next_cursor is not None
+    assert [
+        item.run_id
+        for item in repository.list_runs(
+            limit=2, cursor=newest_runs.next_cursor, order=ListOrder.DESCENDING
+        ).items
+    ] == ["run-0"]
+    # A cursor is bound to its direction.
+    with raises(InvalidCursorError, match="invalid"):
+        repository.list_jobs(limit=2, cursor=newest_jobs.next_cursor)
+    with raises(InvalidCursorError, match="invalid"):
+        repository.list_runs(limit=2, cursor=newest_runs.next_cursor)
+
     decisions = repository.list_release_decisions(
         limit=2,
         status=ReleaseStatus.PASSED,

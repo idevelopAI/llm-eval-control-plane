@@ -33,6 +33,10 @@ _MAX_DOCUMENT_BYTES = 256 * 1024
 _PositiveRevision = Annotated[int, Field(strict=True, gt=0)]
 
 
+class SuiteFileError(ValueError):
+    """A suite file or its inputs failed validation; the message is content-safe."""
+
+
 class SuiteDatasetDefinition(FrozenModel):
     name: ArtifactName
     revision: _PositiveRevision
@@ -93,7 +97,7 @@ def resolve_suite(
         definition.dataset.name,
         definition.dataset.revision,
     ):
-        raise ValueError("suite dataset identity does not match")
+        raise SuiteFileError("suite dataset identity does not match")
     suite = EvaluationSuiteVersion.create(
         name=definition.name,
         revision=definition.revision,
@@ -116,15 +120,15 @@ def validate_local_suite(
 ) -> None:
     """Check exact dataset, declared slices, and installed executor behavior."""
     if suite.dataset != dataset.artifact_ref:
-        raise ValueError("suite dataset content does not match")
+        raise SuiteFileError("suite dataset content does not match")
     if not set(suite.slices) <= {
         label for case in dataset.cases for label in case.slices
     }:
-        raise ValueError("suite slice is absent from the dataset")
+        raise SuiteFileError("suite slice is absent from the dataset")
     if suite.execution != _execution():
-        raise ValueError("suite execution settings are unsupported")
+        raise SuiteFileError("suite execution settings are unsupported")
     if suite.evaluators != _resolved_evaluators(suite.evaluator_names):
-        raise ValueError("suite evaluator contract has drifted")
+        raise SuiteFileError("suite evaluator contract has drifted")
 
 
 def read_suite_definition(path: Path) -> SuiteDefinition:
@@ -140,7 +144,7 @@ def read_suite(path: Path) -> EvaluationSuiteVersion:
         # Literal[1] otherwise accepts True and 1.0 even in strict Pydantic mode.
         for field in ("invocations_per_case", "max_concurrency"):
             if field in execution and type(execution[field]) is not int:
-                raise ValueError("suite execution counts must be integers")
+                raise SuiteFileError("suite execution counts must be integers")
     return EvaluationSuiteVersion.model_validate_json(payload, strict=True)
 
 
@@ -149,11 +153,11 @@ def read_suite_scenarios(path: Path | None) -> dict[str, str]:
         return {}
     document = parse_json(_read_json(path).decode("utf-8"))
     if not isinstance(document, dict) or len(document) > 1_000:
-        raise ValueError("suite scenarios must be a bounded mapping")
+        raise SuiteFileError("suite scenarios must be a bounded mapping")
     scenarios: dict[str, str] = {}
     for case_id, scenario in document.items():
         if not isinstance(scenario, str):
-            raise ValueError("suite scenarios must contain string values")
+            raise SuiteFileError("suite scenarios must contain string values")
         scenarios[case_id] = scenario
     return scenarios
 
@@ -170,16 +174,16 @@ def _read_json(path: Path) -> bytes:
     try:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > _MAX_DOCUMENT_BYTES:
-            raise ValueError("suite document must be a bounded regular file")
+            raise SuiteFileError("suite document must be a bounded regular file")
         with os.fdopen(descriptor, "rb") as stream:
             descriptor = -1
             payload = stream.read(_MAX_DOCUMENT_BYTES + 1)
         if len(payload) > _MAX_DOCUMENT_BYTES:
-            raise ValueError("suite document exceeds the size limit")
+            raise SuiteFileError("suite document exceeds the size limit")
         try:
             canonical_json_bytes(parse_json(payload.decode("utf-8")))
         except RecursionError:
-            raise ValueError("suite document nesting exceeds the limit") from None
+            raise SuiteFileError("suite document nesting exceeds the limit") from None
         # Keep JSON number types intact for strict validation (1.0 is not 1).
         return payload
     finally:
@@ -191,7 +195,7 @@ def write_suite(path: Path, suite: EvaluationSuiteVersion) -> None:
     """Publish complete owner-only canonical bytes, never replace an existing file."""
     payload = canonical_json_bytes(suite.model_dump(mode="json")) + b"\n"
     if len(payload) > _MAX_DOCUMENT_BYTES:
-        raise ValueError("suite document exceeds the size limit")
+        raise SuiteFileError("suite document exceeds the size limit")
     descriptor, temporary_name = tempfile.mkstemp(dir=path.parent, prefix=".suite-")
     temporary = Path(temporary_name)
     try:

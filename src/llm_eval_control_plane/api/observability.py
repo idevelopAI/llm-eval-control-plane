@@ -36,6 +36,22 @@ _TRACEPARENT = re.compile(r"^00-([0-9a-f]{32})-([0-9a-f]{16})-(00|01)$")
 _Value = TypeVar("_Value")
 
 
+# Container probes call these every few seconds. A successful probe is counted
+# in metrics but not logged or traced, so it cannot drown out real traffic;
+# failed probes are still logged.
+_PROBE_PATHS = frozenset({"/health/live", "/health/ready"})
+
+
+def _is_probe(scope: Scope) -> bool:
+    path = scope.get("path")
+    root_path = scope.get("root_path", "")
+    if not isinstance(path, str) or not isinstance(root_path, str):
+        return False
+    if root_path and path.startswith(root_path):
+        path = path[len(root_path) :]
+    return path in _PROBE_PATHS
+
+
 class ApiObservabilityMiddleware:
     """Record one bounded event, span, and metric observation per HTTP request."""
 
@@ -52,6 +68,7 @@ class ApiObservabilityMiddleware:
 
         started_ns = _telemetry_value(lambda: self._telemetry.now_ns(), 0)
         method = safe_http_method(scope.get("method"))
+        probe = _is_probe(scope)
         response_status: int | None = None
         _telemetry_action(lambda: self._telemetry.request_started())
 
@@ -63,21 +80,22 @@ class ApiObservabilityMiddleware:
 
         span: Span = NonRecordingSpan(INVALID_SPAN.get_span_context())
         span_context: AbstractContextManager[Span] | None = None
-        try:
-            parent = trace_context_from_scope(scope)
-            span_context = self._telemetry.tracer.start_as_current_span(
-                "HTTP request",
-                context=parent if parent is not None else Context(),
-                kind=SpanKind.SERVER,
-                record_exception=False,
-                set_status_on_exception=False,
-            )
-            span = span_context.__enter__()
-        except Exception:
-            if span_context is not None:
-                failed_context = span_context
-                _telemetry_action(lambda: failed_context.__exit__(None, None, None))
-            span_context = None
+        if not probe:
+            try:
+                parent = trace_context_from_scope(scope)
+                span_context = self._telemetry.tracer.start_as_current_span(
+                    "HTTP request",
+                    context=parent if parent is not None else Context(),
+                    kind=SpanKind.SERVER,
+                    record_exception=False,
+                    set_status_on_exception=False,
+                )
+                span = span_context.__enter__()
+            except Exception:
+                if span_context is not None:
+                    failed_context = span_context
+                    _telemetry_action(lambda: failed_context.__exit__(None, None, None))
+                span_context = None
 
         try:
             await self._app(scope, receive, observe_send)
@@ -130,18 +148,19 @@ class ApiObservabilityMiddleware:
                 _telemetry_action(
                     lambda: self._telemetry.record_auth_decision(auth_outcome)
                 )
-            _telemetry_action(
-                lambda: self._telemetry.emit_http_event(
-                    request_id=request_id,
-                    trace_id=trace_id,
-                    span_id=span_id,
-                    method=method,
-                    route=route,
-                    status_code=status_code,
-                    error_code=error_code,
-                    duration_ns=duration_ns,
+            if not probe or status_code >= 400:
+                _telemetry_action(
+                    lambda: self._telemetry.emit_http_event(
+                        request_id=request_id,
+                        trace_id=trace_id,
+                        span_id=span_id,
+                        method=method,
+                        route=route,
+                        status_code=status_code,
+                        error_code=error_code,
+                        duration_ns=duration_ns,
+                    )
                 )
-            )
             if span_context is not None:
                 _telemetry_action(lambda: span_context.__exit__(None, None, None))
 

@@ -172,13 +172,13 @@ exception text.
 | `GET` | `/v1/suite-revisions/{revision}/{name:path}` | Read one suite protocol summary |
 | `POST`, `GET` | `/v1/suite-runs` | Submit a pinned run or page exact-suite run history |
 | `POST`, `GET` | `/v1/suite-comparisons` | Submit a pinned comparison or page exact-suite release history |
-| `POST`, `GET` | `/v1/runs` | Submit or page evaluation runs |
+| `POST`, `GET` | `/v1/runs` | Submit or page evaluation runs (`order=desc` for newest first) |
 | `GET` | `/v1/runs/{run_id}` | Read one redacted run summary |
-| `GET` | `/v1/jobs`, `/v1/jobs/{job_id}` | Page or inspect durable job state |
+| `GET` | `/v1/jobs`, `/v1/jobs/{job_id}` | Page (`order=desc` for newest first) or inspect durable job state |
 | `GET` | `/v1/jobs/{job_id}/attempts` | Inspect redacted attempt history |
 | `POST` | `/v1/jobs/{job_id}/cancellation` | Cancel queued work or request running cancellation |
 | `POST` | `/v1/comparisons` | Submit a baseline/candidate comparison |
-| `GET` | `/v1/release-decisions` | Page release decisions |
+| `GET` | `/v1/release-decisions` | Page release decisions (`order=desc` for newest first) |
 | `GET` | `/v1/release-decisions/{decision_id}` | Read one redacted decision |
 | `GET` | `/v1/release-decisions/{decision_id}/cases` | Page score-only decision cases for one gate |
 | `GET` | `/v1/release-decisions/{decision_id}/distributions` | Read fixed score and operational distributions |
@@ -226,7 +226,10 @@ request digests, and resolved payloads are never returned by the API.
 ## Observability and trace continuity
 
 The API emits one fixed-schema `control-plane-log/v1` JSON completion event per
-request. Logs, metrics, and traces use route templates and bounded vocabularies;
+request. Successful `/health/live` and `/health/ready` probes are counted in
+metrics but not logged or traced, so container health checks do not crowd out
+real traffic; failed probes are still logged. Logs, metrics, and traces use
+route templates and bounded vocabularies;
 they exclude bodies, prompts, expectations, outputs, SQL, rows, authorization
 material, project and principal identity, idempotency keys, request digests,
 lease data, raw cursors, and exception text.

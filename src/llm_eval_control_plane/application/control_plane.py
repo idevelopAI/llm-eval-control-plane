@@ -180,6 +180,7 @@ class ControlPlaneRepository(Protocol):
         cursor: str | None = None,
         kind: JobKind | None = None,
         status: JobStatus | None = None,
+        order: ListOrder = ListOrder.ASCENDING,
     ) -> CursorPage[JobRecord]: ...
 
     def claim_next_job(
@@ -254,6 +255,7 @@ class ControlPlaneRepository(Protocol):
         limit: int,
         cursor: str | None = None,
         dataset_name: str | None = None,
+        order: ListOrder = ListOrder.ASCENDING,
     ) -> CursorPage[RunListRecord]: ...
 
     def complete_release_decision(
@@ -987,6 +989,7 @@ class ControlPlaneService:
         cursor: str | None = None,
         kind: JobKind | None = None,
         status: JobStatus | None = None,
+        order: ListOrder = ListOrder.ASCENDING,
     ) -> CursorPage[JobRecord]:
         try:
             return self._repository.list_jobs(
@@ -994,6 +997,7 @@ class ControlPlaneService:
                 cursor=cursor,
                 kind=kind,
                 status=status,
+                order=order,
             )
         except StoreInvalidCursorError as error:
             raise InvalidCursorError("Pagination cursor is invalid") from error
@@ -1010,12 +1014,14 @@ class ControlPlaneService:
         limit: int,
         cursor: str | None = None,
         dataset_name: str | None = None,
+        order: ListOrder = ListOrder.ASCENDING,
     ) -> CursorPage[RunListRecord]:
         try:
             return self._repository.list_runs(
                 limit=limit,
                 cursor=cursor,
                 dataset_name=dataset_name,
+                order=order,
             )
         except StoreInvalidCursorError as error:
             raise InvalidCursorError("Pagination cursor is invalid") from error

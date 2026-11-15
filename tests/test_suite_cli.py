@@ -560,3 +560,48 @@ def test_validate_rejects_corruption_without_echoing_content(
     )
     assert result.exit_code == 2
     assert "private-sentinel" not in result.output
+
+
+def test_failures_explain_the_cause_without_echoing_content(
+    suite_files: SuiteFiles,
+) -> None:
+    build(suite_files)
+    assert run(suite_files, "baseline").exit_code == 0
+
+    def stderr(result: Result) -> str:
+        assert result.exit_code == 2, result.output
+        assert "private-output-sentinel" not in result.output
+        return result.stderr.strip()
+
+    rebuilt = runner.invoke(
+        app,
+        [
+            "suite",
+            "build",
+            str(suite_files.definition),
+            str(suite_files.dataset),
+            "--output",
+            str(suite_files.suite),
+        ],
+    )
+    assert stderr(rebuilt) == (
+        "Suite could not be built: the output path already exists"
+    )
+    assert stderr(compare(suite_files)) == (
+        "Suite comparison could not be completed: "
+        "candidate run: Run artifact was not found"
+    )
+    itself = compare(suite_files, "--candidate-run", "baseline")
+    assert stderr(itself) == (
+        "Suite comparison could not be completed: "
+        "baseline and candidate must be different revisions"
+    )
+
+    other_dataset = suite_files.dataset.with_name("other.jsonl")
+    other_dataset.write_text(
+        suite_files.dataset.read_text().replace("case-2", "case-3")
+    )
+    suite_files.dataset = other_dataset
+    assert stderr(run(suite_files, "candidate")) == (
+        "Suite evaluation could not be completed: suite dataset content does not match"
+    )
