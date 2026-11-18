@@ -46,7 +46,7 @@ test_container=$(docker run --detach --rm \
   --env POSTGRES_HOST_AUTH_METHOD=trust \
   --health-cmd 'pg_isready -h 127.0.0.1 -U postgres -d control_plane' \
   --health-interval 1s --health-timeout 3s --health-retries 30 \
-  postgres:18.6-alpine@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2)
+  postgres:18.7-alpine@sha256:b6972e1115a4ff8eba5d7f7d19184926d1e16d7d1136ae1e1a7ebf286da0f015)
 trap 'docker stop --time 5 "$test_container" >/dev/null' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
