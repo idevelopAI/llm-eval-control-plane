@@ -236,7 +236,7 @@ def create_app(
     app = FastAPI(
         title="LLM Evaluation Control Plane",
         summary="Durable, content-addressed evaluation and release decisions",
-        version="1.6.0",
+        version="1.7.0",
         openapi_url="/openapi.json",
         docs_url=None,
         redoc_url=None,
