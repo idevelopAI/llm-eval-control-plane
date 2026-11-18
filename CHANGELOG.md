@@ -7,6 +7,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- Updated PostgreSQL to 18.7 in Compose, every database-backed CI gate, and
+  the local test guide.
+- Updated the `astral-sh/uv` container image to 0.13.9 and the current Python
+  3.14 base image digest.
+- Updated Python dependencies: FastAPI 0.163.1, Ruff 0.17.5, Typer 0.29.1, and
+  sqlglot 30.31.0 (upper bound widened to `<30.32`).
+- Updated dashboard dependencies: Next.js and `eslint-config-next` 16.4.6, Vite
+  8.3.8, `@testing-library/user-event` 14.6.10, and jsdom 31.0.1. The
+  lint-plugin `fast-glob` security patch and its override are ported to
+  `@next/eslint-plugin-next` 16.4.6.
+
 ## [0.1.2] - 2026-11-18
 
 ### Added

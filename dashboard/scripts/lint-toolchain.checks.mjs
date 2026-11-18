@@ -17,7 +17,7 @@ const { getRootDirs } = pluginRequire('./utils/get-root-dirs.js');
 const rootError = /only supports the ESLint working directory/;
 
 test('the pinned plugin keeps default single-project discovery unchanged', () => {
-  assert.equal(pluginRequire('../package.json').version, '16.4.5');
+  assert.equal(pluginRequire('../package.json').version, '16.4.6');
   for (const settings of [{}, { next: {} }, { next: { rootDir: undefined } }]) {
     assert.deepEqual(getRootDirs({ cwd: dashboard, settings }), [dashboard]);
   }
