@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-18
+
 ### Added
 
 - Gate rows draw zero-based baseline and candidate score bars with a threshold
@@ -14,7 +16,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   larger metrics such as latency scale to their own maximum. The bars are
   decorative for assistive technology, which reads the unchanged values.
 - `/v1/runs` and `/v1/jobs` accept `order=desc` for newest-first pages, like
-  `/v1/release-decisions`. The default stays ascending.
+  `/v1/release-decisions`. The default stays ascending. The API contract
+  version moves to 1.7.0 for this addition.
 
 ### Changed
 
@@ -32,7 +35,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   stays on Python 3.14 until every locked dependency ships 3.15 wheels.
 - Successful health probes are counted in metrics but no longer logged or
   traced; failed probes are still logged.
-- Updated FastAPI to 0.162.2.
+- Updated Python dependencies: FastAPI 0.162.2, Pydantic 2.14.3, SQLAlchemy
+  2.1.8, Typer 0.28.0, sqlglot 30.30.0 (upper bound widened to `<30.31`),
+  OpenTelemetry 1.45.2, Ruff 0.17.4, mypy 2.4.1, and pytest 9.2.0.
+- Updated dashboard dependencies: Next.js 16.4.5, Vite 8.3.6, Tailwind CSS
+  4.3.5, Vitest 5.1.0, and jsdom 31.0.0.
+- Updated the current Python 3.14 container base image digest and the pinned
+  CodeQL, `setup-uv` 10.3.3, and `pnpm/action-setup` 6.1.1 Actions.
 
 ### Fixed
 
@@ -44,16 +53,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   a way back to all gates.
 - The README stack table lists the dashboard test tools in use (Testing
   Library and axe-core) instead of Playwright.
-- Dependabot's weekly dashboard updates no longer fail. `eslint-config-next`
-  moves to 16.4.5 to match Next.js, and the lint-plugin security patch and its
-  `fast-glob` override are ported to `@next/eslint-plugin-next` 16.4.5, which
-  still pins the affected `fast-glob`. The stale 16.4.2 patch had stopped every
-  dashboard update with `ERR_PNPM_UNUSED_PATCH`.
+- Removed the cause of Dependabot's failing weekly dashboard updates.
+  `eslint-config-next` moves to 16.4.5 to match Next.js, and the lint-plugin
+  security patch and its `fast-glob` override are ported to
+  `@next/eslint-plugin-next` 16.4.5, which still pins the affected
+  `fast-glob`. The stale 16.4.2 patch had stopped every dashboard update with
+  `ERR_PNPM_UNUSED_PATCH`.
 
 ### Security
 
 - The dashboard lint toolchain requires `minimatch` 11.0.5
   (GHSA-g3hv-75wg-m249). The package is not part of the static demo.
+- The dashboard audit ignores GHSA-fc5q-39xc-vjpf (`picomatch` <=4.0.7) only.
+  GitHub withdrew that advisory on 2026-11-18 and no fixed release exists, but
+  npm's audit service still reported it. Every other advisory still fails the
+  gate, and the entry is removed once npm stops reporting it.
 
 ## [0.1.1] - 2026-10-30
 
@@ -362,6 +376,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   enforcement, or row-level multitenancy. Non-loopback use requires an external
   trusted edge and a separately isolated deployment for every project.
 
-[Unreleased]: https://github.com/idevelopAI/llm-eval-control-plane/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/idevelopAI/llm-eval-control-plane/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/idevelopAI/llm-eval-control-plane/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/idevelopAI/llm-eval-control-plane/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/idevelopAI/llm-eval-control-plane/releases/tag/v0.1.0
