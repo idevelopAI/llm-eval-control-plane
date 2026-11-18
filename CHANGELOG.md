@@ -64,6 +64,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - The dashboard lint toolchain requires `minimatch` 11.0.5
   (GHSA-g3hv-75wg-m249). The package is not part of the static demo.
+- The dashboard audit ignores GHSA-fc5q-39xc-vjpf (`picomatch` <=4.0.7) only.
+  GitHub withdrew that advisory on 2026-11-18 and no fixed release exists, but
+  npm's audit service still reported it. Every other advisory still fails the
+  gate, and the entry is removed once npm stops reporting it.
 
 ## [0.1.1] - 2026-10-30
 

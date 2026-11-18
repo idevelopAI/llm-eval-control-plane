@@ -24,5 +24,13 @@ overrides:
   # GHSA-g3hv-75wg-m249. No patched 10.x exists; the TypeScript ESLint parser
   # still requests ^10, so its lint run is the compatibility check.
   'minimatch@>=7.0.0 <11.0.1': 11.0.5
+# Advisories GitHub has withdrawn but npm's audit service still reports. Each
+# entry is one withdrawn advisory, never a real finding; remove it as soon as
+# `pnpm audit` stops reporting it without the entry.
+auditConfig:
+  ignoreGhsas:
+    # picomatch <=4.0.7: withdrawn by GitHub on 2026-11-18 and no fixed release
+    # exists. See https://github.com/advisories/GHSA-fc5q-39xc-vjpf.
+    - GHSA-fc5q-39xc-vjpf
 patchedDependencies:
   '@next/eslint-plugin-next@16.4.5': patches/@next__eslint-plugin-next@16.4.5.patch
