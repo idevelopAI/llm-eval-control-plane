@@ -108,7 +108,38 @@ fallback, and its retired build path is no longer maintained. See
 
 ## Release record
 
-### Current release — 2026-11-15 (versioned favicon URL)
+### Current release — 2026-11-18 (dependency updates)
+
+- Production URL: <https://evalcontrol.vercel.app/>; the original
+  <https://llm-eval-control-plane-idevelopai.vercel.app/> serves the same
+  deployment.
+- Dashboard source: `main` at `5914bd6` (tree `40800591`), which moves the
+  dashboard to Next.js 16.4.6, Vite 8.3.8, and the current test dependencies.
+  The page content and design are unchanged.
+- Deployment: `dpl_4mJXzyp7npFJY5ML6YzzKULecggL`, Ready / Production.
+  Published with Vercel CLI 65.8.0 after an upload dry run that listed only the
+  static export and `vercel.json` under the `Other` framework. The dry run also
+  listed the empty `_next/<build-id>/` directory that Next.js 16.4.6 leaves in
+  the export; it holds no files. The preceding verified deployment,
+  `dpl_9dGtA64pghf2fUnz7Qi7qbZ65AyR`, remains the rollback target.
+- Artifact: 59 regular files / 1,545,648 bytes, including `vercel.json`.
+- All 58 public files matched the local export byte-for-byte on the short
+  origin. Public-file manifest SHA-256:
+  `1ac897fe4cb6697a6938bc331f1c9e6aa17bbce2fc831bb8f8d095a09e75b019`.
+- On both origins: root HTML matched the export and links `/favicon.svg?v=2`,
+  which returns the gate-bar icon; `noindex`, `private, no-store, max-age=0`, and
+  all five security headers were present and no cookie was set. Reads of `/api`,
+  `/v1`, `/v1/probe`, `/.env`, `/package.json`, `/vercel.json`, and unknown
+  paths returned 404; root writes returned 405 and `/v1` writes 404. Synthetic
+  `POST` preflights received no allow-credentials, allow-methods, or
+  allow-headers grant.
+- Toolbar overrides were read through the project API as off for production and
+  pre-production, and the project has no Git link.
+- Local validation passed: 298 dashboard tests, lint, typecheck, static build,
+  artifact verifier, public-preview smoke test, and loopback-only development
+  smoke test. `pnpm audit` reported no vulnerabilities.
+
+### Previous release — 2026-11-15 (versioned favicon URL)
 
 - Production URL: <https://evalcontrol.vercel.app/>; the original
   <https://llm-eval-control-plane-idevelopai.vercel.app/> serves the same
@@ -139,7 +170,7 @@ fallback, and its retired build path is no longer maintained. See
   artifact verifier, public-preview smoke test, and loopback-only development
   smoke test. `pnpm audit` reported no vulnerabilities.
 
-### Previous release — 2026-11-15 (favicon)
+### Earlier release — 2026-11-15 (favicon)
 
 - Production URL: <https://evalcontrol.vercel.app/>; the original
   <https://llm-eval-control-plane-idevelopai.vercel.app/> serves the same
