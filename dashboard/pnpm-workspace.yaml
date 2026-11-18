@@ -7,7 +7,7 @@ allowBuilds:
 overrides:
   # The exact-version patch removes optional root globs, not Next lint rules.
   # Remove this override with that patch once the upstream chain is safe.
-  '@next/eslint-plugin-next@16.4.5>fast-glob': '-'
+  '@next/eslint-plugin-next@16.4.6>fast-glob': '-'
   # GHSA-rgj7-g3m4-5g8c and GHSA-wq5f-xc86-pv6w.
   'sharp@>=0.35.0 <0.35.5': 0.35.5
   # GHSA-2883-xcg3-v3hh.
@@ -33,4 +33,4 @@ auditConfig:
     # exists. See https://github.com/advisories/GHSA-fc5q-39xc-vjpf.
     - GHSA-fc5q-39xc-vjpf
 patchedDependencies:
-  '@next/eslint-plugin-next@16.4.5': patches/@next__eslint-plugin-next@16.4.5.patch
+  '@next/eslint-plugin-next@16.4.6': patches/@next__eslint-plugin-next@16.4.6.patch
